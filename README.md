@@ -1,45 +1,39 @@
-# Travel Notification System (MVP)
+# 新疆行程管家服务流程数字化（后端）
 
-已按你给出的架构建议重构为“接入层 + 业务服务层 + 事件异步层 + 数据能力抽象”的后端实现骨架。
+本仓库为“行程通知与管家流程”项目的后端分模块开发起步版本（MVP 基线）。
 
-## 本期范围
+## 已落地的模块
 
-- **P0（已实现骨架）**
-  - 用户/行程/偏好模型
-  - 事件接入（内部 API + Outbox + EventBus）
-  - 固定规则引擎（优先级、基础频控）
-  - 模板服务（zh/en 结构可扩展，当前示例含 zh）
-  - 多渠道分发（Email + Push）
-  - 发送记录（成功/失败/重试/跳过）
-  - 幂等 + 去重 + 重试 + 基础降级
-  - 管理后台最小能力（模板、规则、偏好开关接口）
+- `notification`：通知编排与发送任务抽象（短信主渠道、企业微信群兜底）
+- `trigger`：必发节点与条件触发规则引擎骨架
+- `complaint`：投诉/负面情绪识别事件接入与升级策略
+- `integration`：易途 API 与天气触发源适配接口
+- `audit`：关键操作审计日志模型
+- `survey`：满意度回收与低分自动跟进事件模型
 
-- **P1（已实现部分能力）**
-  - 增加 SMS provider 适配器
-  - 用户级免打扰时段
-  - 模板版本 + A/B bucket 字段
-  - 主通道失败自动回退
+## 当前阶段目标
 
-## 代码结构
+- 固化 P0 需求为领域模型与接口契约
+- 提供统一事件总线风格的数据结构，方便后续接入消息队列/任务调度
+- 保证未来可扩展（模板版本、A/B 文案、按线路自动选模板）
+
+## 目录结构
 
 ```text
 src/app/
-  api/bff.py                 # 接入层（行程/偏好/模板/规则/事件）
-  core/entities.py           # 领域模型
-  core/event_bus.py          # Outbox + InMemory EventBus
-  services/
-    trip_service.py
-    preference_service.py
-    template_service.py
-    rule_engine.py
-    dispatch_service.py
-  providers/adapters.py      # Email/Push/SMS Provider Adapter
-  main.py                    # 启动与端到端示例
+  core/                # 通用枚举、基类、时间戳、事件定义
+  modules/
+    notification/      # 发送任务、模板渲染、渠道兜底策略
+    trigger/           # 规则定义与触发输出
+    complaint/         # 投诉识别与告警升级
+    integration/       # 外部系统接口抽象（易途、天气）
+    audit/             # 审计日志
+    survey/            # 满意度与售后闭环
 ```
 
-## 运行
+## 下一步（建议）
 
-```bash
-PYTHONPATH=src python -m pytest -q
-PYTHONPATH=src python -m app.main
-```
+1. 接入真实数据库（建议 PostgreSQL）与异步队列（建议 Redis + Celery/RQ）。
+2. 将 `integration` 抽象替换为实际易途 API 客户端。
+3. 按团维度配置早/中/晚通知窗口与时区策略。
+4. 实现企业微信群机器人告警与管理员分级通知。
