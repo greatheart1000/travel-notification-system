@@ -10,6 +10,7 @@
 - `integration`：易途 API 与天气触发源适配接口
 - `audit`：关键操作审计日志模型
 - `survey`：满意度回收与低分自动跟进事件模型
+- `services/lifecycle_rule_builder.py`：将“行前/行中/行后”运营表结构化为可执行规则草案，并可输出触发规则与通知模板
 
 ## 当前阶段目标
 
