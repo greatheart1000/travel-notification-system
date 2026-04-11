@@ -25,11 +25,16 @@ class TemplateService:
         enabled = [
             t
             for t in self.templates
-            if t.event_name == event_name and t.locale == locale and t.enabled and t.ab_bucket == ab_bucket
+            if t.event_name == event_name
+            and t.locale == locale
+            and t.enabled
+            and t.ab_bucket == ab_bucket
         ]
         if not enabled:
             enabled = [
-                t for t in self.templates if t.event_name == event_name and t.locale == "zh" and t.enabled
+                t
+                for t in self.templates
+                if t.event_name == event_name and t.locale == "zh" and t.enabled
             ]
         if not enabled:
             raise ValueError(f"template missing for {event_name}")

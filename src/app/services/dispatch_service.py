@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.core.entities import Channel, DeliveryStatus, DomainEvent, NotificationRecord
-from app.providers.adapters import BaseProvider, ProviderResult
+from app.providers.adapters import BaseProvider
 
 
 @dataclass(slots=True)

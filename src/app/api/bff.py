@@ -19,11 +19,15 @@ class ManagementBFF:
     rule_engine: NotificationRuleEngine
     event_bus: InMemoryEventBus
 
-    def create_trip(self, trip_id: str, user_id: str, destination: str, starts_at: datetime) -> dict:
+    def create_trip(
+        self, trip_id: str, user_id: str, destination: str, starts_at: datetime
+    ) -> dict:
         trip = self.trip_service.create_trip(trip_id, user_id, destination, starts_at)
         return {"trip_id": trip.trip_id, "status": trip.status}
 
-    def update_preference(self, user_id: str, channels: list[Channel], quiet_hours: tuple[int, int]) -> dict:
+    def update_preference(
+        self, user_id: str, channels: list[Channel], quiet_hours: tuple[int, int]
+    ) -> dict:
         pref = self.preference_service.set_preference(user_id, channels, quiet_hours)
         return {"user_id": pref.user_id, "channels": [c.value for c in pref.channels]}
 
@@ -49,7 +53,9 @@ class ManagementBFF:
             )
         )
 
-    def upsert_rule(self, event_name: EventName, priority: int, channels: list[Channel], max_per_hour: int) -> None:
+    def upsert_rule(
+        self, event_name: EventName, priority: int, channels: list[Channel], max_per_hour: int
+    ) -> None:
         self.rule_engine.upsert_rule(
             Rule(
                 event_name=event_name,

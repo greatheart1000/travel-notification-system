@@ -10,7 +10,9 @@ from app.core.entities import Channel, UserPreference
 class UserPreferenceService:
     preferences: dict[str, UserPreference] = field(default_factory=dict)
 
-    def set_preference(self, user_id: str, channels: list[Channel], quiet_hours: tuple[int, int]) -> UserPreference:
+    def set_preference(
+        self, user_id: str, channels: list[Channel], quiet_hours: tuple[int, int]
+    ) -> UserPreference:
         pref = UserPreference(user_id=user_id, channels=channels, quiet_hours=quiet_hours)
         self.preferences[user_id] = pref
         return pref

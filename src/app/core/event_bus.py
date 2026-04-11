@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from app.core.entities import DomainEvent
-
 
 EventHandler = Callable[[DomainEvent], None]
 

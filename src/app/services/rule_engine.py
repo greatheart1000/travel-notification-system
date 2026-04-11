@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.core.entities import Channel, DomainEvent, EventName
 
@@ -40,5 +40,5 @@ class NotificationRuleEngine:
             max_per_hour = event_rules[0].max_per_hour
         if len(points) >= max_per_hour:
             return False
-        self.sent_counter[key].append(now.astimezone(timezone.utc))
+        self.sent_counter[key].append(now.astimezone(UTC))
         return True
