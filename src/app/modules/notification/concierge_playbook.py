@@ -75,6 +75,8 @@ WORKFLOW_STEPS: tuple[WorkflowStep, ...] = (
 
 
 MESSAGE_TEMPLATES: dict[str, str] = {
+    # 说明：MySQL 为主数据源（见 docs/mysql_schema_seed.sql 的 t_notification_template）。
+    # 这里保留同名模板用于本地开发/离线回退场景。
     "group_welcome": (
         "欢迎来到美丽的新疆！我是您的专属AI小管家小琪，联系电话17794941155。"
         "新疆的草原、雪山、沙漠，处处是景。一路上我会给您贴心服务，分享景点玩法和地道美食。"
