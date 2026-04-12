@@ -154,3 +154,43 @@ def test_health_check_detail() -> None:
     assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "ok"
     assert "components" in detail.json()["data"]
+
+
+def test_update_trip_rejects_blank_team_fields_and_keeps_original_value() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    user_token = _login(client, "user", "123456")
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    created = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "喀纳斯",
+            "team": "TEAM-ORIGINAL",
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-05",
+            "participants": 12,
+        },
+    )
+    assert created.status_code == 201
+    trip_id = created.json()["data"]["trip"]["id"]
+
+    blank_team = client.put(
+        f"/api/trips/{trip_id}",
+        headers=headers,
+        json={"team": "   "},
+    )
+    assert blank_team.status_code == 400
+
+    blank_team_id = client.put(
+        f"/api/trips/{trip_id}",
+        headers=headers,
+        json={"team_id": "   "},
+    )
+    assert blank_team_id.status_code == 400
+
+    detail = client.get(f"/api/trips/{trip_id}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["data"]["team_id"] == "TEAM-ORIGINAL"
+    assert detail.json()["data"]["team"] == "TEAM-ORIGINAL"

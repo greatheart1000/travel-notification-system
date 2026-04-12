@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.routing import Router as StarletteRouter
 
 from app.core.entities import Channel as PreferenceChannel
@@ -116,6 +116,15 @@ class TripUpdateRequest(BaseModel):
     end_date: str | None = None
     participants: int | None = None
     status: str | None = None
+
+    @field_validator("team", "team_id")
+    @classmethod
+    def validate_team_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 class NotificationSendRequest(BaseModel):
@@ -659,6 +668,8 @@ def create_app() -> FastAPI:
                 patch.get("team") if isinstance(patch.get("team"), str) else None,
                 patch.get("team_id") if isinstance(patch.get("team_id"), str) else None,
             )
+            if not normalized_team_id:
+                raise HTTPException(status_code=400, detail="team/team_id cannot be empty")
             patch["team_id"] = normalized_team_id
             patch["team"] = normalized_team_id
         if "status" in patch and isinstance(patch["status"], str):
