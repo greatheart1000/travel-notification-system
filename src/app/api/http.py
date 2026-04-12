@@ -137,6 +137,21 @@ class NotificationRuleUpdateRequest(BaseModel):
     conditions: dict[str, Any] | None = None
 
 
+class RuleReviewRequest(BaseModel):
+    comment: str | None = None
+
+
+class RuleRejectRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class RuleSimulationRequest(BaseModel):
+    stage: str
+    time_slot: str
+    scene: str
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 class TripCreateRequest(BaseModel):
     destination: str
     team: str | None = None
@@ -1221,6 +1236,125 @@ def create_app() -> FastAPI:
         if not deleted:
             raise HTTPException(status_code=404, detail="Rule not found")
         return _ok_with_message({"deleted": True, "id": rule_id}, "rule deleted")
+
+    def _record_rule_audit(user: dict[str, str], ctx: AppContext, action: str, rule: dict[str, Any]) -> None:
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action=action,
+            target=str(rule.get("id") or ""),
+            detail={"status": rule.get("status"), "tenant_id": rule.get("tenant_id")},
+        )
+
+    @fastapi_app.post("/api/notifications/rules/{rule_id}/submit")
+    def submit_notification_rule(
+        rule_id: str,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:write")
+        try:
+            rule = ctx.notification_rule_repository.submit_rule(
+                rule_id, tenant_id=_current_tenant_id(user), operator_id=user["id"]
+            )
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        _record_rule_audit(user, ctx, "rule_submit", rule)
+        return _ok_with_message(rule, "rule submitted")
+
+    @fastapi_app.post("/api/notifications/rules/{rule_id}/approve")
+    def approve_notification_rule(
+        rule_id: str,
+        payload: RuleReviewRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:approve")
+        try:
+            rule = ctx.notification_rule_repository.approve_rule(
+                rule_id, tenant_id=_current_tenant_id(user), operator_id=user["id"]
+            )
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        _record_rule_audit(user, ctx, "rule_approve", rule)
+        if payload.comment:
+            ctx.audit_service.record(
+                operator_id=user["id"],
+                action="rule_approve_comment",
+                target=rule_id,
+                detail={"comment": payload.comment[:200]},
+            )
+        return _ok_with_message(rule, "rule approved")
+
+    @fastapi_app.post("/api/notifications/rules/{rule_id}/reject")
+    def reject_notification_rule(
+        rule_id: str,
+        payload: RuleRejectRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:approve")
+        try:
+            rule = ctx.notification_rule_repository.reject_rule(
+                rule_id,
+                tenant_id=_current_tenant_id(user),
+                operator_id=user["id"],
+                reason=payload.reason.strip(),
+            )
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        _record_rule_audit(user, ctx, "rule_reject", rule)
+        return _ok_with_message(rule, "rule rejected")
+
+    @fastapi_app.post("/api/notifications/rules/{rule_id}/publish")
+    def publish_notification_rule(
+        rule_id: str,
+        payload: RuleReviewRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:approve")
+        try:
+            rule = ctx.notification_rule_repository.publish_rule(
+                rule_id, tenant_id=_current_tenant_id(user), operator_id=user["id"]
+            )
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        _record_rule_audit(user, ctx, "rule_publish", rule)
+        if payload.comment:
+            ctx.audit_service.record(
+                operator_id=user["id"],
+                action="rule_publish_comment",
+                target=rule_id,
+                detail={"comment": payload.comment[:200]},
+            )
+        return _ok_with_message(rule, "rule published")
+
+    @fastapi_app.post("/api/notifications/rules/simulate")
+    def simulate_notification_rule(
+        payload: RuleSimulationRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:read")
+        try:
+            result = ctx.notification_rule_repository.simulate(
+                tenant_id=_current_tenant_id(user),
+                stage=payload.stage,
+                time_slot=payload.time_slot,
+                scene=payload.scene,
+                context=payload.context,
+            )
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _ok_with_message(result, "rule simulation completed")
 
     @fastapi_app.get("/api/trips")
     def list_trips(

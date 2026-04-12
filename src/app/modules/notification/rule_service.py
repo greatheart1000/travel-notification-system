@@ -66,6 +66,15 @@ CHANNEL_ALIASES: dict[str, str] = {
     "邮件": "email",
 }
 
+RULE_STATUS_ALIASES: dict[str, str] = {
+    "draft": "draft",
+    "pending_approval": "pending_approval",
+    "approved": "approved",
+    "published": "published",
+    "archived": "archived",
+    "rejected": "rejected",
+}
+
 
 class RuleValidationError(ValueError):
     pass
@@ -107,6 +116,10 @@ def normalize_channels(values: list[str] | None) -> list[str]:
         if normalized not in channels:
             channels.append(normalized)
     return channels
+
+
+def normalize_rule_status(raw_value: str) -> str:
+    return _normalize_enum(raw_value, RULE_STATUS_ALIASES, "status")
 
 
 @dataclass(slots=True)
@@ -177,6 +190,15 @@ class NotificationRuleRepository:
         elif not partial:
             normalized["enabled"] = True
 
+        if "status" in payload:
+            status = str(payload.get("status") or "").strip()
+            if not status:
+                raise RuleValidationError("status is required")
+            normalized["status"] = normalize_rule_status(status)
+        elif not partial:
+            enabled = bool(normalized.get("enabled", payload.get("enabled", True)))
+            normalized["status"] = "published" if enabled else "draft"
+
         if "priority" in payload:
             normalized["priority"] = int(payload.get("priority") or 0)
         elif not partial:
@@ -195,6 +217,24 @@ class NotificationRuleRepository:
 
         if not partial or "created_at" in payload:
             normalized["created_at"] = str(payload.get("created_at") or _now_iso())
+        if not partial or "submitted_at" in payload:
+            normalized["submitted_at"] = str(payload.get("submitted_at") or "")
+        if not partial or "submitted_by" in payload:
+            normalized["submitted_by"] = str(payload.get("submitted_by") or "")
+        if not partial or "approved_at" in payload:
+            normalized["approved_at"] = str(payload.get("approved_at") or "")
+        if not partial or "approved_by" in payload:
+            normalized["approved_by"] = str(payload.get("approved_by") or "")
+        if not partial or "rejected_at" in payload:
+            normalized["rejected_at"] = str(payload.get("rejected_at") or "")
+        if not partial or "rejected_by" in payload:
+            normalized["rejected_by"] = str(payload.get("rejected_by") or "")
+        if not partial or "rejection_reason" in payload:
+            normalized["rejection_reason"] = str(payload.get("rejection_reason") or "")
+        if not partial or "published_at" in payload:
+            normalized["published_at"] = str(payload.get("published_at") or "")
+        if not partial or "published_by" in payload:
+            normalized["published_by"] = str(payload.get("published_by") or "")
 
         normalized["updated_at"] = str(payload.get("updated_at") or _now_iso())
         return normalized
@@ -272,4 +312,121 @@ class NotificationRuleRepository:
             return False
         del self._rules[rule_id]
         self._persist()
+        return True
+
+    def submit_rule(self, rule_id: str, *, tenant_id: str, operator_id: str) -> dict[str, Any] | None:
+        return self._transition_status(
+            rule_id=rule_id,
+            tenant_id=tenant_id,
+            from_status={"draft", "rejected"},
+            to_status="pending_approval",
+            extra={"submitted_by": operator_id, "submitted_at": _now_iso(), "rejection_reason": ""},
+        )
+
+    def approve_rule(
+        self, rule_id: str, *, tenant_id: str, operator_id: str
+    ) -> dict[str, Any] | None:
+        return self._transition_status(
+            rule_id=rule_id,
+            tenant_id=tenant_id,
+            from_status={"pending_approval"},
+            to_status="approved",
+            extra={"approved_by": operator_id, "approved_at": _now_iso()},
+        )
+
+    def reject_rule(
+        self, rule_id: str, *, tenant_id: str, operator_id: str, reason: str
+    ) -> dict[str, Any] | None:
+        return self._transition_status(
+            rule_id=rule_id,
+            tenant_id=tenant_id,
+            from_status={"pending_approval"},
+            to_status="rejected",
+            extra={"rejected_by": operator_id, "rejected_at": _now_iso(), "rejection_reason": reason},
+        )
+
+    def publish_rule(
+        self, rule_id: str, *, tenant_id: str, operator_id: str
+    ) -> dict[str, Any] | None:
+        return self._transition_status(
+            rule_id=rule_id,
+            tenant_id=tenant_id,
+            from_status={"approved"},
+            to_status="published",
+            extra={"published_by": operator_id, "published_at": _now_iso(), "enabled": True},
+        )
+
+    def _transition_status(
+        self,
+        *,
+        rule_id: str,
+        tenant_id: str,
+        from_status: set[str],
+        to_status: str,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        current = self._rules.get(rule_id)
+        if current is None or current.get("tenant_id") != tenant_id:
+            return None
+        status = str(current.get("status") or "draft")
+        if status not in from_status:
+            raise RuleValidationError(f"invalid_status_transition:{status}->{to_status}")
+        next_rule = dict(current)
+        next_rule["status"] = to_status
+        next_rule["updated_at"] = _now_iso()
+        if extra:
+            next_rule.update(extra)
+        self._rules[rule_id] = next_rule
+        self._persist()
+        return dict(next_rule)
+
+    def simulate(
+        self,
+        *,
+        tenant_id: str,
+        stage: str,
+        time_slot: str,
+        scene: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        stage_value = normalize_stage(stage)
+        slot_value = normalize_time_slot(time_slot)
+        scene_value = normalize_scene(scene)
+        context_payload = context or {}
+
+        candidates = [
+            item
+            for item in self._rules.values()
+            if item.get("tenant_id") == tenant_id
+            and item.get("status") == "published"
+            and bool(item.get("enabled"))
+            and item.get("stage") == stage_value
+            and item.get("time_slot") == slot_value
+            and item.get("scene") == scene_value
+        ]
+        matched: list[dict[str, Any]] = []
+        for rule in candidates:
+            conditions = rule.get("conditions") or {}
+            if not self._match_conditions(conditions, context_payload):
+                continue
+            matched.append(
+                {
+                    "id": rule.get("id"),
+                    "name": rule.get("name"),
+                    "priority": int(rule.get("priority", 100)),
+                    "channels": list(rule.get("channels") or []),
+                    "template_id": rule.get("template_id"),
+                }
+            )
+
+        matched.sort(key=lambda item: (item["priority"], str(item["id"])))
+        conflicts: list[str] = []
+        if len(matched) > 1 and matched[0]["priority"] == matched[1]["priority"]:
+            conflicts.append("multiple_rules_share_top_priority")
+        return {"matches": matched, "conflicts": conflicts}
+
+    def _match_conditions(self, conditions: dict[str, Any], context: dict[str, Any]) -> bool:
+        for key, expected in conditions.items():
+            if context.get(key) != expected:
+                return False
         return True

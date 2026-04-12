@@ -224,6 +224,10 @@ def test_analytics_metrics_returns_seeded_structured_data() -> None:
 
     payload = metrics_response.json()["data"]
     assert payload["metrics"]["notification_success_rate"].endswith("%")
+    assert payload["metrics"]["notification_retry_rate"].endswith("%")
+    assert payload["metrics"]["notification_manual_takeover_rate"].endswith("%")
+    assert "rule_publish_lead_time" in payload["metrics"]
+    assert "cross_tenant_forbidden_count" in payload["metrics"]
     assert payload["metrics"]["avg_response_time"].endswith("ms")
     assert payload["metrics"]["user_satisfaction"].endswith("/5")
     assert len(payload["channel_performance"]) >= 1
@@ -332,6 +336,68 @@ def test_notification_rules_contract_smoke() -> None:
     listed_after = client.get("/api/notifications/rules", headers=headers)
     assert listed_after.status_code == 200
     assert all(item["id"] != rule_id for item in listed_after.json()["data"]["items"])
+
+
+def test_notification_rule_approval_workflow_and_simulation() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    created = client.post(
+        "/api/notifications/rules",
+        headers=headers,
+        json={
+            "name": "审批流规则",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "channels": ["sms"],
+            "priority": 1,
+            "enabled": False,
+            "conditions": {"vip": True},
+        },
+    )
+    assert created.status_code == 201
+    rule_id = created.json()["data"]["id"]
+    assert created.json()["data"]["status"] == "draft"
+
+    before_publish = client.post(
+        "/api/notifications/rules/simulate",
+        headers=headers,
+        json={"stage": "pre_trip", "time_slot": "morning", "scene": "normal", "context": {"vip": True}},
+    )
+    assert before_publish.status_code == 200
+    assert before_publish.json()["data"]["matches"] == []
+
+    submitted = client.post(f"/api/notifications/rules/{rule_id}/submit", headers=headers)
+    assert submitted.status_code == 200
+    assert submitted.json()["data"]["status"] == "pending_approval"
+
+    approved = client.post(
+        f"/api/notifications/rules/{rule_id}/approve",
+        headers=headers,
+        json={"comment": "looks good"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["data"]["status"] == "approved"
+
+    published = client.post(
+        f"/api/notifications/rules/{rule_id}/publish",
+        headers=headers,
+        json={"comment": "publish now"},
+    )
+    assert published.status_code == 200
+    assert published.json()["data"]["status"] == "published"
+
+    simulated = client.post(
+        "/api/notifications/rules/simulate",
+        headers=headers,
+        json={"stage": "pre_trip", "time_slot": "morning", "scene": "normal", "context": {"vip": True}},
+    )
+    assert simulated.status_code == 200
+    assert len(simulated.json()["data"]["matches"]) >= 1
+    assert simulated.json()["data"]["matches"][0]["id"] == rule_id
 
 
 def test_default_seed_data_visible_for_admin() -> None:
