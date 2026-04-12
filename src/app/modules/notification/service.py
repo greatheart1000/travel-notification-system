@@ -132,6 +132,21 @@ class NotificationService:
             content = content.replace("{{" + key + "}}", value)
         return content
 
+    def _is_retryable_error(self, provider_message: str) -> bool:
+        raw = provider_message.strip().lower()
+        non_retryable_prefixes = (
+            "invalid_",
+            "forbidden_",
+            "unauthorized_",
+            "missing_",
+            "bad_request",
+        )
+        if raw.startswith(non_retryable_prefixes):
+            return False
+        if "permanent" in raw:
+            return False
+        return True
+
     def dispatch(self, task: NotificationTask) -> dict:
         if task.idempotency_key and self.idempotency_store.seen(task.idempotency_key):
             task.status = DispatchStatus.SKIPPED
@@ -168,6 +183,8 @@ class NotificationService:
                     task.status = DispatchStatus.SENT
                     self.idempotency_store.mark(task.idempotency_key)
                     return {"ok": True, "task": asdict(task)}
+                if not self._is_retryable_error(provider_message):
+                    break
 
         task.manual_intervention_required = True
         task.status = DispatchStatus.MANUAL_INTERVENTION

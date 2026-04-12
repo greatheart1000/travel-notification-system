@@ -4,13 +4,13 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter, defaultdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
 def _now_utc() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _load_events(log_path: Path) -> list[dict[str, Any]]:
