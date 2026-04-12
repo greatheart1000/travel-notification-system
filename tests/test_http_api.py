@@ -155,6 +155,41 @@ def test_health_check_detail() -> None:
     assert detail.json()["data"]["status"] == "ok"
     assert "components" in detail.json()["data"]
 
+
+def test_dashboard_and_analytics_return_aggregated_data() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    user_token = _login(client, "user", "123456")
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    for destination in ("阿勒泰", "喀纳斯"):
+        created = client.post(
+            "/api/trips",
+            headers=headers,
+            json={
+                "destination": destination,
+                "team": "TEAM-ANALYTICS",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-05",
+                "participants": 8,
+            },
+        )
+        assert created.status_code == 201
+
+    dashboard = client.get("/api/dashboard/stats", headers=headers)
+    assert dashboard.status_code == 200
+    dashboard_data = dashboard.json()["data"]
+    assert dashboard_data["today_notifications"] >= 2
+    assert dashboard_data["active_trips"] >= 2
+
+    analytics = client.get("/api/analytics/metrics", headers=headers)
+    assert analytics.status_code == 200
+    analytics_data = analytics.json()["data"]
+    assert analytics_data["metrics"]["notification_success_rate"] != "0.0%"
+    assert len(analytics_data["channel_performance"]) >= 1
+    assert len(analytics_data["top_trips"]) >= 1
+
+
 def test_update_trip_rejects_blank_team_fields_and_keeps_original_value() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
