@@ -257,3 +257,28 @@ def test_notification_rules_contract_smoke() -> None:
     listed_after = client.get("/api/notifications/rules", headers=headers)
     assert listed_after.status_code == 200
     assert all(item["id"] != rule_id for item in listed_after.json()["data"]["items"])
+
+
+def test_trip_import_from_csv_creates_multiple_trips() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    user_token = _login(client, "user", "123456")
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    csv_content = (
+        "destination,team_id,start_date,end_date,participants\n"
+        "阿勒泰 - 禾木,TEAM-009,2026-05-01,2026-05-03,20\n"
+        "喀纳斯,TEAM-E2E,2026-06-01,2026-06-02,5\n"
+    )
+    imported = client.post(
+        "/api/trips/import",
+        headers=headers,
+        files={"file": ("trips.csv", csv_content, "text/csv")},
+    )
+    assert imported.status_code == 200
+    assert imported.json()["data"]["created_count"] == 2
+    assert imported.json()["data"]["skipped_count"] == 0
+
+    listed = client.get("/api/trips", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()["data"]["total"] == 2

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Header } from '../components/Header'
 import { Card } from '../components/Card'
 import { Button } from '../components/Button'
 import { Badge } from '../components/Badge'
 import { Modal } from '../components/Modal'
 import { PageState } from '../components/PageState'
-import { Plus, Edit, Trash2, Calendar, Users } from 'lucide-react'
+import { Plus, Edit, Trash2, Calendar, Users, Upload } from 'lucide-react'
 import { tripsApi, getErrorMessage } from '../services/api'
 import { type Trip, type TripStatusCode } from '../types/api'
 
@@ -39,6 +39,7 @@ function statusBadgeVariant(status: TripStatusCode): 'success' | 'info' | 'defau
 }
 
 export function Trips() {
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [trips, setTrips] = useState<Trip[]>([])
   const [form, setForm] = useState<TripFormState>(EMPTY_FORM)
@@ -47,6 +48,7 @@ export function Trips() {
   const [errorMessage, setErrorMessage] = useState('')
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isImporting, setIsImporting] = useState(false)
 
   const loadTrips = async () => {
     setLoadState('loading')
@@ -119,13 +121,49 @@ export function Trips() {
     }
   }
 
+  const importTrips = async (file: File) => {
+    setIsImporting(true)
+    setActionMessage(null)
+
+    try {
+      const result = await tripsApi.importFile(file)
+      await loadTrips()
+      setActionMessage(`Excel 导入完成: 成功创建 ${result.createdCount} 条，跳过 ${result.skippedCount} 条`)
+    } catch (error) {
+      setActionMessage(`导入失败: ${getErrorMessage(error)}`)
+    } finally {
+      setIsImporting(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
   const pageHeader = (
     <div className="flex items-center justify-between mb-8">
       <h1 className="text-3xl font-bold text-gray-900">行程管理</h1>
-      <Button onClick={() => setIsModalOpen(true)}>
-        <Plus className="w-5 h-5 inline mr-2" />
-        新建行程
-      </Button>
+      <div className="flex items-center gap-3">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.csv"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) {
+              void importTrips(file)
+            }
+          }}
+        />
+        <Button variant="secondary" onClick={() => fileInputRef.current?.click()} loading={isImporting}>
+          <Upload className="w-5 h-5 inline mr-2" />
+          Excel导入
+        </Button>
+        <Button onClick={() => setIsModalOpen(true)}>
+          <Plus className="w-5 h-5 inline mr-2" />
+          新建行程
+        </Button>
+      </div>
     </div>
   )
 
