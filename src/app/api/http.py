@@ -122,9 +122,7 @@ class TripUpdateRequest(BaseModel):
     def validate_team_fields(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        if not value.strip():
-            raise ValueError("must not be blank")
-        return value
+        return value.strip()
 
 
 class NotificationSendRequest(BaseModel):
