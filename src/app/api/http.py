@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import csv
+import io
+import re
+import zipfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
+from xml.etree import ElementTree
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -15,6 +20,7 @@ from starlette.routing import Router as StarletteRouter
 
 from app.core.entities import Channel as PreferenceChannel
 from app.core.models import Channel
+from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
 from app.modules.integration.persistence import JsonFileStore, TripRepository
@@ -64,6 +70,7 @@ class AppContext:
     notification_rule_repository: NotificationRuleRepository
     notification_service: NotificationService
     audit_service: AuditService
+    analytics_service: AnalyticsService
 
 
 class LoginRequest(BaseModel):
@@ -237,6 +244,125 @@ def _resolve_team_id(team: str | None, team_id: str | None) -> str:
     return (team_id or team or "").strip()
 
 
+def _normalize_import_header(value: str) -> str:
+    return value.strip().lower().replace(" ", "").replace("_", "")
+
+
+def _read_csv_rows(raw: bytes) -> list[dict[str, str]]:
+    decoded = raw.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(decoded))
+    return [
+        {
+            str(key): (str(value).strip() if value is not None else "")
+            for key, value in row.items()
+            if key is not None
+        }
+        for row in reader
+    ]
+
+
+def _extract_column_index(ref: str) -> int:
+    letters = "".join(char for char in ref if char.isalpha()).upper()
+    index = 0
+    for letter in letters:
+        index = index * 26 + (ord(letter) - ord("A") + 1)
+    return max(index - 1, 0)
+
+
+def _read_xlsx_rows(raw: bytes) -> list[dict[str, str]]:
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        workbook_xml = archive.read("xl/workbook.xml")
+        workbook = ElementTree.fromstring(workbook_xml)
+        namespaces = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        first_sheet = workbook.find("main:sheets/main:sheet", namespaces)
+        if first_sheet is None:
+            return []
+        relation_id = first_sheet.attrib.get(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+        )
+        if relation_id is None:
+            return []
+
+        workbook_rels = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        rel_namespaces = {"rel": "http://schemas.openxmlformats.org/package/2006/relationships"}
+        rel = workbook_rels.find(f"rel:Relationship[@Id='{relation_id}']", rel_namespaces)
+        if rel is None:
+            return []
+        target = rel.attrib.get("Target", "")
+        worksheet_path = f"xl/{target}" if not target.startswith("xl/") else target
+        worksheet = ElementTree.fromstring(archive.read(worksheet_path))
+
+        shared_strings: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared_root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in shared_root.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"):
+                text = "".join(
+                    node.text or ""
+                    for node in item.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
+                )
+                shared_strings.append(text)
+
+        parsed_rows: list[list[str]] = []
+        for row_node in worksheet.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"):
+            cells: dict[int, str] = {}
+            for cell in row_node.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
+                ref = cell.attrib.get("r", "")
+                cell_type = cell.attrib.get("t", "")
+                index = _extract_column_index(ref)
+                if cell_type == "inlineStr":
+                    text_node = cell.find(
+                        ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t"
+                    )
+                    cells[index] = (text_node.text or "").strip() if text_node is not None else ""
+                    continue
+                value_node = cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
+                value = (value_node.text or "").strip() if value_node is not None else ""
+                if cell_type == "s" and value.isdigit():
+                    shared_index = int(value)
+                    cells[index] = (
+                        shared_strings[shared_index]
+                        if 0 <= shared_index < len(shared_strings)
+                        else ""
+                    )
+                else:
+                    cells[index] = value
+            if not cells:
+                continue
+            width = max(cells) + 1
+            parsed_rows.append([cells.get(idx, "").strip() for idx in range(width)])
+
+        if not parsed_rows:
+            return []
+        headers = [cell for cell in parsed_rows[0]]
+        rows: list[dict[str, str]] = []
+        for row in parsed_rows[1:]:
+            item: dict[str, str] = {}
+            for index, header in enumerate(headers):
+                if not header:
+                    continue
+                item[header] = row[index] if index < len(row) else ""
+            rows.append(item)
+        return rows
+
+
+def _extract_import_field(row: dict[str, str], aliases: list[str]) -> str:
+    normalized_lookup = {_normalize_import_header(key): value for key, value in row.items()}
+    for alias in aliases:
+        matched = normalized_lookup.get(_normalize_import_header(alias), "")
+        if matched:
+            return str(matched).strip()
+    return ""
+
+
+def _normalize_excel_serial_date(value: str) -> str:
+    if re.fullmatch(r"\d+(\.\d+)?", value):
+        serial = float(value)
+        base = datetime(1899, 12, 30, tzinfo=UTC)
+        return (base + timedelta(days=serial)).date().isoformat()
+    normalized = value.replace("/", "-").strip()
+    return normalized[:10]
+
+
 def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
     resolved_team_id = str(trip.get("team_id") or trip.get("team") or "")
     return {
@@ -396,6 +522,128 @@ def _serialize_template(template: Any) -> dict[str, Any]:
     }
 
 
+def _seed_default_trips(trip_repository: TripRepository) -> None:
+    if trip_repository.list():
+        return
+
+    now = datetime.now(tz=UTC).isoformat()
+    default_trips: list[dict[str, Any]] = [
+        {
+            "id": "trip-default-pretrip",
+            "destination": "乌鲁木齐-喀纳斯精品线",
+            "team": "TEAM-DEMO-PRE",
+            "team_id": "TEAM-DEMO-PRE",
+            "start_date": "2026-05-08",
+            "end_date": "2026-05-14",
+            "participants": 18,
+            "status": "planned",
+            "user_id": "admin",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "trip-default-ontrip",
+            "destination": "伊犁草原深度游",
+            "team": "TEAM-DEMO-ON",
+            "team_id": "TEAM-DEMO-ON",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-26",
+            "participants": 22,
+            "status": "in_progress",
+            "user_id": "admin",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "trip-default-posttrip",
+            "destination": "阿勒泰禾木轻奢团",
+            "team": "TEAM-DEMO-POST",
+            "team_id": "TEAM-DEMO-POST",
+            "start_date": "2026-03-10",
+            "end_date": "2026-03-16",
+            "participants": 16,
+            "status": "completed",
+            "user_id": "admin",
+            "created_at": now,
+            "updated_at": now,
+        },
+    ]
+    for trip in default_trips:
+        trip_repository.create(trip)
+
+
+def _seed_default_notification_rules(
+    rule_repository: NotificationRuleRepository, template_id: str
+) -> None:
+    if rule_repository.list_rules():
+        return
+
+    default_rules: list[dict[str, Any]] = [
+        {
+            "id": "rule-default-pre-3day",
+            "name": "行前3天沟通与行程单提醒",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "channels": ["sms", "wechat_work_group"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 10,
+            "conditions": {"time_node": "出发前3天"},
+        },
+        {
+            "id": "rule-default-pre-1day",
+            "name": "行前1天保险核查与群提醒",
+            "stage": "pre_trip",
+            "time_slot": "evening",
+            "scene": "normal",
+            "channels": ["wechat_work_group"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 20,
+            "conditions": {"time_node": "出发前1天"},
+        },
+        {
+            "id": "rule-default-ontrip-daily",
+            "name": "行中固定时段温馨提示",
+            "stage": "on_trip",
+            "time_slot": "all_day",
+            "scene": "normal",
+            "channels": ["wechat_work_group", "sms"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 30,
+            "conditions": {"time_node": "每日固定时段"},
+        },
+        {
+            "id": "rule-default-ontrip-scene",
+            "name": "行中特殊场景安全提示",
+            "stage": "on_trip",
+            "time_slot": "afternoon",
+            "scene": "weather_alert",
+            "channels": ["sms", "wechat_work_group"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 40,
+            "conditions": {"scene_tags": ["骑马", "高原", "边境口岸", "极寒"]},
+        },
+        {
+            "id": "rule-default-posttrip-survey",
+            "name": "下团满意度调研提醒",
+            "stage": "post_trip",
+            "time_slot": "evening",
+            "scene": "normal",
+            "channels": ["sms", "email"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 50,
+            "conditions": {"time_node": "下团即时"},
+        },
+    ]
+    for rule in default_rules:
+        rule_repository.create_rule(rule)
+
+
 def _build_context(store: JsonFileStore | None = None) -> AppContext:
     persistence = store or JsonFileStore()
     trip_repository = TripRepository(store=persistence)
@@ -404,8 +652,17 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     preference_service = UserPreferenceService(store=persistence)
     notification_attempt_repository = NotificationAttemptRepository(store=persistence)
     notification_rule_repository = NotificationRuleRepository(store=persistence)
+    _seed_default_trips(trip_repository)
+    _seed_default_notification_rules(
+        notification_rule_repository, template_id=template_service.ensure_default_template().id
+    )
     notification_service = NotificationService(attempt_repository=notification_attempt_repository)
     audit_service = AuditService(repository=AuditLogRepository(store=persistence))
+    analytics_service = AnalyticsService(
+        repository=AnalyticsRepository(store=persistence),
+        attempt_repository=notification_attempt_repository,
+        trip_repository=trip_repository,
+    )
     auth_service = AuthService()
     return AppContext(
         store=persistence,
@@ -417,6 +674,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         notification_rule_repository=notification_rule_repository,
         notification_service=notification_service,
         audit_service=audit_service,
+        analytics_service=analytics_service,
     )
 
 
@@ -738,11 +996,11 @@ def create_app() -> FastAPI:
         normalized_items = [_serialize_trip(item) for item in items]
         return _ok({"total": len(normalized_items), "items": normalized_items})
 
-    @fastapi_app.post("/api/trips", status_code=201)
-    def create_trip(
+    def create_trip_record(
+        *,
         payload: TripCreateRequest,
-        user: dict[str, str] = Depends(get_current_user),
-        ctx: AppContext = Depends(get_ctx),
+        user: dict[str, str],
+        ctx: AppContext,
     ) -> dict[str, Any]:
         team_id = _resolve_team_id(payload.team, payload.team_id)
         if not team_id:
@@ -797,14 +1055,74 @@ def create_app() -> FastAPI:
             target=trip_id,
             detail={"ok": dispatch_result["ok"], "attempts": len(task.attempts)},
         )
+        return {
+            "trip": _serialize_trip(trip),
+            "notification": {
+                "ok": dispatch_result["ok"],
+                "status": task.status.value,
+                "attempt_count": len(task.attempts),
+            },
+        }
+
+    @fastapi_app.post("/api/trips", status_code=201)
+    def create_trip(
+        payload: TripCreateRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        created = create_trip_record(payload=payload, user=user, ctx=ctx)
+        return _ok(created)
+
+    @fastapi_app.post("/api/trips/import")
+    async def import_trips(
+        file: UploadFile = File(...),
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        filename = (file.filename or "").lower()
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        if filename.endswith(".csv"):
+            parsed_rows = _read_csv_rows(raw)
+        elif filename.endswith(".xlsx"):
+            parsed_rows = _read_xlsx_rows(raw)
+        else:
+            raise HTTPException(status_code=400, detail="Only .csv and .xlsx files are supported")
+
+        created_items: list[dict[str, Any]] = []
+        skipped = 0
+        for row in parsed_rows:
+            destination = _extract_import_field(row, ["destination", "目的地", "行程名称"])
+            team_id = _extract_import_field(row, ["team_id", "team", "teamid", "团队ID", "团队"])
+            start_date = _extract_import_field(row, ["start_date", "startdate", "开始日期", "开始时间"])
+            end_date = _extract_import_field(row, ["end_date", "enddate", "结束日期", "结束时间"])
+            participants_text = _extract_import_field(row, ["participants", "人数", "参与人数"])
+            try:
+                participants = int(float(participants_text)) if participants_text else 0
+            except ValueError:
+                participants = 0
+
+            if not destination or not team_id or not start_date or not end_date:
+                skipped += 1
+                continue
+
+            trip_payload = TripCreateRequest(
+                destination=destination,
+                team=team_id,
+                start_date=_normalize_excel_serial_date(start_date),
+                end_date=_normalize_excel_serial_date(end_date),
+                participants=max(participants, 0),
+                status="计划中",
+            )
+            created = create_trip_record(payload=trip_payload, user=user, ctx=ctx)
+            created_items.append(created["trip"])
+
         return _ok(
             {
-                "trip": _serialize_trip(trip),
-                "notification": {
-                    "ok": dispatch_result["ok"],
-                    "status": task.status.value,
-                    "attempt_count": len(task.attempts),
-                },
+                "created_count": len(created_items),
+                "skipped_count": skipped,
+                "items": created_items,
             }
         )
 
@@ -1013,24 +1331,7 @@ def create_app() -> FastAPI:
         _: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        attempts = ctx.notification_attempt_repository.list_history(limit=9999)
-        sent = sum(1 for item in attempts if item.get("ok") is True)
-        total = len(attempts)
-        success_rate = f"{round((sent / total) * 100, 1) if total else 0.0}%"
-        channel_performance = _compute_channel_performance(attempts)
-        top_trips = _compute_top_trips(attempts, ctx.trip_repository)
-        return _ok(
-            {
-                "metrics": {
-                    "notification_success_rate": success_rate,
-                    "avg_response_time": "1.2s",
-                    "wow_growth": "+0.0%",
-                    "user_satisfaction": "4.5/5",
-                },
-                "channel_performance": channel_performance,
-                "top_trips": top_trips,
-            }
-        )
+        return _ok(ctx.analytics_service.build_metrics_snapshot())
 
     return fastapi_app
 

@@ -46,6 +46,7 @@ import {
   type RawTrip,
   type RecentNotification,
   type Trip,
+  type TripImportResult,
   type TripWriteInput,
 } from '../types/api'
 
@@ -327,6 +328,22 @@ export const tripsApi = {
 
   async remove(id: string): Promise<void> {
     await unwrapCode(client.delete(`/trips/${id}`))
+  },
+
+  async importFile(file: File): Promise<TripImportResult> {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await client.post<ApiEnvelope<{ created_count?: number; skipped_count?: number }>>(
+      '/trips/import',
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      },
+    )
+    return {
+      createdCount: response.data.data.created_count ?? 0,
+      skippedCount: response.data.data.skipped_count ?? 0,
+    }
   },
 }
 

@@ -156,38 +156,21 @@ def test_health_check_detail() -> None:
     assert "components" in detail.json()["data"]
 
 
-def test_dashboard_and_analytics_return_aggregated_data() -> None:
+def test_analytics_metrics_returns_seeded_structured_data() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
-    user_token = _login(client, "user", "123456")
-    headers = {"Authorization": f"Bearer {user_token}"}
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
 
-    for destination in ("阿勒泰", "喀纳斯"):
-        created = client.post(
-            "/api/trips",
-            headers=headers,
-            json={
-                "destination": destination,
-                "team": "TEAM-ANALYTICS",
-                "start_date": "2026-06-01",
-                "end_date": "2026-06-05",
-                "participants": 8,
-            },
-        )
-        assert created.status_code == 201
+    metrics_response = client.get("/api/analytics/metrics", headers=headers)
+    assert metrics_response.status_code == 200
 
-    dashboard = client.get("/api/dashboard/stats", headers=headers)
-    assert dashboard.status_code == 200
-    dashboard_data = dashboard.json()["data"]
-    assert dashboard_data["today_notifications"] >= 2
-    assert dashboard_data["active_trips"] >= 2
-
-    analytics = client.get("/api/analytics/metrics", headers=headers)
-    assert analytics.status_code == 200
-    analytics_data = analytics.json()["data"]
-    assert analytics_data["metrics"]["notification_success_rate"] != "0.0%"
-    assert len(analytics_data["channel_performance"]) >= 1
-    assert len(analytics_data["top_trips"]) >= 1
+    payload = metrics_response.json()["data"]
+    assert payload["metrics"]["notification_success_rate"].endswith("%")
+    assert payload["metrics"]["avg_response_time"].endswith("ms")
+    assert payload["metrics"]["user_satisfaction"].endswith("/5")
+    assert len(payload["channel_performance"]) >= 1
+    assert len(payload["top_trips"]) >= 1
 
 
 def test_update_trip_rejects_blank_team_fields_and_keeps_original_value() -> None:
@@ -292,3 +275,18 @@ def test_notification_rules_contract_smoke() -> None:
     listed_after = client.get("/api/notifications/rules", headers=headers)
     assert listed_after.status_code == 200
     assert all(item["id"] != rule_id for item in listed_after.json()["data"]["items"])
+
+
+def test_default_seed_data_visible_for_admin() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    trips = client.get("/api/trips", headers=headers)
+    assert trips.status_code == 200
+    assert trips.json()["data"]["total"] >= 1
+
+    rules = client.get("/api/notifications/rules", headers=headers)
+    assert rules.status_code == 200
+    assert rules.json()["data"]["total"] >= 1

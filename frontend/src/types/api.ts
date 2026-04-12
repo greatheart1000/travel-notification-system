@@ -92,6 +92,11 @@ export interface TripWriteInput {
   status?: TripStatusCode
 }
 
+export interface TripImportResult {
+  createdCount: number
+  skippedCount: number
+}
+
 export interface RawNotificationTemplate {
   id?: string
   name?: string
