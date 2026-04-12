@@ -48,6 +48,7 @@ import {
   type Trip,
   type TripImportResult,
   type TripWriteInput,
+  type UpdateTemplateInput,
 } from '../types/api'
 
 const client = axios.create({
@@ -424,6 +425,23 @@ export const notificationsApi = {
       }
       throw normalized
     }
+  },
+
+  async updateTemplate(id: string, input: UpdateTemplateInput): Promise<NotificationTemplate> {
+    const payload = {
+      name: input.name,
+      content: input.template,
+      channel: input.channel ? channelCodeForSend(input.channel) : undefined,
+      is_active: input.enabled,
+    }
+    const raw = await unwrapData<RawNotificationTemplate | { template: RawNotificationTemplate }>(
+      client.put(`/notifications/templates/${id}`, payload),
+    )
+    return mapRawNotificationTemplate(extractTemplate(raw))
+  },
+
+  async deleteTemplate(id: string): Promise<void> {
+    await unwrapCode(client.delete(`/notifications/templates/${id}`))
   },
 
   async listRules(): Promise<NotificationRule[]> {

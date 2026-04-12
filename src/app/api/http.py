@@ -24,6 +24,7 @@ from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
 from app.modules.integration.persistence import JsonFileStore, TripRepository
+from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
 from app.modules.notification.models import NotificationTask
 from app.modules.notification.rule_service import NotificationRuleRepository, RuleValidationError
 from app.modules.notification.service import NotificationAttemptRepository, NotificationService
@@ -644,10 +645,80 @@ def _seed_default_notification_rules(
         rule_repository.create_rule(rule)
 
 
+def _seed_concierge_templates(template_service: TemplateService) -> None:
+    if template_service.list_notification_templates():
+        return
+
+    template_specs: list[dict[str, str]] = [
+        {
+            "name": "行前3天-航班与行前提示",
+            "key": "pre_flight_notice",
+            "channel": "wechat_work_group",
+            "notification_type": "pre_trip_reminder",
+        },
+        {
+            "name": "行前1天-入群欢迎词",
+            "key": "group_welcome",
+            "channel": "wechat_work_group",
+            "notification_type": "pre_trip_reminder",
+        },
+        {
+            "name": "落地首日-乌鲁木齐推荐",
+            "key": "urumqi_day1_recommendations",
+            "channel": "wechat_work_group",
+            "notification_type": "daily_reminder",
+        },
+        {"name": "晨间提示-春季", "key": "morning_spring", "channel": "sms", "notification_type": "daily_reminder"},
+        {"name": "晨间提示-夏季", "key": "morning_summer", "channel": "sms", "notification_type": "daily_reminder"},
+        {"name": "晨间提示-秋季", "key": "morning_autumn", "channel": "sms", "notification_type": "daily_reminder"},
+        {"name": "晨间提示-冬季", "key": "morning_winter", "channel": "sms", "notification_type": "daily_reminder"},
+        {"name": "午间提示-春季", "key": "noon_spring", "channel": "wechat_work_group", "notification_type": "daily_reminder"},
+        {"name": "午间提示-夏季", "key": "noon_summer", "channel": "wechat_work_group", "notification_type": "daily_reminder"},
+        {"name": "午间提示-秋季", "key": "noon_autumn", "channel": "wechat_work_group", "notification_type": "daily_reminder"},
+        {"name": "午间提示-冬季", "key": "noon_winter", "channel": "wechat_work_group", "notification_type": "daily_reminder"},
+        {"name": "场景提示-雨天", "key": "noon_rainy", "channel": "wechat_work_group", "notification_type": "risk_alert"},
+        {"name": "场景提示-骑马", "key": "horse_riding_notice", "channel": "wechat_work_group", "notification_type": "risk_alert"},
+        {"name": "场景提示-滑雪日", "key": "ski_day_notice", "channel": "wechat_work_group", "notification_type": "risk_alert"},
+        {
+            "name": "晚间播报-次日行程",
+            "key": "evening_next_day_preview",
+            "channel": "wechat_work_group",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "行中协同-问题协调",
+            "key": "issue_coordination_notice",
+            "channel": "wechat_work_group",
+            "notification_type": "complaint_escalation",
+        },
+        {
+            "name": "下团调研-满意度回访",
+            "key": "post_trip_survey_notice",
+            "channel": "sms",
+            "notification_type": "satisfaction",
+        },
+        {"name": "下团欢送词", "key": "farewell_message", "channel": "wechat_work_group", "notification_type": "farewell"},
+        {"name": "解散群文案", "key": "group_close_message", "channel": "wechat_work_group", "notification_type": "farewell"},
+    ]
+
+    for spec in template_specs:
+        content = MESSAGE_TEMPLATES.get(spec["key"])
+        if not content:
+            continue
+        template_service.create_notification_template(
+            name=spec["name"],
+            content=content,
+            channel=spec["channel"],
+            notification_type=spec["notification_type"],
+            is_active=True,
+        )
+
+
 def _build_context(store: JsonFileStore | None = None) -> AppContext:
     persistence = store or JsonFileStore()
     trip_repository = TripRepository(store=persistence)
     template_service = TemplateService(store=persistence)
+    _seed_concierge_templates(template_service)
     template_service.ensure_default_template()
     preference_service = UserPreferenceService(store=persistence)
     notification_attempt_repository = NotificationAttemptRepository(store=persistence)
@@ -913,6 +984,23 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         return create_template(payload, user, ctx)
+
+    @fastapi_app.put("/api/notifications/templates/{template_id}")
+    def update_templates_alias(
+        template_id: str,
+        payload: TemplateUpdateRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        return update_template(template_id, payload, user, ctx)
+
+    @fastapi_app.delete("/api/notifications/templates/{template_id}")
+    def delete_templates_alias(
+        template_id: str,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        return delete_template(template_id, user, ctx)
 
     @fastapi_app.get("/api/notifications/rules")
     def list_notification_rules(
