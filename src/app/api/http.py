@@ -19,6 +19,7 @@ from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
 from app.modules.integration.persistence import JsonFileStore, TripRepository
 from app.modules.notification.models import NotificationTask
+from app.modules.notification.rule_service import NotificationRuleRepository, RuleValidationError
 from app.modules.notification.service import NotificationAttemptRepository, NotificationService
 from app.services.preference_service import UserPreferenceService
 from app.services.template_service import TemplateService
@@ -60,6 +61,7 @@ class AppContext:
     template_service: TemplateService
     preference_service: UserPreferenceService
     notification_attempt_repository: NotificationAttemptRepository
+    notification_rule_repository: NotificationRuleRepository
     notification_service: NotificationService
     audit_service: AuditService
 
@@ -96,6 +98,30 @@ class TemplateUpdateRequest(BaseModel):
     channel: str | None = None
     notification_type: str | None = None
     is_active: bool | None = None
+
+
+class NotificationRuleCreateRequest(BaseModel):
+    name: str
+    stage: str
+    time_slot: str
+    scene: str
+    channels: list[str] | None = None
+    template_id: str | None = None
+    enabled: bool = True
+    priority: int = 100
+    conditions: dict[str, Any] | None = None
+
+
+class NotificationRuleUpdateRequest(BaseModel):
+    name: str | None = None
+    stage: str | None = None
+    time_slot: str | None = None
+    scene: str | None = None
+    channels: list[str] | None = None
+    template_id: str | None = None
+    enabled: bool | None = None
+    priority: int | None = None
+    conditions: dict[str, Any] | None = None
 
 
 class TripCreateRequest(BaseModel):
@@ -142,6 +168,10 @@ def _ok(data: Any) -> dict[str, Any]:
 
 def _error(status: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"code": status, "error": message})
+
+
+def _ok_with_message(data: Any, message: str) -> dict[str, Any]:
+    return {"code": 200, "message": message, "data": data}
 
 
 def _parse_channel(value: str) -> Channel:
@@ -236,6 +266,7 @@ def _normalize_history_item(item: dict[str, Any]) -> dict[str, Any]:
         "task_id": item.get("task_id", ""),
         "trip_id": item.get("trip_id", ""),
         "team_id": item.get("team_id", ""),
+        "team": item.get("team_id", ""),
         "customer_id": item.get("customer_id", ""),
         "attempt_no": int(item.get("attempt_no", 1)),
         "channel": str(item.get("channel", "sms")).lower(),
@@ -316,6 +347,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     template_service.ensure_default_template()
     preference_service = UserPreferenceService(store=persistence)
     notification_attempt_repository = NotificationAttemptRepository(store=persistence)
+    notification_rule_repository = NotificationRuleRepository(store=persistence)
     notification_service = NotificationService(attempt_repository=notification_attempt_repository)
     audit_service = AuditService(repository=AuditLogRepository(store=persistence))
     auth_service = AuthService()
@@ -326,6 +358,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         template_service=template_service,
         preference_service=preference_service,
         notification_attempt_repository=notification_attempt_repository,
+        notification_rule_repository=notification_rule_repository,
         notification_service=notification_service,
         audit_service=audit_service,
     )
@@ -566,6 +599,77 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         return create_template(payload, user, ctx)
+
+    @fastapi_app.get("/api/notifications/rules")
+    def list_notification_rules(
+        enabled: bool | None = None,
+        stage: str | None = None,
+        time_slot: str | None = None,
+        scene: str | None = None,
+        _: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        try:
+            items = ctx.notification_rule_repository.list_rules(
+                enabled=enabled,
+                stage=stage,
+                time_slot=time_slot,
+                scene=scene,
+            )
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _ok_with_message({"total": len(items), "items": items}, "rules listed")
+
+    @fastapi_app.get("/api/notifications/rules/{rule_id}")
+    def get_notification_rule(
+        rule_id: str,
+        _: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        rule = ctx.notification_rule_repository.get_rule(rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        return _ok_with_message(rule, "rule found")
+
+    @fastapi_app.post("/api/notifications/rules", status_code=201)
+    def create_notification_rule(
+        payload: NotificationRuleCreateRequest,
+        _: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        try:
+            rule = ctx.notification_rule_repository.create_rule(payload.model_dump())
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _ok_with_message(rule, "rule created")
+
+    @fastapi_app.put("/api/notifications/rules/{rule_id}")
+    def update_notification_rule(
+        rule_id: str,
+        payload: NotificationRuleUpdateRequest,
+        _: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        try:
+            rule = ctx.notification_rule_repository.update_rule(
+                rule_id, payload.model_dump(exclude_none=True)
+            )
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        return _ok_with_message(rule, "rule updated")
+
+    @fastapi_app.delete("/api/notifications/rules/{rule_id}")
+    def delete_notification_rule(
+        rule_id: str,
+        _: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        deleted = ctx.notification_rule_repository.delete_rule(rule_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        return _ok_with_message({"deleted": True, "id": rule_id}, "rule deleted")
 
     @fastapi_app.get("/api/trips")
     def list_trips(

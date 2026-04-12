@@ -1,6 +1,6 @@
 # 前后端联调连通性报告
 
-> 更新时间：2026-04-11（Asia/Shanghai）
+> 更新时间：2026-04-12（Asia/Shanghai）
 > 检查范围：`dev-server.py`、`frontend/start.sh`、`src/app/api/http.py`、`tests/`
 
 ## 1) 当前结论（最新）
@@ -8,7 +8,7 @@
 - 当前本地联调主链路可运行。
 - 最小联调命令 `python dev-server.py verify` 已通过（smoke 全绿）。
 - 全量联调命令 `python dev-server.py verify --full-tests` 已通过（smoke + 契约测试 + 关键链路测试）。
-- 仍存在业务层已知限制：`/api/preferences` 未实现、字段/枚举尚未完全统一（见 `docs/api-contract.md`）。
+- `/api/notifications/rules*` 已落地第一批实现（含鉴权、枚举归一、CRUD），当前进入“实现优先 + 最小验证”阶段。
 
 ## 2) 本轮已完成的集成落地
 
@@ -25,14 +25,16 @@
    - 排除 `everything-claude-code` 子目录
 4. 文档与命令统一：`README.md`、`API_INTEGRATION.md`、`docs/api-contract.md`、`docs/api_connectivity_runbook.md`
 
-## 3) 统一状态块（2026-04-11）
+## 3) 统一状态块（2026-04-12）
 
 - `/api/health` 运行时验证：已通过（`python dev-server.py verify` smoke 链路）
+- `/api/notifications/rules*` 端点现状：已实现并可鉴权访问（见 `docs/api-contract.md`）
 - 当前 blocker（命令级）：无
-- 当前剩余阻塞（联调内容级）：
-  1. `/api/preferences`（GET/PUT）尚未实现，Preferences 页面仍是本地状态。
-  2. `team` / `team_id` 字段未统一。
-  3. 状态与渠道枚举（中英文/代码值）未统一。
+- 本地执行观察（2026-04-12）：`python dev-server.py verify` 与 `python dev-server.py verify --full-tests` 均可完成，未出现超时/卡住。
+- 当前剩余阻塞（rules 联调内容级）：
+  1. `rules` 端点已纳入 `tests/test_http_api.py`（`test_notification_rules_contract_smoke`），并在 `python dev-server.py verify --full-tests` 中执行；默认 `python dev-server.py verify`（最小 smoke）仍不覆盖 rules 契约。
+  2. 前端规则阶段枚举与后端规范值仍有收敛空间（后端规范：`pre_trip|in_trip|post_trip`）。
+  3. `stage/time_slot/scene` 的别名输入策略尚未冻结为团队统一规范。
 - 临时绕行（仅当 backend 再次启动失败时）：
   1. `python dev-server.py smoke --spawn-backend`
   2. `cd frontend && ./start.sh dev --skip-api-check`（前端继续开发）
@@ -46,15 +48,32 @@
   - `bash frontend/start.sh --help`
   - `bash frontend/start.sh health`
 - 恢复步骤（统一）：
-  1. backend 契约收口完成（字段/枚举/`/api/preferences` 与 `docs/api-contract.md` 同步）。
-  2. frontend smoke：`python dev-server.py smoke --spawn-backend`
+  1. backend rules 契约收口完成（以 `docs/api-contract.md` 为准）。
+  2. frontend rules smoke：执行下方 `rules 最小 smoke 命令链`。
   3. integration verify：`python dev-server.py verify`
   4. integration full verify：`python dev-server.py verify --full-tests`（收尾）
+- 阶段边界：实现优先 + 最小验证，综合回归 deferred（待 rules 用例接入 `dev-server.py verify` 后执行）。
 - 最小联调命令（可直接复制执行）：
 ```bash
 python dev-server.py health
 python dev-server.py smoke --spawn-backend
 python dev-server.py verify
+```
+
+- rules 最小 smoke 命令链（可直接复制执行）：
+```bash
+TOKEN=$(curl -fsS -X POST http://127.0.0.1:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"123456"}' \
+  | python -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
+
+curl -fsS "http://127.0.0.1:8000/api/notifications/rules?stage=pre_trip&time_slot=morning&scene=normal" \
+  -H "Authorization: Bearer ${TOKEN}"
+
+curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:8000/api/notifications/rules \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -d '{"name":"smoke-rule","stage":"pre_trip","time_slot":"morning","scene":"normal","channels":["sms"],"enabled":true,"priority":100}'
 ```
 
 ### team/team_id 兼容过渡期说明（统一口径）
@@ -102,18 +121,18 @@ python dev-server.py verify --full-tests
 
 出现联调失败时，建议按以下固定顺序恢复：
 
-1. backend 契约收口完成（字段/枚举/`/api/preferences` 与 `docs/api-contract.md` 同步）。
-2. frontend smoke：`python dev-server.py smoke --spawn-backend`
+1. backend rules 契约收口完成（以 `docs/api-contract.md` 为准）。
+2. frontend rules smoke：执行 `rules 最小 smoke 命令链`。
 3. integration verify：`python dev-server.py verify`
 4. integration full verify：`python dev-server.py verify --full-tests`（收尾）
 
 ## 7) 仍需后续推进（非阻塞）
 
-1. 实现 `GET/PUT /api/preferences`，消除前端 Preferences 本地态孤岛。
-2. 统一 `team`/`team_id`、状态与渠道枚举，减少前后端映射成本。
+1. 将已新增的 `test_notification_rules_contract_smoke` 接入 `dev-server.py verify` 默认 smoke 链。
+2. 冻结并发布 `stage/time_slot/scene` 输入别名规范，减少前后端枚举歧义。
 
-## 8) 交接版状态快照（2026-04-11）
+## 8) 交接版状态快照（2026-04-12）
 
-1. Backend：契约测试路径可执行，待收口 `/api/preferences`、`team/team_id`、枚举统一。
-2. Frontend：smoke 路径可执行，Preferences 等待后端接口完成后切换。
-3. Integration：`verify` 与 `verify --full-tests` 可执行，已具备按统一恢复顺序推进交接条件。
+1. Backend：rules 第一批端点已实现，且已新增 `test_notification_rules_contract_smoke`；待接入 `dev-server.py verify` 默认 smoke 链。
+2. Frontend：rules smoke 路径可执行；规则阶段枚举与后端规范仍在收敛。
+3. Integration：`verify` 与 `verify --full-tests` 可执行，按统一恢复顺序推进交接。

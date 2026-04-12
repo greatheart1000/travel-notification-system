@@ -3,10 +3,15 @@ import {
   type AnalyticsMetrics,
   type ChannelCode,
   type DashboardStats,
+  type NotificationRule,
+  type NotificationRuleStageCode,
+  type NotificationRuleTimeSlotCode,
+  type NotificationRuleWriteInput,
   type NotificationStatusCode,
   type NotificationTemplate,
   type RawAnalyticsResponse,
   type RawDashboardStats,
+  type RawNotificationRule,
   type RawNotificationTemplate,
   type RawRecentNotification,
   type RawTrip,
@@ -111,6 +116,83 @@ const NOTIFICATION_STATUS_LABELS: Record<NotificationStatusCode, string> = {
   enabled: '启用',
   disabled: '停用',
   unknown: '未知',
+}
+
+const RULE_STAGE_ALIASES_EXACT: Record<string, NotificationRuleStageCode> = {
+  pre_trip: 'pre_trip',
+  PRE_TRIP: 'pre_trip',
+  '出行前': 'pre_trip',
+  on_trip: 'on_trip',
+  ON_TRIP: 'on_trip',
+  '出行中': 'on_trip',
+  post_trip: 'post_trip',
+  POST_TRIP: 'post_trip',
+  '出行后': 'post_trip',
+  custom: 'custom',
+  CUSTOM: 'custom',
+  '自定义': 'custom',
+}
+
+const RULE_STAGE_ALIASES_NORMALIZED: Record<string, NotificationRuleStageCode> = {
+  pre_trip: 'pre_trip',
+  pretrip: 'pre_trip',
+  'pre-trip': 'pre_trip',
+  before_trip: 'pre_trip',
+  on_trip: 'on_trip',
+  ontrip: 'on_trip',
+  in_trip: 'on_trip',
+  post_trip: 'post_trip',
+  posttrip: 'post_trip',
+  after_trip: 'post_trip',
+  custom: 'custom',
+}
+
+const RULE_STAGE_LABELS: Record<NotificationRuleStageCode, string> = {
+  pre_trip: '出行前',
+  on_trip: '出行中',
+  post_trip: '出行后',
+  custom: '自定义',
+  unknown: '未知阶段',
+}
+
+const RULE_TIME_SLOT_ALIASES_EXACT: Record<string, NotificationRuleTimeSlotCode> = {
+  morning: 'morning',
+  MORNING: 'morning',
+  '早间': 'morning',
+  afternoon: 'afternoon',
+  AFTERNOON: 'afternoon',
+  '下午': 'afternoon',
+  evening: 'evening',
+  EVENING: 'evening',
+  '傍晚': 'evening',
+  night: 'night',
+  NIGHT: 'night',
+  '夜间': 'night',
+  all_day: 'all_day',
+  ALL_DAY: 'all_day',
+  '全天': 'all_day',
+}
+
+const RULE_TIME_SLOT_ALIASES_NORMALIZED: Record<string, NotificationRuleTimeSlotCode> = {
+  morning: 'morning',
+  am: 'morning',
+  afternoon: 'afternoon',
+  pm: 'afternoon',
+  evening: 'evening',
+  dusk: 'evening',
+  night: 'night',
+  all_day: 'all_day',
+  allday: 'all_day',
+  anytime: 'all_day',
+}
+
+const RULE_TIME_SLOT_LABELS: Record<NotificationRuleTimeSlotCode, string> = {
+  morning: '早间',
+  afternoon: '下午',
+  evening: '傍晚',
+  night: '夜间',
+  all_day: '全天',
+  unknown: '未知时段',
 }
 
 function normalizeAliasKey(value: string | undefined): string {
@@ -254,6 +336,58 @@ export function mapRawNotificationTemplate(raw: RawNotificationTemplate): Notifi
   }
 }
 
+export function normalizeRuleStage(value: string | undefined): NotificationRuleStageCode {
+  if (!value || !value.trim()) {
+    return 'unknown'
+  }
+  return RULE_STAGE_ALIASES_EXACT[value] ?? RULE_STAGE_ALIASES_NORMALIZED[normalizeAliasKey(value)] ?? 'unknown'
+}
+
+export function ruleStageLabel(stage: NotificationRuleStageCode): string {
+  return RULE_STAGE_LABELS[stage]
+}
+
+export function normalizeRuleTimeSlot(value: string | undefined): NotificationRuleTimeSlotCode {
+  if (!value || !value.trim()) {
+    return 'unknown'
+  }
+  return (
+    RULE_TIME_SLOT_ALIASES_EXACT[value] ??
+    RULE_TIME_SLOT_ALIASES_NORMALIZED[normalizeAliasKey(value)] ??
+    'unknown'
+  )
+}
+
+export function ruleTimeSlotLabel(timeSlot: NotificationRuleTimeSlotCode): string {
+  return RULE_TIME_SLOT_LABELS[timeSlot]
+}
+
+export function mapRawNotificationRule(raw: RawNotificationRule): NotificationRule {
+  const stage = normalizeRuleStage(raw.stage)
+  const timeSlot = normalizeRuleTimeSlot(raw.time_slot ?? raw.timeSlot)
+  const scene = safeText(raw.scene, '未定义场景')
+  const name = safeText(raw.name ?? raw.rule_name ?? raw.title, scene || '未命名规则')
+  const templateId = safeText(raw.template_id ?? raw.templateId, '')
+  const templateLabel = safeText(raw.template_name ?? raw.template, templateId || '未绑定模板')
+  const enabled = (raw.enabled ?? raw.is_enabled ?? raw.isEnabled) ?? true
+  const priority = asNumber(raw.priority, 100)
+  const id = safeText(raw.id, fallbackId('rule', [name, stage, timeSlot, scene, templateId, String(priority)]))
+
+  return {
+    id,
+    name,
+    stage,
+    stageLabel: ruleStageLabel(stage),
+    timeSlot,
+    timeSlotLabel: ruleTimeSlotLabel(timeSlot),
+    scene,
+    enabled,
+    priority,
+    templateId,
+    templateLabel,
+  }
+}
+
 export function mapRawRecentNotification(raw: RawRecentNotification): RecentNotification {
   const channel = normalizeChannel(raw.channel)
   const status = normalizeNotificationStatus(raw.status)
@@ -270,6 +404,78 @@ export function mapRawRecentNotification(raw: RawRecentNotification): RecentNoti
     statusLabel: notificationStatusLabel(status),
     createdAt,
   }
+}
+
+function canonicalRuleStage(stage: NotificationRuleStageCode): string {
+  if (stage === 'unknown') {
+    return 'custom'
+  }
+  return stage
+}
+
+function canonicalRuleTimeSlot(timeSlot: NotificationRuleTimeSlotCode): string {
+  if (timeSlot === 'unknown') {
+    return 'all_day'
+  }
+  return timeSlot
+}
+
+export function toNotificationRuleWritePayload(input: NotificationRuleWriteInput): Record<string, string | number | boolean> {
+  const stage = canonicalRuleStage(input.stage)
+  const timeSlot = canonicalRuleTimeSlot(input.timeSlot)
+  return {
+    name: input.name,
+    rule_name: input.name,
+    title: input.name,
+    stage,
+    stage_code: stage,
+    time_slot: timeSlot,
+    timeSlot,
+    scene: input.scene,
+    enabled: input.enabled,
+    is_enabled: input.enabled,
+    priority: input.priority,
+    template_id: input.templateId,
+    templateId: input.templateId,
+  }
+}
+
+export function toNotificationRulePatchPayload(
+  input: Partial<NotificationRuleWriteInput>,
+): Record<string, string | number | boolean> {
+  const payload: Record<string, string | number | boolean> = {}
+
+  if (input.name !== undefined) {
+    payload.name = input.name
+    payload.rule_name = input.name
+    payload.title = input.name
+  }
+  if (input.stage !== undefined) {
+    const stage = canonicalRuleStage(input.stage)
+    payload.stage = stage
+    payload.stage_code = stage
+  }
+  if (input.timeSlot !== undefined) {
+    const timeSlot = canonicalRuleTimeSlot(input.timeSlot)
+    payload.time_slot = timeSlot
+    payload.timeSlot = timeSlot
+  }
+  if (input.scene !== undefined) {
+    payload.scene = input.scene
+  }
+  if (input.enabled !== undefined) {
+    payload.enabled = input.enabled
+    payload.is_enabled = input.enabled
+  }
+  if (input.priority !== undefined) {
+    payload.priority = input.priority
+  }
+  if (input.templateId !== undefined) {
+    payload.template_id = input.templateId
+    payload.templateId = input.templateId
+  }
+
+  return payload
 }
 
 function metricToText(value: string | number | undefined): string {

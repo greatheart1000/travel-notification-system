@@ -1,6 +1,6 @@
 # API 联调 / 上线 Runbook
 
-> Last updated: 2026-04-11 (Asia/Shanghai)
+> Last updated: 2026-04-12 (Asia/Shanghai)
 > Scope: `travel-notification-system` 本地联调、回归、问题定位与数据修复建议
 
 ## 1. 启动
@@ -56,14 +56,16 @@ curl -fsS http://127.0.0.1:8000/api/health
 
 ## 2. 回归验证
 
-### 2.0 统一状态块（2026-04-11）
+### 2.0 统一状态块（2026-04-12）
 
 - `/api/health` 运行时验证：已通过（`python dev-server.py verify` smoke 链路）
+- `/api/notifications/rules*` 端点现状：已实现并可鉴权访问（见 `docs/api-contract.md`）
 - 当前 blocker（命令级）：无
-- 当前剩余阻塞（联调内容级）：
-  1. `/api/preferences`（GET/PUT）尚未实现，Preferences 页面仍是本地状态。
-  2. `team` / `team_id` 字段未统一。
-  3. 状态与渠道枚举（中英文/代码值）未统一。
+- 本地执行观察（2026-04-12）：`python dev-server.py verify` 与 `python dev-server.py verify --full-tests` 均可完成，未出现超时/卡住。
+- 当前剩余阻塞（rules 联调内容级）：
+  1. `rules` 端点已纳入 `tests/test_http_api.py`（`test_notification_rules_contract_smoke`），并在 `python dev-server.py verify --full-tests` 中执行；默认 `python dev-server.py verify`（最小 smoke）仍不覆盖 rules 契约。
+  2. 前端规则阶段枚举与后端规范值仍有收敛空间（后端规范：`pre_trip|in_trip|post_trip`）。
+  3. `stage/time_slot/scene` 的别名输入策略尚未冻结为团队统一规范。
 - 临时绕行（仅当 backend 再次启动失败时）：
   1. `python dev-server.py smoke --spawn-backend`
   2. `cd frontend && ./start.sh dev --skip-api-check`（前端继续开发）
@@ -77,15 +79,32 @@ curl -fsS http://127.0.0.1:8000/api/health
   - `bash frontend/start.sh --help`
   - `bash frontend/start.sh health`
 - 恢复步骤（统一）：
-  1. backend 契约收口完成（字段/枚举/`/api/preferences` 与 `docs/api-contract.md` 同步）。
-  2. frontend smoke：`python dev-server.py smoke --spawn-backend`
+  1. backend rules 契约收口完成（以 `docs/api-contract.md` 为准）。
+  2. frontend rules smoke：执行下方 `rules 最小 smoke 命令链`。
   3. integration verify：`python dev-server.py verify`
   4. integration full verify：`python dev-server.py verify --full-tests`（收尾）
+- 阶段边界：实现优先 + 最小验证，综合回归 deferred（待 rules 用例接入 `dev-server.py verify` 后执行）。
 - 最小联调命令（可直接复制执行）：
 ```bash
 python dev-server.py health
 python dev-server.py smoke --spawn-backend
 python dev-server.py verify
+```
+
+- rules 最小 smoke 命令链（可直接复制执行）：
+```bash
+TOKEN=$(curl -fsS -X POST http://127.0.0.1:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"123456"}' \
+  | python -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
+
+curl -fsS "http://127.0.0.1:8000/api/notifications/rules?stage=pre_trip&time_slot=morning&scene=normal" \
+  -H "Authorization: Bearer ${TOKEN}"
+
+curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:8000/api/notifications/rules \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -d '{"name":"smoke-rule","stage":"pre_trip","time_slot":"morning","scene":"normal","channels":["sms"],"enabled":true,"priority":100}'
 ```
 
 ### team/team_id 兼容过渡期说明（统一口径）
@@ -206,22 +225,22 @@ python dev-server.py smoke --spawn-backend
 
 本清单直接引用本文件 `2.0 统一状态块` 与其中 `恢复步骤（统一）`，不引入第二套口径。
 
-### 7.0 当前交接状态（2026-04-11）
+### 7.0 当前交接状态（2026-04-12）
 
-1. Backend：契约基线已稳定，`python -m pytest -q tests/test_http_api.py` 可执行；剩余待收口项为 `/api/preferences`、`team/team_id`、枚举统一。
-2. Frontend：可执行 smoke 路径（`python dev-server.py smoke --spawn-backend`）；Preferences 仍等待后端接口落地后切换。
-3. Integration：`python dev-server.py verify` 与 `python dev-server.py verify --full-tests` 已验证可跑，当前可进入交接并行推进。
+1. Backend：`/api/notifications/rules*` 已实现；待收口项为规则枚举规范冻结与自动化覆盖补齐。
+2. Frontend：可执行 rules smoke 路径；规则阶段枚举与后端规范仍在收敛中。
+3. Integration：最小联调可执行，当前阶段按“实现优先 + 最小验证”推进，综合回归 deferred。
 
 ### 7.1 Backend 执行清单
 
 前置条件：
 1. 已确认 `docs/api-contract.md` 为契约基线。
-2. 已确认当前内容级阻塞项：`/api/preferences`、`team/team_id`、枚举统一。
+2. 已确认当前内容级阻塞项：rules 枚举规范冻结与自动化覆盖补齐。
 
 执行步骤：
-1. 完成 `/api/preferences`（GET/PUT）最小可用契约实现并对齐文档。
-2. 按 `team/team_id 兼容过渡期说明（统一口径）` 落地兼容策略。
-3. 统一状态与渠道枚举返回口径，并同步 `docs/api-contract.md`。
+1. 冻结 `rules` 枚举规范（`stage/time_slot/scene`）并同步 `docs/api-contract.md`。
+2. 对齐 aliases/中文输入的规范范围并记录兼容策略。
+3. 保持 `POST /api/notifications/rules` 返回 `HTTP 201` + envelope 的契约不变。
 4. 运行 `python -m pytest -q tests/test_http_api.py` 做契约回归。
 
 成功判据：
@@ -232,12 +251,12 @@ python dev-server.py smoke --spawn-backend
 ### 7.2 Frontend 执行清单
 
 前置条件：
-1. 已读取 `2.0 统一状态块` 与 `team/team_id 兼容过渡期说明（统一口径）`。
+1. 已读取 `2.0 统一状态块` 与 rules 枚举规范。
 2. 本地可执行 `python dev-server.py smoke --spawn-backend`。
 
 执行步骤：
-1. 通过适配层兼容 `team`/`team_id` 过渡期读写。
-2. 将 `Preferences` 页面由本地状态改为调用后端接口（待 backend 提供后切换）。
+1. 对齐规则相关字段映射（尤其 `stage` 与 `timeSlot` 的规范值）。
+2. 运行 rules smoke 命令链确认列表筛选与创建行为。
 3. 运行 frontend smoke：`python dev-server.py smoke --spawn-backend`。
 4. 页面联调验证 Dashboard/Trips/Notifications/Analytics 主路径。
 

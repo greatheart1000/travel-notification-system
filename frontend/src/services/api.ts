@@ -3,9 +3,12 @@ import {
   channelCodeForSend,
   mapDashboardStats,
   mapRawAnalytics,
+  mapRawNotificationRule,
   mapRawNotificationTemplate,
   mapRawRecentNotification,
   mapRawTrip,
+  toNotificationRulePatchPayload,
+  toNotificationRuleWritePayload,
   tripStatusLabel,
   toTripWritePayload,
 } from '../adapters/apiAdapter'
@@ -30,10 +33,13 @@ import {
   type CurrentUser,
   type DashboardStats,
   type ChannelCode,
+  type NotificationRule,
+  type NotificationRuleWriteInput,
   type NotificationTemplate,
   type PreferencesViewModel,
   type RawAnalyticsResponse,
   type RawDashboardStats,
+  type RawNotificationRule,
   type RawNotificationTemplate,
   type RawPreferences,
   type RawRecentNotification,
@@ -159,6 +165,73 @@ function extractTemplate(raw: unknown): RawNotificationTemplate {
     return raw.template as RawNotificationTemplate
   }
   return raw as RawNotificationTemplate
+}
+
+function extractRule(raw: unknown): RawNotificationRule {
+  if (isRecord(raw) && isRecord(raw.rule)) {
+    return raw.rule as RawNotificationRule
+  }
+  return raw as RawNotificationRule
+}
+
+const RULE_COLLECTION_ENDPOINTS = [
+  '/notifications/rules',
+  '/notification-rules',
+  '/rules',
+  '/trigger-rules',
+]
+
+function ruleItemEndpoints(id: string): string[] {
+  return RULE_COLLECTION_ENDPOINTS.map((base) => `${base}/${id}`)
+}
+
+async function resolveRuleEndpoint<T>(
+  resolver: (endpoint: string) => Promise<T>,
+  notFoundMessage: string,
+): Promise<T> {
+  for (const endpoint of RULE_COLLECTION_ENDPOINTS) {
+    try {
+      return await resolver(endpoint)
+    } catch (error) {
+      const normalized = toApiClientError(error)
+      if (normalized.status === 404) {
+        continue
+      }
+      throw normalized
+    }
+  }
+
+  throw new ApiClientError({
+    status: 404,
+    code: 404,
+    message: notFoundMessage,
+    requestUrl: RULE_COLLECTION_ENDPOINTS.join('|'),
+  })
+}
+
+async function resolveRuleItemEndpoint<T>(
+  id: string,
+  resolver: (endpoint: string) => Promise<T>,
+  notFoundMessage: string,
+): Promise<T> {
+  for (const endpoint of ruleItemEndpoints(id)) {
+    try {
+      return await resolver(endpoint)
+    } catch (error) {
+      const normalized = toApiClientError(error)
+      if (normalized.status === 404) {
+        continue
+      }
+      throw normalized
+    }
+  }
+
+  throw new ApiClientError({
+    status: 404,
+    code: 404,
+    message: notFoundMessage,
+    requestUrl: ruleItemEndpoints(id).join('|'),
+  })
 }
 
 export const authApi = {
@@ -334,6 +407,81 @@ export const notificationsApi = {
       }
       throw normalized
     }
+  },
+
+  async listRules(): Promise<NotificationRule[]> {
+    return resolveRuleEndpoint(async (endpoint) => {
+      const raw = await unwrapData<{ total?: number; items?: RawNotificationRule[] } | RawNotificationRule[]>(
+        client.get(endpoint),
+      )
+      const items = Array.isArray(raw) ? raw : asArray<RawNotificationRule>(raw.items)
+      return items.map((item) => mapRawNotificationRule(item))
+    }, '后端未开放通知规则查询接口')
+  },
+
+  async createRule(input: NotificationRuleWriteInput): Promise<NotificationRule> {
+    const payload = toNotificationRuleWritePayload(input)
+    return resolveRuleEndpoint(async (endpoint) => {
+      const raw = await unwrapData<RawNotificationRule | { rule: RawNotificationRule }>(
+        client.post(endpoint, payload),
+      )
+      return mapRawNotificationRule(extractRule(raw))
+    }, '后端未开放通知规则创建接口')
+  },
+
+  async updateRule(id: string, input: Partial<NotificationRuleWriteInput>): Promise<NotificationRule> {
+    const payload = toNotificationRulePatchPayload(input)
+    return resolveRuleItemEndpoint(
+      id,
+      async (endpoint) => {
+        const raw = await unwrapData<RawNotificationRule | { rule: RawNotificationRule }>(
+          client.put(endpoint, payload),
+        )
+        return mapRawNotificationRule(extractRule(raw))
+      },
+      '后端未开放通知规则更新接口',
+    )
+  },
+
+  async deleteRule(id: string): Promise<void> {
+    await resolveRuleItemEndpoint(
+      id,
+      async (endpoint) => {
+        await unwrapCode(client.delete(endpoint))
+      },
+      '后端未开放通知规则删除接口',
+    )
+  },
+
+  async toggleRule(id: string, enabled: boolean): Promise<NotificationRule> {
+    try {
+      return await resolveRuleItemEndpoint(
+        id,
+        async (endpoint) => {
+          const raw = await unwrapData<RawNotificationRule | { rule: RawNotificationRule }>(
+            client.patch(endpoint, { enabled, is_enabled: enabled }),
+          )
+          return mapRawNotificationRule(extractRule(raw))
+        },
+        '后端未开放通知规则启停接口',
+      )
+    } catch (error) {
+      const normalized = toApiClientError(error)
+      if (normalized.status !== 404 && normalized.status !== 405) {
+        throw normalized
+      }
+    }
+
+    return resolveRuleItemEndpoint(
+      id,
+      async (endpoint) => {
+        const raw = await unwrapData<RawNotificationRule | { rule: RawNotificationRule }>(
+          client.put(endpoint, { enabled, is_enabled: enabled }),
+        )
+        return mapRawNotificationRule(extractRule(raw))
+      },
+      '后端未开放通知规则启停接口',
+    )
   },
 }
 

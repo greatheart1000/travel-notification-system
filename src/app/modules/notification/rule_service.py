@@ -1,0 +1,260 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from app.modules.integration.persistence import JsonFileStore
+
+UTC = UTC
+
+STAGE_ALIASES: dict[str, str] = {
+    "pre_trip": "pre_trip",
+    "before_departure": "pre_trip",
+    "before": "pre_trip",
+    "行前": "pre_trip",
+    "in_trip": "in_trip",
+    "on_trip": "in_trip",
+    "during": "in_trip",
+    "行中": "in_trip",
+    "post_trip": "post_trip",
+    "after_trip": "post_trip",
+    "after": "post_trip",
+    "行后": "post_trip",
+}
+
+TIME_SLOT_ALIASES: dict[str, str] = {
+    "morning": "morning",
+    "am": "morning",
+    "早间": "morning",
+    "afternoon": "afternoon",
+    "pm": "afternoon",
+    "午间": "afternoon",
+    "evening": "evening",
+    "night": "night",
+    "晚间": "night",
+    "all_day": "all_day",
+    "any": "all_day",
+    "anytime": "all_day",
+    "全天": "all_day",
+}
+
+SCENE_ALIASES: dict[str, str] = {
+    "normal": "normal",
+    "default": "normal",
+    "常规": "normal",
+    "weather": "weather_alert",
+    "weather_alert": "weather_alert",
+    "天气": "weather_alert",
+    "delay": "delay",
+    "flight_delay": "delay",
+    "延误": "delay",
+    "complaint": "complaint",
+    "投诉": "complaint",
+    "manual": "manual",
+    "人工": "manual",
+}
+
+CHANNEL_ALIASES: dict[str, str] = {
+    "sms": "sms",
+    "短信": "sms",
+    "wechat_work_group": "wechat_work_group",
+    "wechat": "wechat_work_group",
+    "企业微信": "wechat_work_group",
+    "email": "email",
+    "邮件": "email",
+}
+
+
+class RuleValidationError(ValueError):
+    pass
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=UTC).isoformat()
+
+
+def _normalize_enum(raw_value: str, aliases: dict[str, str], field_name: str) -> str:
+    key = raw_value.strip().lower()
+    normalized = aliases.get(key)
+    if normalized is None:
+        raise RuleValidationError(f"Invalid {field_name}: {raw_value}")
+    return normalized
+
+
+def normalize_stage(raw_value: str) -> str:
+    return _normalize_enum(raw_value, STAGE_ALIASES, "stage")
+
+
+def normalize_time_slot(raw_value: str) -> str:
+    return _normalize_enum(raw_value, TIME_SLOT_ALIASES, "time_slot")
+
+
+def normalize_scene(raw_value: str) -> str:
+    return _normalize_enum(raw_value, SCENE_ALIASES, "scene")
+
+
+def normalize_channels(values: list[str] | None) -> list[str]:
+    if values is None:
+        return []
+    channels: list[str] = []
+    for value in values:
+        key = str(value).strip().lower()
+        normalized = CHANNEL_ALIASES.get(key)
+        if normalized is None:
+            raise RuleValidationError(f"Invalid channel: {value}")
+        if normalized not in channels:
+            channels.append(normalized)
+    return channels
+
+
+@dataclass(slots=True)
+class NotificationRuleRepository:
+    store: JsonFileStore
+    collection: str = "notification_rules"
+    _rules: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for row in self.store.read_collection(self.collection):
+            rule_id = str(row.get("id", "")).strip()
+            if not rule_id:
+                continue
+            self._rules[rule_id] = self._normalize_rule(row, partial=False)
+
+    def _persist(self) -> None:
+        self.store.write_collection(self.collection, list(self._rules.values()))
+
+    def _normalize_rule(self, payload: dict[str, Any], *, partial: bool) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+
+        if not partial or "id" in payload:
+            raw_rule_id = str(payload.get("id") or "").strip()
+            normalized["id"] = raw_rule_id or f"rule-{uuid4().hex[:10]}"
+
+        if not partial or "name" in payload:
+            name = str(payload.get("name") or "").strip()
+            if not name:
+                raise RuleValidationError("name is required")
+            normalized["name"] = name
+
+        if not partial or "stage" in payload:
+            stage = payload.get("stage")
+            if stage is None:
+                raise RuleValidationError("stage is required")
+            normalized["stage"] = normalize_stage(str(stage))
+
+        if not partial or "time_slot" in payload:
+            time_slot = payload.get("time_slot")
+            if time_slot is None:
+                raise RuleValidationError("time_slot is required")
+            normalized["time_slot"] = normalize_time_slot(str(time_slot))
+
+        if not partial or "scene" in payload:
+            scene = payload.get("scene")
+            if scene is None:
+                raise RuleValidationError("scene is required")
+            normalized["scene"] = normalize_scene(str(scene))
+
+        if "channels" in payload:
+            normalized["channels"] = normalize_channels(payload.get("channels"))
+        elif not partial:
+            normalized["channels"] = []
+
+        if "template_id" in payload:
+            raw_template_id = payload.get("template_id")
+            normalized["template_id"] = str(raw_template_id).strip() if raw_template_id else None
+        elif not partial:
+            normalized["template_id"] = None
+
+        if "enabled" in payload:
+            normalized["enabled"] = bool(payload.get("enabled"))
+        elif not partial:
+            normalized["enabled"] = True
+
+        if "priority" in payload:
+            normalized["priority"] = int(payload.get("priority") or 0)
+        elif not partial:
+            normalized["priority"] = 100
+
+        if "conditions" in payload:
+            conditions = payload.get("conditions")
+            if conditions is None:
+                normalized["conditions"] = {}
+            elif isinstance(conditions, dict):
+                normalized["conditions"] = conditions
+            else:
+                raise RuleValidationError("conditions must be an object")
+        elif not partial:
+            normalized["conditions"] = {}
+
+        if not partial or "created_at" in payload:
+            normalized["created_at"] = str(payload.get("created_at") or _now_iso())
+
+        normalized["updated_at"] = str(payload.get("updated_at") or _now_iso())
+        return normalized
+
+    def list_rules(
+        self,
+        *,
+        enabled: bool | None = None,
+        stage: str | None = None,
+        time_slot: str | None = None,
+        scene: str | None = None,
+    ) -> list[dict[str, Any]]:
+        items = list(self._rules.values())
+        if enabled is not None:
+            items = [item for item in items if bool(item.get("enabled")) is enabled]
+        if stage is not None:
+            stage_value = normalize_stage(stage)
+            items = [item for item in items if item.get("stage") == stage_value]
+        if time_slot is not None:
+            slot_value = normalize_time_slot(time_slot)
+            items = [item for item in items if item.get("time_slot") == slot_value]
+        if scene is not None:
+            scene_value = normalize_scene(scene)
+            items = [item for item in items if item.get("scene") == scene_value]
+
+        return sorted(
+            items,
+            key=lambda item: (
+                int(item.get("priority", 100)),
+                str(item.get("updated_at", "")),
+                str(item.get("id", "")),
+            ),
+        )
+
+    def get_rule(self, rule_id: str) -> dict[str, Any] | None:
+        rule = self._rules.get(rule_id)
+        if rule is None:
+            return None
+        return dict(rule)
+
+    def create_rule(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = self._normalize_rule(payload, partial=False)
+        rule_id = normalized["id"]
+        if rule_id in self._rules:
+            raise RuleValidationError(f"Rule already exists: {rule_id}")
+        self._rules[rule_id] = normalized
+        self._persist()
+        return dict(normalized)
+
+    def update_rule(self, rule_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        current = self._rules.get(rule_id)
+        if current is None:
+            return None
+        normalized_patch = self._normalize_rule(payload, partial=True)
+        next_rule = dict(current)
+        next_rule.update(normalized_patch)
+        next_rule["id"] = rule_id
+        next_rule["updated_at"] = _now_iso()
+        self._rules[rule_id] = next_rule
+        self._persist()
+        return dict(next_rule)
+
+    def delete_rule(self, rule_id: str) -> bool:
+        if rule_id not in self._rules:
+            return False
+        del self._rules[rule_id]
+        self._persist()
+        return True

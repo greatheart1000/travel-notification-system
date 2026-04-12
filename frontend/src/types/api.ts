@@ -125,6 +125,52 @@ export interface CreateTemplateInput {
   channel: ChannelCode
 }
 
+export type NotificationRuleStageCode = 'pre_trip' | 'on_trip' | 'post_trip' | 'custom' | 'unknown'
+export type NotificationRuleTimeSlotCode = 'morning' | 'afternoon' | 'evening' | 'night' | 'all_day' | 'unknown'
+
+export interface RawNotificationRule {
+  id?: string
+  name?: string
+  rule_name?: string
+  title?: string
+  stage?: string
+  time_slot?: string
+  timeSlot?: string
+  scene?: string
+  enabled?: boolean
+  is_enabled?: boolean
+  isEnabled?: boolean
+  priority?: number | string
+  template_id?: string
+  templateId?: string
+  template?: string
+  template_name?: string
+}
+
+export interface NotificationRule {
+  id: string
+  name: string
+  stage: NotificationRuleStageCode
+  stageLabel: string
+  timeSlot: NotificationRuleTimeSlotCode
+  timeSlotLabel: string
+  scene: string
+  enabled: boolean
+  priority: number
+  templateId: string
+  templateLabel: string
+}
+
+export interface NotificationRuleWriteInput {
+  name: string
+  stage: NotificationRuleStageCode
+  timeSlot: NotificationRuleTimeSlotCode
+  scene: string
+  enabled: boolean
+  priority: number
+  templateId: string
+}
+
 export interface RawRecentNotification {
   id?: string
   customer_name?: string

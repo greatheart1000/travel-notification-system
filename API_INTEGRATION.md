@@ -1,6 +1,6 @@
 # API Integration Guide
 
-> Last updated: 2026-04-11 (Asia/Shanghai)
+> Last updated: 2026-04-12 (Asia/Shanghai)
 > Source of truth: `docs/api-contract.md` + `src/app/api/http.py`
 
 ## 1. 前后端启动方式
@@ -52,14 +52,16 @@ cd frontend
 
 ## 3. 推荐测试命令
 
-### 3.0 统一状态块（2026-04-11）
+### 3.0 统一状态块（2026-04-12）
 
 - `/api/health` 运行时验证：已通过（`python dev-server.py verify` smoke 链路）
+- `/api/notifications/rules*` 端点现状：已实现并可鉴权访问（见 `docs/api-contract.md`）
 - 当前 blocker（命令级）：无
-- 当前剩余阻塞（联调内容级）：
-  1. `/api/preferences`（GET/PUT）尚未实现，Preferences 页面仍是本地状态。
-  2. `team` / `team_id` 字段未统一。
-  3. 状态与渠道枚举（中英文/代码值）未统一。
+- 本地执行观察（2026-04-12）：`python dev-server.py verify` 与 `python dev-server.py verify --full-tests` 均可完成，未出现超时/卡住。
+- 当前剩余阻塞（rules 联调内容级）：
+  1. `rules` 端点已纳入 `tests/test_http_api.py`（`test_notification_rules_contract_smoke`），并在 `python dev-server.py verify --full-tests` 中执行；默认 `python dev-server.py verify`（最小 smoke）仍不覆盖 rules 契约。
+  2. 前端规则阶段枚举与后端规范值仍有收敛空间（后端规范：`pre_trip|in_trip|post_trip`）。
+  3. `stage/time_slot/scene` 的别名输入策略尚未冻结为团队统一规范。
 - 临时绕行（仅当 backend 再次启动失败时）：
   1. `python dev-server.py smoke --spawn-backend`
   2. `cd frontend && ./start.sh dev --skip-api-check`（前端继续开发）
@@ -73,15 +75,32 @@ cd frontend
   - `bash frontend/start.sh --help`
   - `bash frontend/start.sh health`
 - 恢复步骤（统一）：
-  1. backend 契约收口完成（字段/枚举/`/api/preferences` 与 `docs/api-contract.md` 同步）。
-  2. frontend smoke：`python dev-server.py smoke --spawn-backend`
+  1. backend rules 契约收口完成（以 `docs/api-contract.md` 为准）。
+  2. frontend rules smoke：执行下方 `rules 最小 smoke 命令链`。
   3. integration verify：`python dev-server.py verify`
   4. integration full verify：`python dev-server.py verify --full-tests`（收尾）
+- 阶段边界：实现优先 + 最小验证，综合回归 deferred（待 rules 用例接入 `dev-server.py verify` 后执行）。
 - 最小联调命令（可直接复制执行）：
 ```bash
 python dev-server.py health
 python dev-server.py smoke --spawn-backend
 python dev-server.py verify
+```
+
+- rules 最小 smoke 命令链（可直接复制执行）：
+```bash
+TOKEN=$(curl -fsS -X POST http://127.0.0.1:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"123456"}' \
+  | python -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
+
+curl -fsS "http://127.0.0.1:8000/api/notifications/rules?stage=pre_trip&time_slot=morning&scene=normal" \
+  -H "Authorization: Bearer ${TOKEN}"
+
+curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:8000/api/notifications/rules \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -d '{"name":"smoke-rule","stage":"pre_trip","time_slot":"morning","scene":"normal","channels":["sms"],"enabled":true,"priority":100}'
 ```
 
 ### team/team_id 兼容过渡期说明（统一口径）
@@ -147,6 +166,7 @@ python dev-server.py verify --full-tests
 - 行程：`/trips`, `/trips/{id}`
 - 通知：`/notifications/templates`, `/notifications/send`
 - 分析：`/analytics/metrics`
+- 规则（V2 第一批）：`/notifications/rules*`（前端类型与后端规范仍在收敛）
 
 未接入后端：
 - Preferences 页面（本地状态，未调用 `/api/preferences`）

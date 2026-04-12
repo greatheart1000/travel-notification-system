@@ -155,7 +155,6 @@ def test_health_check_detail() -> None:
     assert detail.json()["data"]["status"] == "ok"
     assert "components" in detail.json()["data"]
 
-
 def test_update_trip_rejects_blank_team_fields_and_keeps_original_value() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
@@ -194,3 +193,67 @@ def test_update_trip_rejects_blank_team_fields_and_keeps_original_value() -> Non
     assert detail.status_code == 200
     assert detail.json()["data"]["team_id"] == "TEAM-ORIGINAL"
     assert detail.json()["data"]["team"] == "TEAM-ORIGINAL"
+
+
+def test_notification_rules_contract_smoke() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    listed_before = client.get("/api/notifications/rules", headers=headers)
+    assert listed_before.status_code == 200
+    assert listed_before.json()["code"] == 200
+    assert "message" in listed_before.json()
+
+    created = client.post(
+        "/api/notifications/rules",
+        headers=headers,
+        json={
+            "name": "规则契约冒烟",
+            "stage": "before_departure",
+            "time_slot": "AM",
+            "scene": "天气",
+            "channels": ["短信", "企业微信"],
+            "priority": 10,
+            "enabled": True,
+            "conditions": {"rain": True},
+        },
+    )
+    assert created.status_code == 201
+    created_data = created.json()["data"]
+    rule_id = created_data["id"]
+    assert created_data["stage"] == "pre_trip"
+    assert created_data["time_slot"] == "morning"
+    assert created_data["scene"] == "weather_alert"
+    assert created_data["channels"] == ["sms", "wechat_work_group"]
+
+    fetched = client.get(f"/api/notifications/rules/{rule_id}", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["data"]["id"] == rule_id
+
+    updated = client.put(
+        f"/api/notifications/rules/{rule_id}",
+        headers=headers,
+        json={"enabled": False, "time_slot": "night", "priority": 5},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["enabled"] is False
+    assert updated.json()["data"]["time_slot"] == "night"
+    assert updated.json()["data"]["priority"] == 5
+
+    invalid = client.post(
+        "/api/notifications/rules",
+        headers=headers,
+        json={"name": "非法规则", "stage": "bad-stage", "time_slot": "morning", "scene": "normal"},
+    )
+    assert invalid.status_code == 400
+    assert invalid.json()["code"] == 400
+
+    deleted = client.delete(f"/api/notifications/rules/{rule_id}", headers=headers)
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["deleted"] is True
+
+    listed_after = client.get("/api/notifications/rules", headers=headers)
+    assert listed_after.status_code == 200
+    assert all(item["id"] != rule_id for item in listed_after.json()["data"]["items"])
