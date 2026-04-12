@@ -419,6 +419,62 @@ def _to_recent_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compute_channel_performance(attempts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, int]] = {}
+    for item in attempts:
+        channel = str(item.get("channel", "sms")).lower()
+        bucket = grouped.setdefault(channel, {"sent": 0, "successful": 0, "failed": 0})
+        bucket["sent"] += 1
+        if item.get("ok") is True:
+            bucket["successful"] += 1
+        else:
+            bucket["failed"] += 1
+
+    performance: list[dict[str, Any]] = []
+    for channel, bucket in grouped.items():
+        sent = bucket["sent"]
+        success_rate = round((bucket["successful"] / sent) * 100, 1) if sent else 0.0
+        performance.append(
+            {
+                "channel": channel,
+                "sent": sent,
+                "successful": bucket["successful"],
+                "failed": bucket["failed"],
+                "rate": f"{success_rate}%",
+            }
+        )
+    return sorted(performance, key=lambda item: int(item["sent"]), reverse=True)
+
+
+def _compute_top_trips(
+    attempts: list[dict[str, Any]],
+    trip_repository: TripRepository,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    trip_map = {str(trip.get("id")): trip for trip in trip_repository.list()}
+    grouped: dict[str, int] = {}
+    for item in attempts:
+        trip_id = str(item.get("trip_id", "")).strip()
+        if not trip_id:
+            continue
+        grouped[trip_id] = grouped.get(trip_id, 0) + 1
+
+    ranking: list[dict[str, Any]] = []
+    for trip_id, notifications in grouped.items():
+        trip = trip_map.get(trip_id, {})
+        destination = str(trip.get("destination", "")).strip()
+        ranking.append(
+            {
+                "name": destination or trip_id,
+                "notifications": notifications,
+                "satisfaction": 4.5,
+            }
+        )
+
+    ranking_sorted = sorted(ranking, key=lambda item: int(item["notifications"]), reverse=True)
+    return ranking_sorted[: max(limit, 0)]
+
+
 def _query_notification_items(
     *,
     repository: NotificationAttemptRepository,
