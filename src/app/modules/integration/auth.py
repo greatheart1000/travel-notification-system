@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import os
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-UTC = UTC
+UTC = timezone.utc
+PBKDF2_ROUNDS = 240_000
+PBKDF2_SCHEME = "pbkdf2_sha256"
 
 
 @dataclass(slots=True)
@@ -18,6 +22,7 @@ class AuthService:
     def __post_init__(self) -> None:
         if self.users:
             return
+        default_password = os.getenv("TRAVEL_NOTIFICATION_DEFAULT_PASSWORD", "123456")
         self.users = {
             "admin": {
                 "id": "user-001",
@@ -25,7 +30,7 @@ class AuthService:
                 "email": "admin@travelhub.com",
                 "role": "admin",
                 "tenant_id": "tenant-a",
-                "password_hash": self.hash_password("123456"),
+                "password_hash": self.hash_password(default_password),
                 "created_at": "2026-04-11T00:00:00Z",
             },
             "user": {
@@ -34,7 +39,7 @@ class AuthService:
                 "email": "user@travelhub.com",
                 "role": "user",
                 "tenant_id": "tenant-a",
-                "password_hash": self.hash_password("123456"),
+                "password_hash": self.hash_password(default_password),
                 "created_at": "2026-04-11T00:00:00Z",
             },
             "partner": {
@@ -43,13 +48,43 @@ class AuthService:
                 "email": "partner@travelhub.com",
                 "role": "user",
                 "tenant_id": "tenant-b",
-                "password_hash": self.hash_password("123456"),
+                "password_hash": self.hash_password(default_password),
                 "created_at": "2026-04-11T00:00:00Z",
             },
         }
 
     @staticmethod
+    def _is_pbkdf2_hash(hash_value: str) -> bool:
+        return hash_value.startswith(f"{PBKDF2_SCHEME}$")
+
+    @staticmethod
+    def _pbkdf2_parts(hash_value: str) -> tuple[int, bytes, bytes] | None:
+        parts = hash_value.split("$")
+        if len(parts) != 4 or parts[0] != PBKDF2_SCHEME:
+            return None
+        try:
+            rounds = int(parts[1])
+            salt = base64.b64decode(parts[2].encode("utf-8"))
+            digest = base64.b64decode(parts[3].encode("utf-8"))
+        except (ValueError, TypeError):
+            return None
+        return rounds, salt, digest
+
+    @staticmethod
     def hash_password(raw_password: str) -> str:
+        salt = os.urandom(16)
+        digest = hashlib.pbkdf2_hmac(
+            "sha256",
+            raw_password.encode("utf-8"),
+            salt,
+            PBKDF2_ROUNDS,
+        )
+        salt_b64 = base64.b64encode(salt).decode("utf-8")
+        digest_b64 = base64.b64encode(digest).decode("utf-8")
+        return f"{PBKDF2_SCHEME}${PBKDF2_ROUNDS}${salt_b64}${digest_b64}"
+
+    @staticmethod
+    def _legacy_sha256(raw_password: str) -> str:
         return hashlib.sha256(raw_password.encode("utf-8")).hexdigest()
 
     def verify_password(self, username: str, raw_password: str) -> bool:
@@ -57,7 +92,24 @@ class AuthService:
         if user is None:
             return False
         expected = user.get("password_hash", "")
-        return hmac.compare_digest(expected, self.hash_password(raw_password))
+        if self._is_pbkdf2_hash(expected):
+            parsed = self._pbkdf2_parts(expected)
+            if parsed is None:
+                return False
+            rounds, salt, digest = parsed
+            actual = hashlib.pbkdf2_hmac(
+                "sha256",
+                raw_password.encode("utf-8"),
+                salt,
+                rounds,
+            )
+            return hmac.compare_digest(actual, digest)
+
+        # Backward compatibility for old sha256 hashes; upgrade on successful login.
+        legacy_ok = hmac.compare_digest(expected, self._legacy_sha256(raw_password))
+        if legacy_ok:
+            user["password_hash"] = self.hash_password(raw_password)
+        return legacy_ok
 
     def issue_token_pair(self, username: str) -> dict[str, object]:
         access_token = f"tk-{uuid4().hex}"

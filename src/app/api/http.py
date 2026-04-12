@@ -5,7 +5,7 @@ import io
 import re
 import zipfile
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 from xml.etree import ElementTree
@@ -25,13 +25,14 @@ from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
 from app.modules.integration.persistence import JsonFileStore, TripRepository
 from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
+from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
 from app.modules.notification.rule_service import NotificationRuleRepository, RuleValidationError
 from app.modules.notification.service import NotificationAttemptRepository, NotificationService
 from app.services.preference_service import UserPreferenceService
 from app.services.template_service import TemplateService
 
-UTC = UTC
+UTC = timezone.utc
 
 
 def _patch_starlette_router_compat() -> None:
@@ -815,7 +816,10 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         template_id=template_service.ensure_default_template(tenant_id="tenant-a").id,
         tenant_id="tenant-a",
     )
-    notification_service = NotificationService(attempt_repository=notification_attempt_repository)
+    notification_service = NotificationService(
+        idempotency_store=IdempotencyStore(store=persistence),
+        attempt_repository=notification_attempt_repository,
+    )
     audit_service = AuditService(repository=AuditLogRepository(store=persistence))
     analytics_service = AnalyticsService(
         repository=AnalyticsRepository(store=persistence),

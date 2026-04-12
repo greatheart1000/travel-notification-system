@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.api.http import run_http_server
 from app.modules.complaint.models import ComplaintEvent
 from app.modules.complaint.service import ComplaintService
 from app.modules.notification.models import NotificationTask, NotificationTemplate
@@ -38,4 +37,6 @@ def bootstrap_demo() -> dict:
 
 
 if __name__ == "__main__":
+    from app.api.http import run_http_server
+
     run_http_server()

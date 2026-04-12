@@ -215,6 +215,7 @@ python dev-server.py verify --full-tests
 - 连通性报告：`docs/api_connectivity_report.md`
 - 上线/联调 Runbook：`docs/api_connectivity_runbook.md`
 - 联调交接执行清单：`docs/api_connectivity_runbook.md`（章节：`7. 联调交接执行清单`）
+- Batch 2 两周迭代任务单（RBAC/异步重试/可观测/审批流）：`docs/batch2-two-week-iteration-plan.md`
 - MySQL 表结构与种子数据：`docs/mysql_schema_seed.sql`
 - MySQL 设计说明：`docs/mysql-table-design.md`
 

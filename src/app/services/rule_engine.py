@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.core.entities import Channel, DomainEvent, EventName
+
+UTC = timezone.utc
 
 
 @dataclass(slots=True)
