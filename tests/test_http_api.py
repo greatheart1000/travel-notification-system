@@ -155,6 +155,24 @@ def test_health_check_detail() -> None:
     assert detail.json()["data"]["status"] == "ok"
     assert "components" in detail.json()["data"]
 
+
+def test_analytics_metrics_returns_seeded_structured_data() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    metrics_response = client.get("/api/analytics/metrics", headers=headers)
+    assert metrics_response.status_code == 200
+
+    payload = metrics_response.json()["data"]
+    assert payload["metrics"]["notification_success_rate"].endswith("%")
+    assert payload["metrics"]["avg_response_time"].endswith("ms")
+    assert payload["metrics"]["user_satisfaction"].endswith("/5")
+    assert len(payload["channel_performance"]) >= 1
+    assert len(payload["top_trips"]) >= 1
+
+
 def test_update_trip_rejects_blank_team_fields_and_keeps_original_value() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
