@@ -1,74 +1,156 @@
 from __future__ import annotations
 
-import json
+from fastapi.testclient import TestClient
 
-from app.api.http import dispatch_request
+from app.api.http import app, reset_state
 
 
-def test_auth_login_and_me_endpoint() -> None:
-    login_res = dispatch_request(
-        "POST",
-        "/api/auth/login",
-        body=json.dumps({"username": "admin", "password": "123456"}),
+def _login(client: TestClient, username: str, password: str) -> str:
+    response = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert response.status_code == 200
+    return response.json()["data"]["access_token"]
+
+
+def test_auth_login_and_role_resolution() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+
+    admin_token = _login(client, "admin", "123456")
+    user_token = _login(client, "user", "123456")
+
+    admin_me = client.get("/api/users/me", headers={"Authorization": f"Bearer {admin_token}"})
+    assert admin_me.status_code == 200
+    assert admin_me.json()["data"]["role"] == "admin"
+
+    user_me = client.get("/api/users/me", headers={"Authorization": f"Bearer {user_token}"})
+    assert user_me.status_code == 200
+    assert user_me.json()["data"]["role"] == "user"
+
+
+def test_preferences_read_write() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    user_token = _login(client, "user", "123456")
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    initial = client.get("/api/preferences/me", headers=headers)
+    assert initial.status_code == 200
+    assert "channels" in initial.json()["data"]
+
+    updated = client.put(
+        "/api/preferences/me",
+        headers=headers,
+        json={"channels": ["email", "sms"], "quiet_hours": [22, 6], "allow_marketing": False},
     )
-    assert login_res.status == 200
-    token = login_res.body["data"]["access_token"]
-
-    me_res = dispatch_request("GET", "/api/users/me", headers={"Authorization": f"Bearer {token}"})
-    assert me_res.status == 200
-    assert me_res.body["data"]["username"] == "admin"
+    assert updated.status_code == 200
+    assert updated.json()["data"]["channels"] == ["email", "sms"]
+    assert updated.json()["data"]["quiet_hours"] == [22, 6]
+    assert updated.json()["data"]["allow_marketing"] is False
 
 
-def test_trip_crud_endpoints() -> None:
-    create_res = dispatch_request(
-        "POST",
+def test_template_crud_and_admin_guard() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+
+    admin_token = _login(client, "admin", "123456")
+    user_token = _login(client, "user", "123456")
+
+    forbidden = client.post(
+        "/api/templates",
+        headers={"Authorization": f"Bearer {user_token}"},
+        json={
+            "name": "普通用户创建",
+            "content": "{{customer_name}}，你好",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+            "is_active": True,
+        },
+    )
+    assert forbidden.status_code == 403
+
+    create = client.post(
+        "/api/templates",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "name": "出发前提醒",
+            "content": "{{customer_name}}，您的{{destination}}行程即将开始。",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+            "is_active": True,
+        },
+    )
+    assert create.status_code == 201
+    template_id = create.json()["data"]["id"]
+
+    listed = client.get("/api/templates", headers={"Authorization": f"Bearer {admin_token}"})
+    assert listed.status_code == 200
+    assert any(item["id"] == template_id for item in listed.json()["data"]["items"])
+
+    detail = client.get(
+        f"/api/templates/{template_id}", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert detail.status_code == 200
+
+    updated = client.put(
+        f"/api/templates/{template_id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"is_active": False, "content": "变更后的模板内容"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["is_active"] is False
+
+    deleted = client.delete(
+        f"/api/templates/{template_id}", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert deleted.status_code == 200
+
+    missing = client.get(
+        f"/api/templates/{template_id}", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert missing.status_code == 404
+
+
+def test_trip_creation_triggers_notification_history_and_audit() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    user_token = _login(client, "user", "123456")
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    created = client.post(
         "/api/trips",
-        body=json.dumps(
-            {
-                "destination": "阿勒泰 - 禾木",
-                "team": "TEAM-009",
-                "start_date": "2026-05-01",
-                "end_date": "2026-05-03",
-                "participants": 20,
-            }
-        ),
+        headers=headers,
+        json={
+            "destination": "阿勒泰 - 禾木",
+            "team": "TEAM-009",
+            "start_date": "2026-05-01",
+            "end_date": "2026-05-03",
+            "participants": 20,
+        },
     )
-    assert create_res.status == 200
-    trip_id = create_res.body["data"]["id"]
+    assert created.status_code == 201
+    trip_id = created.json()["data"]["trip"]["id"]
+    assert created.json()["data"]["notification"]["ok"] is True
 
-    list_res = dispatch_request("GET", "/api/trips")
-    assert list_res.status == 200
-    assert any(item["id"] == trip_id for item in list_res.body["data"]["items"])
+    history = client.get(f"/api/notifications/history?trip_id={trip_id}&limit=10", headers=headers)
+    assert history.status_code == 200
+    assert history.json()["data"]["total"] >= 1
 
-    update_res = dispatch_request("PUT", f"/api/trips/{trip_id}", body=json.dumps({"status": "已完成"}))
-    assert update_res.status == 200
-    assert update_res.body["data"]["status"] == "已完成"
+    timeline = client.get(f"/api/trips/{trip_id}/timeline", headers=headers)
+    assert timeline.status_code == 200
+    actions = {item["action"] for item in timeline.json()["data"]["audit_logs"]}
+    assert "trip_created" in actions
+    assert "notification_dispatched" in actions
 
-    delete_res = dispatch_request("DELETE", f"/api/trips/{trip_id}")
-    assert delete_res.status == 200
 
+def test_health_check_detail() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
 
-def test_dashboard_notifications_and_analytics_endpoints() -> None:
-    stats_res = dispatch_request("GET", "/api/dashboard/stats")
-    assert stats_res.status == 200
-    assert "today_notifications" in stats_res.body["data"]
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.json()["data"]["status"] == "ok"
 
-    tpl_res = dispatch_request("GET", "/api/notifications/templates")
-    assert tpl_res.status == 200
-    assert tpl_res.body["data"]["total"] >= 1
-
-    send_res = dispatch_request(
-        "POST",
-        "/api/notifications/send",
-        body=json.dumps({"template_id": "tpl-001", "customer_name": "测试用户", "trip": "测试行程"}),
-    )
-    assert send_res.status == 200
-    assert send_res.body["data"]["ok"] is True
-
-    recent_res = dispatch_request("GET", "/api/notifications/recent?limit=2")
-    assert recent_res.status == 200
-    assert recent_res.body["data"]["total"] <= 2
-
-    analytics_res = dispatch_request("GET", "/api/analytics/metrics")
-    assert analytics_res.status == 200
-    assert "metrics" in analytics_res.body["data"]
+    detail = client.get("/api/health/detail")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "ok"
+    assert "components" in detail.json()["data"]

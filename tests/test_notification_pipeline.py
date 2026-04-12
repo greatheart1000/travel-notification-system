@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from app.core.models import Channel
+from app.modules.integration.persistence import JsonFileStore
 from app.modules.notification.models import NotificationTask
-from app.modules.notification.service import NotificationService
+from app.modules.notification.service import NotificationAttemptRepository, NotificationService
 
 
 class FailSmsProvider:
@@ -52,3 +53,23 @@ def test_dispatch_is_idempotent_with_same_key() -> None:
     assert first["ok"] is True
     assert second["ok"] is True
     assert second["reason"] == "idempotent_skip"
+
+
+def test_notification_attempts_are_persisted_for_history_query(tmp_path) -> None:
+    store = JsonFileStore(base_dir=tmp_path)
+    attempt_repository = NotificationAttemptRepository(store=store)
+    service = NotificationService(attempt_repository=attempt_repository)
+    task = NotificationTask(
+        team_id="TEAM-99",
+        trip_id="trip-99",
+        customer_id="user-99",
+        rendered_content="hello history",
+    )
+
+    result = service.dispatch(task)
+
+    assert result["ok"] is True
+    reloaded_repo = NotificationAttemptRepository(store=store)
+    items = reloaded_repo.list_history(limit=10, trip_id="trip-99")
+    assert len(items) >= 1
+    assert items[0]["trip_id"] == "trip-99"

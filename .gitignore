@@ -1,3 +1,9 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.codex
+.codex-memory/
+
+# local embedded repositories
+/everything-claude-code/
+/skills/

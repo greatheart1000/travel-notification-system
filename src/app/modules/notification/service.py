@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from enum import Enum
 from time import monotonic
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.core.models import Channel
+from app.modules.integration.persistence import JsonFileStore
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import (
     DispatchStatus,
@@ -12,6 +15,8 @@ from app.modules.notification.models import (
     NotificationTask,
     NotificationTemplate,
 )
+
+UTC = UTC
 
 
 class ChannelProvider(Protocol):
@@ -28,6 +33,67 @@ class StubProvider:
         return True, f"accepted:{customer_id}"
 
 
+@dataclass(slots=True)
+class NotificationAttemptRepository:
+    store: JsonFileStore | None = None
+    collection: str = "notification_attempts"
+    _records: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.store is None:
+            return
+        self._records = self.store.read_collection(self.collection)
+
+    def _to_value(self, value: Any) -> Any:
+        if isinstance(value, Enum):
+            return value.value
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    def record_attempt(
+        self, task: NotificationTask, attempt: NotificationAttempt
+    ) -> dict[str, Any]:
+        payload = {
+            "attempt_id": attempt.id,
+            "task_id": task.id,
+            "trip_id": task.trip_id,
+            "team_id": task.team_id,
+            "customer_id": task.customer_id,
+            "attempt_no": attempt.attempt_no,
+            "channel": attempt.channel.value,
+            "ok": attempt.ok,
+            "reason": attempt.reason,
+            "provider_message": attempt.provider_message,
+            "latency_ms": attempt.latency_ms,
+            "status": task.status.value,
+            "attempted_at": attempt.attempted_at.isoformat(),
+        }
+        self._records.insert(0, payload)
+        if self.store is not None:
+            self.store.write_collection(self.collection, self._records)
+        return payload
+
+    def list_history(
+        self,
+        *,
+        limit: int | None = 20,
+        trip_id: str | None = None,
+        team_id: str | None = None,
+        customer_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        items = self._records
+        if trip_id:
+            items = [item for item in items if item.get("trip_id") == trip_id]
+        if team_id:
+            items = [item for item in items if item.get("team_id") == team_id]
+        if customer_id:
+            items = [item for item in items if item.get("customer_id") == customer_id]
+        if limit is None:
+            return items
+        return items[: max(limit, 0)]
+
+
 class NotificationService:
     """通知模块服务：模板渲染 + 重试 + 兜底 + 幂等。"""
 
@@ -35,6 +101,7 @@ class NotificationService:
         self,
         providers: dict[Channel, ChannelProvider] | None = None,
         idempotency_store: IdempotencyStore | None = None,
+        attempt_repository: NotificationAttemptRepository | None = None,
     ) -> None:
         default_provider = StubProvider()
         self.providers: dict[Channel, ChannelProvider] = providers or {
@@ -42,6 +109,7 @@ class NotificationService:
             Channel.WECHAT_WORK_GROUP: default_provider,
         }
         self.idempotency_store = idempotency_store or IdempotencyStore()
+        self.attempt_repository = attempt_repository
 
     def render(self, template: NotificationTemplate, variables: dict[str, str]) -> str:
         content = template.content
@@ -79,6 +147,8 @@ class NotificationService:
                         latency_ms=latency_ms,
                     )
                 )
+                if self.attempt_repository is not None:
+                    self.attempt_repository.record_attempt(task, task.attempts[-1])
                 if ok:
                     task.status = DispatchStatus.SENT
                     self.idempotency_store.mark(task.idempotency_key)

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
-from app.core.models import BaseRecord, Channel, NotificationType, UTC
+from app.core.models import UTC, BaseRecord, Channel, NotificationType
 
 
 class DispatchStatus(str, Enum):
@@ -40,6 +40,7 @@ class NotificationAttempt(BaseRecord):
 @dataclass(slots=True)
 class NotificationTask(BaseRecord):
     team_id: str = ""
+    trip_id: str = ""
     customer_id: str = ""
     notification_type: NotificationType = NotificationType.DAILY_REMINDER
     primary_channel: Channel = Channel.SMS

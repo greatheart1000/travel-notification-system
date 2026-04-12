@@ -1,4 +1,47 @@
-import axios from 'axios'
+import axios, { AxiosError, type AxiosResponse } from 'axios'
+import {
+  channelCodeForSend,
+  mapDashboardStats,
+  mapRawAnalytics,
+  mapRawNotificationTemplate,
+  mapRawRecentNotification,
+  mapRawTrip,
+  tripStatusLabel,
+  toTripWritePayload,
+} from '../adapters/apiAdapter'
+import {
+  clearAuthStorage,
+  dispatchAuthStateChanged,
+  getAccessToken,
+  setAuthTokens,
+} from '../adapters/authAdapter'
+import {
+  mapRawPreferences,
+  toPreferencesPayloadForMe,
+  toPreferencesPayloadLegacy,
+} from '../adapters/preferencesAdapter'
+import {
+  type AnalyticsData,
+  type ApiEnvelope,
+  type ApiErrorBody,
+  type ApiErrorDetail,
+  type AuthLoginResponse,
+  type CreateTemplateInput,
+  type CurrentUser,
+  type DashboardStats,
+  type ChannelCode,
+  type NotificationTemplate,
+  type PreferencesViewModel,
+  type RawAnalyticsResponse,
+  type RawDashboardStats,
+  type RawNotificationTemplate,
+  type RawPreferences,
+  type RawRecentNotification,
+  type RawTrip,
+  type RecentNotification,
+  type Trip,
+  type TripWriteInput,
+} from '../types/api'
 
 const client = axios.create({
   baseURL: '/api',
@@ -10,65 +53,343 @@ const client = axios.create({
   },
 })
 
+export class ApiClientError extends Error {
+  status: number
+  code: number
+  requestUrl?: string
+
+  constructor(detail: ApiErrorDetail) {
+    super(detail.message)
+    this.name = 'ApiClientError'
+    this.status = detail.status
+    this.code = detail.code
+    this.requestUrl = detail.requestUrl
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function normalizeErrorBody(data: unknown): ApiErrorBody {
+  if (!isRecord(data)) {
+    return {}
+  }
+
+  return {
+    code: typeof data.code === 'number' ? data.code : undefined,
+    error: typeof data.error === 'string' ? data.error : undefined,
+    message: typeof data.message === 'string' ? data.message : undefined,
+  }
+}
+
+function toApiClientError(error: unknown): ApiClientError {
+  if (error instanceof ApiClientError) {
+    return error
+  }
+
+  if (error instanceof AxiosError) {
+    const status = error.response?.status ?? 0
+    const body = normalizeErrorBody(error.response?.data)
+    const message = body.error ?? body.message ?? error.message ?? '请求失败'
+
+    return new ApiClientError({
+      status,
+      code: body.code ?? status,
+      message,
+      requestUrl: error.config?.url,
+    })
+  }
+
+  return new ApiClientError({
+    status: 0,
+    code: 0,
+    message: error instanceof Error ? error.message : '未知错误',
+  })
+}
+
+export function getErrorMessage(error: unknown): string {
+  return toApiClientError(error).message
+}
+
 client.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token')
+  const token = getAccessToken()
   if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+    config.headers = config.headers ?? {}
+    ;(config.headers as Record<string, string>).Authorization = `Bearer ${token}`
   }
   return config
 })
 
-export interface ApiResponse<T> {
-  code: number
-  data: T
+client.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    const normalized = toApiClientError(error)
+    if (normalized.status === 401) {
+      clearAuthStorage()
+      dispatchAuthStateChanged(false)
+    }
+    return Promise.reject(normalized)
+  },
+)
+
+async function unwrapData<T>(request: Promise<AxiosResponse<ApiEnvelope<T>>>): Promise<T> {
+  const response = await request
+  return response.data.data
+}
+
+async function unwrapCode(request: Promise<AxiosResponse<{ code: number }>>): Promise<number> {
+  const response = await request
+  return response.data.code
+}
+
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : []
+}
+
+function extractTrip(raw: unknown): RawTrip {
+  if (isRecord(raw) && isRecord(raw.trip)) {
+    return raw.trip as RawTrip
+  }
+  return raw as RawTrip
+}
+
+function extractTemplate(raw: unknown): RawNotificationTemplate {
+  if (isRecord(raw) && isRecord(raw.template)) {
+    return raw.template as RawNotificationTemplate
+  }
+  return raw as RawNotificationTemplate
 }
 
 export const authApi = {
-  async login(username: string, password: string) {
-    const res = await client.post<ApiResponse<{ access_token: string }>>('/auth/login', {
-      username,
-      password,
-    })
-    const token = res.data.data.access_token
-    if (token) {
-      localStorage.setItem('access_token', token)
+  async login(username: string, password: string): Promise<void> {
+    const data = await unwrapData<AuthLoginResponse>(
+      client.post('/auth/login', {
+        username,
+        password,
+      }),
+    )
+    setAuthTokens(data)
+    dispatchAuthStateChanged(true)
+  },
+
+  async logout(): Promise<void> {
+    try {
+      await unwrapCode(client.post('/auth/logout'))
+    } finally {
+      clearAuthStorage()
+      dispatchAuthStateChanged(false)
     }
-    return res.data
   },
-  async logout() {
-    const res = await client.post('/auth/logout')
-    localStorage.removeItem('access_token')
-    return res.data
+
+  async refresh(refreshToken: string): Promise<AuthLoginResponse> {
+    const data = await unwrapData<AuthLoginResponse>(
+      client.post('/auth/refresh', {
+        refresh_token: refreshToken,
+      }),
+    )
+    setAuthTokens(data)
+    return data
   },
-  async refresh(refreshToken: string) {
-    const res = await client.post<ApiResponse<{ access_token: string }>>('/auth/refresh', {
-      refresh_token: refreshToken,
-    })
-    return res.data
-  },
-  async me() {
-    const res = await client.get('/users/me')
-    return res.data
+
+  async me(): Promise<CurrentUser> {
+    return unwrapData<CurrentUser>(client.get('/users/me'))
   },
 }
 
 export const dashboardApi = {
-  getStats: async () => (await client.get('/dashboard/stats')).data,
-  getRecentNotifications: async (limit = 10) => (await client.get(`/notifications/recent?limit=${limit}`)).data,
+  async getStats(): Promise<DashboardStats> {
+    const raw = await unwrapData<RawDashboardStats>(client.get('/dashboard/stats'))
+    return mapDashboardStats(raw)
+  },
+
+  async getRecentNotifications(limit = 10): Promise<RecentNotification[]> {
+    const raw = await unwrapData<{ total?: number; items?: RawRecentNotification[] } | RawRecentNotification[]>(
+      client.get(`/notifications/recent?limit=${limit}`),
+    )
+    const items = Array.isArray(raw) ? raw : asArray<RawRecentNotification>(raw.items)
+    return items.map((item) => mapRawRecentNotification(item))
+  },
 }
 
 export const tripsApi = {
-  list: async () => (await client.get('/trips')).data,
-  create: async (payload: Record<string, unknown>) => (await client.post('/trips', payload)).data,
-  update: async (id: string, payload: Record<string, unknown>) => (await client.put(`/trips/${id}`, payload)).data,
-  remove: async (id: string) => (await client.delete(`/trips/${id}`)).data,
+  async list(): Promise<Trip[]> {
+    const raw = await unwrapData<{ total?: number; items?: RawTrip[] } | RawTrip[]>(client.get('/trips'))
+    const items = Array.isArray(raw) ? raw : asArray<RawTrip>(raw.items)
+    return items.map((item) => mapRawTrip(item))
+  },
+
+  async create(input: TripWriteInput): Promise<Trip> {
+    const payload = toTripWritePayload(input)
+    const raw = await unwrapData<RawTrip | { trip: RawTrip }>(client.post('/trips', payload))
+    return mapRawTrip(extractTrip(raw))
+  },
+
+  async update(id: string, input: Partial<TripWriteInput>): Promise<Trip> {
+    const payload: Record<string, string | number> = {}
+
+    if (input.destination !== undefined) {
+      payload.destination = input.destination
+    }
+    if (input.teamId !== undefined) {
+      payload.team = input.teamId
+      payload.team_id = input.teamId
+    }
+    if (input.startDate !== undefined) {
+      payload.start_date = input.startDate
+    }
+    if (input.endDate !== undefined) {
+      payload.end_date = input.endDate
+    }
+    if (input.participants !== undefined) {
+      payload.participants = input.participants
+    }
+    if (input.status !== undefined) {
+      payload.status = tripStatusLabel(input.status)
+    }
+
+    const raw = await unwrapData<RawTrip | { trip: RawTrip }>(client.put(`/trips/${id}`, payload))
+    return mapRawTrip(extractTrip(raw))
+  },
+
+  async remove(id: string): Promise<void> {
+    await unwrapCode(client.delete(`/trips/${id}`))
+  },
 }
 
 export const notificationsApi = {
-  listTemplates: async () => (await client.get('/notifications/templates')).data,
-  send: async (payload: Record<string, unknown>) => (await client.post('/notifications/send', payload)).data,
+  async listTemplates(): Promise<NotificationTemplate[]> {
+    const raw = await unwrapData<{ total?: number; items?: RawNotificationTemplate[] } | RawNotificationTemplate[]>(
+      client.get('/notifications/templates'),
+    )
+    const items = Array.isArray(raw) ? raw : asArray<RawNotificationTemplate>(raw.items)
+    return items.map((item) => mapRawNotificationTemplate(item))
+  },
+
+  async send(payload: {
+    templateId?: string
+    channel: ChannelCode
+    customerName?: string
+    trip?: string
+  }): Promise<{ ok: boolean; notificationId?: string }> {
+    const raw = await unwrapData<{ ok?: boolean; notification_id?: string }>(
+      client.post('/notifications/send', {
+        template_id: payload.templateId,
+        channel: channelCodeForSend(payload.channel),
+        channel_code: payload.channel,
+        customer_name: payload.customerName,
+        trip: payload.trip,
+      }),
+    )
+
+    return {
+      ok: Boolean(raw.ok),
+      notificationId: raw.notification_id,
+    }
+  },
+
+  async createTemplate(input: CreateTemplateInput): Promise<NotificationTemplate> {
+    const payloadPrimary = {
+      name: input.name,
+      template: input.template,
+      content: input.template,
+      channel: channelCodeForSend(input.channel),
+      channel_code: input.channel,
+    }
+
+    try {
+      const raw = await unwrapData<RawNotificationTemplate | { template: RawNotificationTemplate }>(
+        client.post('/notifications/templates', payloadPrimary),
+      )
+      return mapRawNotificationTemplate(extractTemplate(raw))
+    } catch (error) {
+      const normalized = toApiClientError(error)
+      if (normalized.status !== 404) {
+        throw normalized
+      }
+    }
+
+    const payloadFallback = {
+      name: input.name,
+      content: input.template,
+      channel: input.channel,
+      notification_type: 'daily_reminder',
+      is_active: true,
+    }
+
+    try {
+      const raw = await unwrapData<RawNotificationTemplate | { template: RawNotificationTemplate }>(
+        client.post('/templates', payloadFallback),
+      )
+      return mapRawNotificationTemplate(extractTemplate(raw))
+    } catch (error) {
+      const normalized = toApiClientError(error)
+      if (normalized.status === 404) {
+        throw new ApiClientError({
+          status: 404,
+          code: 404,
+          message: '后端未开放模板创建接口',
+          requestUrl: '/notifications/templates|/templates',
+        })
+      }
+      throw normalized
+    }
+  },
 }
 
 export const analyticsApi = {
-  metrics: async () => (await client.get('/analytics/metrics')).data,
+  async metrics(): Promise<AnalyticsData> {
+    const raw = await unwrapData<RawAnalyticsResponse>(client.get('/analytics/metrics'))
+    return mapRawAnalytics(raw)
+  },
+}
+
+async function readPreferencesByMeEndpoint(): Promise<PreferencesViewModel> {
+  const raw = await unwrapData<RawPreferences>(client.get('/preferences/me'))
+  return mapRawPreferences(raw)
+}
+
+async function readPreferencesByLegacyEndpoint(): Promise<PreferencesViewModel> {
+  const raw = await unwrapData<RawPreferences>(client.get('/preferences'))
+  return mapRawPreferences(raw)
+}
+
+async function updatePreferencesByMeEndpoint(data: PreferencesViewModel): Promise<PreferencesViewModel> {
+  const raw = await unwrapData<RawPreferences>(
+    client.put('/preferences/me', toPreferencesPayloadForMe(data)),
+  )
+  return mapRawPreferences(raw)
+}
+
+async function updatePreferencesByLegacyEndpoint(data: PreferencesViewModel): Promise<PreferencesViewModel> {
+  const raw = await unwrapData<RawPreferences>(
+    client.put('/preferences', toPreferencesPayloadLegacy(data)),
+  )
+  return mapRawPreferences(raw)
+}
+
+export const preferencesApi = {
+  async get(): Promise<PreferencesViewModel> {
+    try {
+      return await readPreferencesByMeEndpoint()
+    } catch (error) {
+      const normalized = toApiClientError(error)
+      if (normalized.status === 404) {
+        return readPreferencesByLegacyEndpoint()
+      }
+      throw normalized
+    }
+  },
+
+  async update(data: PreferencesViewModel): Promise<PreferencesViewModel> {
+    try {
+      return await updatePreferencesByMeEndpoint(data)
+    } catch (error) {
+      const normalized = toApiClientError(error)
+      if (normalized.status === 404) {
+        return updatePreferencesByLegacyEndpoint(data)
+      }
+      throw normalized
+    }
+  },
 }

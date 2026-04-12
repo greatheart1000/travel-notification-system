@@ -1,0 +1,3 @@
+interface:
+  display_name: "Autonomous Dev Evolution"
+  short_description: "Record guidance and commands, then distill fast-path development memory"

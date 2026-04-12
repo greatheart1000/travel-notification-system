@@ -1,0 +1,3 @@
+interface:
+  display_name: "Travel Notification Requirements"
+  short_description: "Extract tourism notification system requirements from DOCX/XLSX workflows"

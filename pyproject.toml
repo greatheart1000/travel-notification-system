@@ -5,6 +5,8 @@ description = "Backend modular skeleton for itinerary notification and butler wo
 requires-python = ">=3.11"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]
+norecursedirs = ["everything-claude-code", "frontend/node_modules", ".venv", "dist", "build"]
 
 [tool.black]
 line-length = 100

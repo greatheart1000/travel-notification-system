@@ -1,80 +1,119 @@
-# 前后端联调接口连通性检查报告
+# 前后端联调连通性报告
 
-> 检查时间：2026-04-11（UTC）
+> 更新时间：2026-04-11（Asia/Shanghai）
+> 检查范围：`dev-server.py`、`frontend/start.sh`、`src/app/api/http.py`、`tests/`
 
-## 结论（TL;DR）
+## 1) 当前结论（最新）
 
-当前仓库中的**前端页面尚未发起真实 API 请求**，并且后端代码中**未实现 HTTP Web 框架路由**（如 FastAPI `@app.get/@app.post`）。
-因此从“前后端联调”的角度看，文档里列出的接口目前都属于“未打通”（不是单个接口 404，而是整层 API 尚未落地）。
+- 当前本地联调主链路可运行。
+- 最小联调命令 `python dev-server.py verify` 已通过（smoke 全绿）。
+- 全量联调命令 `python dev-server.py verify --full-tests` 已通过（smoke + 契约测试 + 关键链路测试）。
+- 仍存在业务层已知限制：`/api/preferences` 未实现、字段/枚举尚未完全统一（见 `docs/api-contract.md`）。
 
-## 检查范围
+## 2) 本轮已完成的集成落地
 
-1. 前端是否存在实际 API 调用代码（`axios` / `fetch`）。
-2. 后端是否存在 HTTP 入口（FastAPI/Flask 路由与 `app` 实例）。
-3. 文档中“预期接口”与现状差异。
+1. 新增并统一联调入口：`dev-server.py`
+   - `up`：一键启动前后端
+   - `health`：健康检查
+   - `smoke --spawn-backend`：最小真实 HTTP 校验
+   - `verify`：默认最小 smoke
+   - `verify --full-tests`：smoke + pytest 全量
+2. 强化前端启动脚本：`frontend/start.sh`
+   - `dev` / `health` / `smoke` 模式
+3. 修复测试边界：`pyproject.toml`
+   - 限定 `testpaths = ["tests"]`
+   - 排除 `everything-claude-code` 子目录
+4. 文档与命令统一：`README.md`、`API_INTEGRATION.md`、`docs/api-contract.md`、`docs/api_connectivity_runbook.md`
 
-## 1) 前端实际调用状态
+## 3) 统一状态块（2026-04-11）
 
-### 发现
+- `/api/health` 运行时验证：已通过（`python dev-server.py verify` smoke 链路）
+- 当前 blocker（命令级）：无
+- 当前剩余阻塞（联调内容级）：
+  1. `/api/preferences`（GET/PUT）尚未实现，Preferences 页面仍是本地状态。
+  2. `team` / `team_id` 字段未统一。
+  3. 状态与渠道枚举（中英文/代码值）未统一。
+- 临时绕行（仅当 backend 再次启动失败时）：
+  1. `python dev-server.py smoke --spawn-backend`
+  2. `cd frontend && ./start.sh dev --skip-api-check`（前端继续开发）
+  3. `python -m pytest -q tests/test_http_api.py`（后端先保契约）
+- 当前可运行命令（已验证）：
+  - `python dev-server.py --help`
+  - `python dev-server.py health`（backend 运行时返回 OK；未启动时返回 unreachable 属预期）
+  - `python dev-server.py smoke --spawn-backend`（含 `/api/health`）
+  - `python dev-server.py verify`（含 `/api/health` 运行时校验）
+  - `python dev-server.py verify --full-tests`
+  - `bash frontend/start.sh --help`
+  - `bash frontend/start.sh health`
+- 恢复步骤（统一）：
+  1. backend 契约收口完成（字段/枚举/`/api/preferences` 与 `docs/api-contract.md` 同步）。
+  2. frontend smoke：`python dev-server.py smoke --spawn-backend`
+  3. integration verify：`python dev-server.py verify`
+  4. integration full verify：`python dev-server.py verify --full-tests`（收尾）
+- 最小联调命令（可直接复制执行）：
+```bash
+python dev-server.py health
+python dev-server.py smoke --spawn-backend
+python dev-server.py verify
+```
 
-- `frontend` 页面代码目前均为本地 mock 数据/本地状态（`useState`），未调用 `/api/*`。
-- 全局只看到了 Vite 代理配置（`/api -> http://localhost:8000`），但没有请求发起方。
+### team/team_id 兼容过渡期说明（统一口径）
 
-### 证据
+- 现状：接口字段仍存在 `team` 与 `team_id` 并存。
+- 过渡期写入：前端/联调请求优先使用 `team_id`，并在兼容阶段同时携带 `team`。
+- 过渡期读取：若响应仅返回 `team`，客户端在适配层映射为 `team_id` 后再进入业务逻辑。
+- 退出条件：后端完成 `team_id` 统一并发布后，移除 `team` 兼容写入与映射逻辑。
 
-- 代理存在：`frontend/vite.config.ts`
-- 但业务页（`Dashboard/Trips/Notifications/Preferences/Analytics`）均未出现 `axios` 或 `fetch` 调用。
 
-## 2) 后端 HTTP 接口状态
+## 4) 最小可行本地工作流（MVP）
 
-### 发现
+### A. 只做联调最小闭环（推荐日常）
 
-- 后端没有发现 FastAPI/Flask 路由定义。
-- `src/app/main.py` 仅包含 `bootstrap_demo()` 演示逻辑，不存在 `app = FastAPI()`。
-- `src/app/api/bff.py` 是 Python 业务编排类（`ManagementBFF`），不是 HTTP Controller。
+```bash
+python dev-server.py verify
+```
 
-### 证据
+### B. 启动并手工联调前端页面
 
-- 全仓搜索不到 `FastAPI`、`APIRouter`、`@app.get`、`@app.post` 等模式。
-- `dev-server.py` 里给出的 `uvicorn app.main:app` 目前与实际代码不一致（`main.py` 无 `app` 对象）。
+```bash
+python dev-server.py up
+# 浏览器打开 http://127.0.0.1:5173
+```
 
-## 3) 文档预期接口 vs 当前可用性
+### C. 联调收尾时做全量验证
 
-基于 `frontend/README.md` 与 `API_INTEGRATION.md` 里的接口清单，当前状态如下：
+```bash
+python dev-server.py verify --full-tests
+```
 
-- `GET /api/dashboard/stats`：未实现
-- `GET /api/trips`：未实现
-- `POST /api/trips`：未实现
-- `PUT /api/trips/:id`：未实现
-- `DELETE /api/trips/:id`：未实现
-- `GET /api/notifications/templates`：未实现
-- `POST /api/notifications/send`：未实现
-- `GET /api/analytics/metrics`：未实现
-- `POST /api/auth/login`：未实现
-- `POST /api/auth/logout`：未实现
-- `POST /api/auth/refresh`：未实现
-- `GET /api/users/me`：未实现
+## 5) 临时绕行 / 旁路步骤（若后端启动异常再次出现）
 
-## 4) 为什么你会感觉“联调没通”
+若后端在未来改动中再次出现启动失败（例如依赖不兼容或端口冲突），按以下顺序旁路：
 
-不是某 1~2 个接口参数问题，而是当前代码阶段还停留在：
+1. 先确认端口：检查 `8000` 是否被占用，再重试 `python dev-server.py smoke --spawn-backend`。
+2. 仅做前端开发：
+   - `cd frontend && ./start.sh dev --skip-api-check`
+   - 使用 mock 数据或本地状态继续 UI 开发。
+3. 仅做后端开发：
+   - 运行 `python -m pytest -q tests/test_http_api.py` 与模块测试，先保证接口行为。
+4. 等后端恢复后再执行：`python dev-server.py verify` 重新收敛联调状态。
 
-- 前端：UI 原型 + mock 数据。
-- 后端：领域模型/服务层 + demo，不是 HTTP API 服务。
+## 6) 恢复步骤（Recovery）
 
-这会导致前端即使配置了代理，也没有真实请求；即便补前端请求，后端也无路由可接。
+出现联调失败时，建议按以下固定顺序恢复：
 
-## 5) 建议的最小打通顺序（MVP）
+1. backend 契约收口完成（字段/枚举/`/api/preferences` 与 `docs/api-contract.md` 同步）。
+2. frontend smoke：`python dev-server.py smoke --spawn-backend`
+3. integration verify：`python dev-server.py verify`
+4. integration full verify：`python dev-server.py verify --full-tests`（收尾）
 
-1. 先在后端落地 FastAPI `app` 与最小路由：
-   - `GET /api/health`
-   - `GET /api/dashboard/stats`
-   - `GET /api/trips`
-   - `POST /api/trips`
-2. 前端先接 `Dashboard` 与 `Trips` 两页，替换掉本地 mock。
-3. 增加接口契约测试（后端）+ 前端 API 层封装（`frontend/src/services/api.ts`）。
-4. 再逐步补 `notifications/preferences/analytics/auth`。
+## 7) 仍需后续推进（非阻塞）
 
----
+1. 实现 `GET/PUT /api/preferences`，消除前端 Preferences 本地态孤岛。
+2. 统一 `team`/`team_id`、状态与渠道枚举，减少前后端映射成本。
 
-如果你愿意，我下一步可以直接给你补一版“可跑通联调”的最小 FastAPI 路由 + 前端 API Service（先打通 Dashboard + Trips）。
+## 8) 交接版状态快照（2026-04-11）
+
+1. Backend：契约测试路径可执行，待收口 `/api/preferences`、`team/team_id`、枚举统一。
+2. Frontend：smoke 路径可执行，Preferences 等待后端接口完成后切换。
+3. Integration：`verify` 与 `verify --full-tests` 可执行，已具备按统一恢复顺序推进交接条件。

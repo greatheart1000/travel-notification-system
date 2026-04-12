@@ -37,3 +37,30 @@ There is no separate build artifact pipeline yet; this repository is currently a
   - Test evidence (command + result, e.g. `python -m pytest -q`).
   - Linked issue/task ID if available.
   - Updated docs when behavior or contracts change.
+
+## Requirement Skill (Travel Notification)
+- For requirement extraction tasks from `docx/xlsx` process artifacts, use:
+  - `project-skills/travel-notification-requirements/SKILL.md`
+- Default output document:
+  - `docs/travel-notification-system-requirements.md`
+- Minimum output sections:
+  - Business scope (`行前/行中/行后`)
+  - Roles and collaboration boundaries
+  - Trigger and notification matrix
+  - Channel fallback and manual takeover strategy
+  - Audit and acceptance metrics
+  - P0/P1/P2 scope and unresolved decisions
+
+## Autonomous Evolution Skill
+- For continuous learning from user instructions and command outcomes, use:
+  - `project-skills/autonomous-dev-evolution/SKILL.md`
+- Mandatory memory artifacts:
+  - `.codex-memory/self-evolution/events.ndjson`
+  - `.codex-memory/self-evolution/fast_path.md`
+  - `.codex-memory/self-evolution/metrics.json`
+- Execution protocol:
+  - Log each user guidance as `user_guidance`.
+  - Run major shell commands through:
+    - `project-skills/autonomous-dev-evolution/scripts/run_with_memory.sh`
+  - Distill playbook at end of implementation cycle:
+    - `python project-skills/autonomous-dev-evolution/scripts/distill_playbook.py`

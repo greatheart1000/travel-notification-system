@@ -1,192 +1,311 @@
 #!/usr/bin/env python3
-"""
-Travel Hub 开发环境启动脚本
-同时启动后端服务和前端开发服务器
+"""Travel Hub 本地联调入口。
+
+支持能力：
+- `up`: 一键启动后端 + 前端
+- `health`: 健康检查
+- `smoke`: 真实 HTTP smoke 校验（可自动拉起后端）
+- `verify`: 契约测试 + 关键链路测试（可选附带 smoke）
 """
 
+from __future__ import annotations
+
+import argparse
+import json
 import os
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+REPO_ROOT = Path(__file__).resolve().parent
+FRONTEND_DIR = REPO_ROOT / "frontend"
+BACKEND_BASE = "http://127.0.0.1:8000"
+API_BASE = f"{BACKEND_BASE}/api"
 
 
-def print_banner():
-    print(
-        """
-    ╔════════════════════════════════════════════════════════════╗
-    ║           🚀 Travel Hub 开发环境启动脚本 🚀               ║
-    ║                 行程管家服务流程数字化                      ║
-    ╚════════════════════════════════════════════════════════════╝
-    """
-    )
+def _print(title: str) -> None:
+    print(f"\n[dev-server] {title}")
 
 
-def print_section(title):
-    print(f"\n{'='*60}")
-    print(f"  {title}")
-    print(f"{'='*60}\n")
+def _run(cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> int:
+    _print(f"run: {' '.join(cmd)}")
+    proc = subprocess.run(cmd, cwd=cwd, env=env)
+    return proc.returncode
 
 
-def check_python():
-    """检查 Python 版本"""
-    print("✓ 检查 Python 环境...")
-    print(f"✅ Python 版本: {sys.version.split()[0]}\n")
+def _http_json(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 8.0,
+) -> tuple[int, dict[str, Any]]:
+    body = None
+    req_headers = {"Content-Type": "application/json"}
+    if headers:
+        req_headers.update(headers)
 
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
 
-def check_node():
-    """检查 Node.js"""
+    request = Request(f"{API_BASE}{path}", data=body, method=method, headers=req_headers)
     try:
-        result = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            print(f"✅ Node.js 版本: {result.stdout.strip()}")
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return response.status, json.loads(raw) if raw else {}
+    except HTTPError as err:
+        raw = err.read().decode("utf-8")
+        parsed: dict[str, Any] = {}
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = {"raw": raw}
+        return err.code, parsed
+    except URLError as err:
+        raise RuntimeError(f"API 不可达: {err}") from err
+
+
+def check_health(verbose: bool = True) -> bool:
+    try:
+        status, body = _http_json("GET", "/health")
+    except RuntimeError:
+        if verbose:
+            print("[health] backend unreachable")
+        return False
+
+    ok = status == 200 and body.get("code") == 200 and body.get("data", {}).get("status") == "ok"
+    if verbose:
+        if ok:
+            print("[health] OK")
+        else:
+            print(f"[health] FAIL status={status} body={body}")
+    return ok
+
+
+def wait_for_health(timeout_seconds: float = 25.0) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if check_health(verbose=False):
             return True
-    except FileNotFoundError:
-        print("❌ 未找到 Node.js，请先安装 Node.js >= 18.0")
-        return False
-    except subprocess.TimeoutExpired:
-        print("❌ Node.js 版本检查超时，请确认 Node.js 安装是否正常")
-        return False
+        time.sleep(1)
     return False
 
 
-def install_backend_deps():
-    """安装后端依赖"""
-    print_section("📦 安装后端依赖")
-
-    # 检查 pyproject.toml
-    if Path("pyproject.toml").exists():
-        print("✓ 检测到 pyproject.toml")
-        print("💡 使用建议:\n")
-        print("  pip install -e .              # 开发模式安装")
-        print("  或使用 Poetry: poetry install # 如果使用 Poetry")
-    else:
-        print("⚠️  未找到 pyproject.toml")
-
-
-def setup_frontend():
-    """设置前端环境"""
-    print_section("🎨 设置前端环境")
-
-    frontend_dir = Path("frontend")
-    if not frontend_dir.exists():
-        print("❌ 未找到 frontend 目录")
-        return False
-
-    os.chdir(frontend_dir)
-
-    # 检查 node_modules
-    if not Path("node_modules").exists():
-        print("📦 安装前端依赖...")
-        result = subprocess.run(["npm", "install"], timeout=600)
-        if result.returncode != 0:
-            print("❌ 前端依赖安装失败")
-            return False
-    else:
-        print("✅ 前端依赖已安装")
-
-    os.chdir("..")
-    return True
-
-
-def print_startup_info():
-    """打印启动信息"""
-    print_section("🎯 服务启动信息")
-
-    print(
-        """
-    后端 API 服务器:
-    ├─ URL: http://localhost:8000
-    ├─ 文档: http://localhost:8000/docs (如果使用 FastAPI)
-    └─ 状态: 等待启动...
-
-    前端开发服务器:
-    ├─ URL: http://localhost:5173
-    └─ 状态: 等待启动...
-
-    🔗 访问地址: http://localhost:5173
-
-    ✨ 开发工作流:
-    1. 前端代码修改时自动刷新 (Hot Module Replacement)
-    2. 后端代码修改需要重启服务
-    3. API 请求自动代理到后端
-    4. 使用浏览器开发者工具调试
-
-    按 Ctrl+C 停止所有服务
-    """
+def start_backend() -> subprocess.Popen[str]:
+    env = os.environ.copy()
+    src_path = str(REPO_ROOT / "src")
+    env["PYTHONPATH"] = (
+        f"{src_path}{os.pathsep}{env['PYTHONPATH']}" if env.get("PYTHONPATH") else src_path
+    )
+    _print("start backend: python -m app.main")
+    return subprocess.Popen(
+        [sys.executable, "-m", "app.main"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
     )
 
 
-def start_services():
-    """启动所有服务"""
-    print_section("🚀 启动服务")
+def start_frontend() -> subprocess.Popen[str]:
+    _print("start frontend: ./start.sh dev --skip-api-check")
+    return subprocess.Popen(
+        ["bash", "start.sh", "dev", "--skip-api-check"], cwd=FRONTEND_DIR, text=True
+    )
 
-    processes = []
 
+def terminate_process(proc: subprocess.Popen[str], name: str) -> None:
+    if proc.poll() is not None:
+        return
+    _print(f"stop {name}")
+    proc.send_signal(signal.SIGTERM)
     try:
-        # 启动后端
-        print("📤 启动后端服务...")
-        print("💡 后端启动命令:")
-        print("   cd src && uvicorn app.main:app --reload --port 8000")
-        print("   或: python -m app.main")
-        print("\n⚠️  请在另一个终端中手动启动后端服务\n")
+        proc.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
-        # 启动前端
-        print("📱 启动前端开发服务...")
-        frontend_process = subprocess.Popen(
-            ["npm", "run", "dev"],
-            cwd="frontend",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        processes.append(("前端", frontend_process))
-        print("✅ 前端开发服务已启动\n")
 
-        # 等待一下让服务完全启动
-        time.sleep(3)
+def run_smoke() -> bool:
+    _print(
+        "smoke: /health -> /auth/login -> /users/me -> /trips -> /notifications/send -> /analytics/metrics"
+    )
 
-        print_startup_info()
+    health_status, health_body = _http_json("GET", "/health")
+    if not (health_status == 200 and health_body.get("code") == 200):
+        print(f"[smoke] health failed: {health_status}, {health_body}")
+        return False
 
-        # 保持运行
-        print("\n⏳ 服务运行中... (按 Ctrl+C 退出)\n")
-        for name, proc in processes:
-            proc.wait()
+    login_status, login_body = _http_json(
+        "POST",
+        "/auth/login",
+        {"username": "admin", "password": "123456"},
+    )
+    if login_status != 200:
+        print(f"[smoke] login failed: {login_status}, {login_body}")
+        return False
 
+    token = login_body.get("data", {}).get("access_token")
+    if not token:
+        print(f"[smoke] login missing token: {login_body}")
+        return False
+
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    me_status, me_body = _http_json("GET", "/users/me", headers=auth_headers)
+    if not (me_status == 200 and me_body.get("data", {}).get("username") == "admin"):
+        print(f"[smoke] /users/me failed: {me_status}, {me_body}")
+        return False
+
+    trips_status, trips_body = _http_json("GET", "/trips", headers=auth_headers)
+    if not (trips_status == 200 and "items" in trips_body.get("data", {})):
+        print(f"[smoke] /trips failed: {trips_status}, {trips_body}")
+        return False
+
+    send_status, send_body = _http_json(
+        "POST",
+        "/notifications/send",
+        {"customer_name": "smoke", "trip": "smoke"},
+        headers=auth_headers,
+    )
+    if not (send_status == 200 and send_body.get("data", {}).get("ok") is True):
+        print(f"[smoke] /notifications/send failed: {send_status}, {send_body}")
+        return False
+
+    metrics_status, metrics_body = _http_json("GET", "/analytics/metrics", headers=auth_headers)
+    if not (metrics_status == 200 and "metrics" in metrics_body.get("data", {})):
+        print(f"[smoke] /analytics/metrics failed: {metrics_status}, {metrics_body}")
+        return False
+
+    print("[smoke] OK")
+    return True
+
+
+def run_full_tests() -> int:
+    # 契约测试：HTTP 层 API 行为
+    contract_rc = _run(
+        [sys.executable, "-m", "pytest", "-q", "tests/test_http_api.py"], cwd=REPO_ROOT
+    )
+    if contract_rc != 0:
+        return contract_rc
+
+    # 关键链路：通知、触发、审计、生命周期、演示引导
+    return _run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "tests/test_bootstrap.py",
+            "tests/test_notification_pipeline.py",
+            "tests/test_trigger_and_audit.py",
+            "tests/test_lifecycle_rule_builder.py",
+            "tests/test_concierge_playbook.py",
+        ],
+        cwd=REPO_ROOT,
+    )
+
+
+def verify(full_tests: bool) -> int:
+    # 默认仅做最小联调校验，优先保证主链路可运行。
+    smoke_rc = smoke(spawn_backend=True)
+    if smoke_rc != 0:
+        return smoke_rc
+
+    if not full_tests:
+        print("[verify] minimal smoke checks passed")
+        return 0
+
+    _print("run full pytest suites")
+    return run_full_tests()
+
+
+def up() -> int:
+    backend_proc = start_backend()
+    frontend_proc: subprocess.Popen[str] | None = None
+    try:
+        if not wait_for_health():
+            print("[up] backend 启动失败或健康检查超时")
+            return 1
+
+        frontend_proc = start_frontend()
+        _print("backend:  http://127.0.0.1:8000")
+        _print("frontend: http://127.0.0.1:5173")
+        _print("Ctrl+C 结束")
+
+        while True:
+            time.sleep(1)
+            if backend_proc.poll() is not None:
+                print("[up] backend 已退出")
+                return backend_proc.returncode or 1
+            if frontend_proc.poll() is not None:
+                print("[up] frontend 已退出")
+                return frontend_proc.returncode or 1
     except KeyboardInterrupt:
-        print("\n\n⏹️  收到中断信号，正在关闭服务...")
-        for name, proc in processes:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-                print(f"✅ {name}服务已关闭")
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                print(f"❌ {name}服务强制关闭")
-
-        print("\n👋 再见！")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\n❌ 发生错误: {e}")
-        sys.exit(1)
+        return 0
+    finally:
+        if frontend_proc is not None:
+            terminate_process(frontend_proc, "frontend")
+        terminate_process(backend_proc, "backend")
 
 
-def main():
-    print_banner()
+def smoke(spawn_backend: bool) -> int:
+    backend_proc: subprocess.Popen[str] | None = None
+    try:
+        if not check_health(verbose=False):
+            if not spawn_backend:
+                print("[smoke] backend 未运行，请先启动或使用 --spawn-backend")
+                return 1
+            backend_proc = start_backend()
+            if not wait_for_health():
+                print("[smoke] backend 自动启动失败")
+                return 1
+        return 0 if run_smoke() else 1
+    finally:
+        if backend_proc is not None:
+            terminate_process(backend_proc, "backend")
 
-    # 检查环境
-    check_python()
-    if not check_node():
-        sys.exit(1)
 
-    # 安装依赖
-    install_backend_deps()
-    if not setup_frontend():
-        sys.exit(1)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Travel Hub 联调工具")
+    subparsers = parser.add_subparsers(dest="cmd", required=True)
 
-    # 启动服务
-    start_services()
+    subparsers.add_parser("up", help="一键启动后端和前端")
+    subparsers.add_parser("health", help="检查 /api/health")
+
+    smoke_parser = subparsers.add_parser("smoke", help="执行 HTTP smoke 校验")
+    smoke_parser.add_argument(
+        "--spawn-backend",
+        action="store_true",
+        help="当 backend 未运行时自动拉起后再 smoke",
+    )
+
+    verify_parser = subparsers.add_parser("verify", help="执行最小联调校验（默认 smoke）")
+    verify_parser.add_argument(
+        "--full-tests",
+        action="store_true",
+        help="在 smoke 通过后，继续执行 pytest 契约/关键链路测试",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.cmd == "up":
+        return up()
+    if args.cmd == "health":
+        return 0 if check_health(verbose=True) else 1
+    if args.cmd == "smoke":
+        return smoke(spawn_backend=args.spawn_backend)
+    if args.cmd == "verify":
+        return verify(full_tests=args.full_tests)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

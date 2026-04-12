@@ -67,3 +67,27 @@
 
 ## 10. 交付定义（Definition of Done）
 满足以下条件才算完成：代码实现 + 测试通过 + 文档更新 + 可观测性到位 + 可回滚。
+
+## 11. 需求提炼 Skill 约定
+- 当输入包含 `docx/xlsx` 流程资料并要求输出需求文档时，优先使用：
+  - `project-skills/travel-notification-requirements/SKILL.md`
+- 标准产出落地到：
+  - `docs/travel-notification-system-requirements.md`
+- 产出必须包含：
+  - 行前/行中/行后全流程
+  - 角色职责与协同边界
+  - 触发-通知-渠道-兜底矩阵
+  - 审计与验收指标
+  - P0/P1/P2 与待决策清单
+
+## 12. 自主进化 Memory Skill 约定
+- 当需求强调“持续学习、记录每次指令、命令复盘、自我优化”时，必须使用：
+  - `project-skills/autonomous-dev-evolution/SKILL.md`
+- 最低执行要求：
+  - 每条用户新指导记录一条 `user_guidance` 事件。
+  - 关键命令通过 `run_with_memory.sh` 执行并自动记录结果。
+  - 每个实现周期结束后执行 `distill_playbook.py` 生成快速路径。
+- 记忆产物：
+  - `.codex-memory/self-evolution/events.ndjson`
+  - `.codex-memory/self-evolution/fast_path.md`
+  - `.codex-memory/self-evolution/metrics.json`
