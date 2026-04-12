@@ -66,6 +66,7 @@ const RULE_TIME_SLOT_OPTIONS: Array<{ value: NotificationRuleTimeSlotCode; label
 
 export function Notifications() {
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false)
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null)
   const [templates, setTemplates] = useState<NotificationTemplate[]>([])
   const [templateForm, setTemplateForm] = useState<TemplateFormState>(EMPTY_TEMPLATE_FORM)
 
@@ -74,6 +75,7 @@ export function Notifications() {
   const [templateActionMessage, setTemplateActionMessage] = useState<string | null>(null)
   const [isSending, setIsSending] = useState<string | null>(null)
   const [isTemplateCreating, setIsTemplateCreating] = useState(false)
+  const [isTemplateDeletingId, setIsTemplateDeletingId] = useState<string | null>(null)
 
   const [isRuleModalOpen, setIsRuleModalOpen] = useState(false)
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null)
@@ -139,7 +141,7 @@ export function Notifications() {
     }
   }
 
-  const createTemplate = async () => {
+  const saveTemplate = async () => {
     if (!templateForm.name.trim() || !templateForm.template.trim()) {
       setTemplateActionMessage('创建失败: 请填写模板名称和模板内容')
       return
@@ -149,19 +151,58 @@ export function Notifications() {
     setTemplateActionMessage(null)
 
     try {
-      await notificationsApi.createTemplate({
-        name: templateForm.name.trim(),
-        template: templateForm.template.trim(),
-        channel: templateForm.channel,
-      })
+      if (editingTemplateId) {
+        await notificationsApi.updateTemplate(editingTemplateId, {
+          name: templateForm.name.trim(),
+          template: templateForm.template.trim(),
+          channel: templateForm.channel,
+        })
+      } else {
+        await notificationsApi.createTemplate({
+          name: templateForm.name.trim(),
+          template: templateForm.template.trim(),
+          channel: templateForm.channel,
+        })
+      }
       setIsTemplateModalOpen(false)
+      setEditingTemplateId(null)
       setTemplateForm(EMPTY_TEMPLATE_FORM)
-      setTemplateActionMessage('模板创建成功')
+      setTemplateActionMessage(editingTemplateId ? '模板更新成功' : '模板创建成功')
       await loadTemplates()
     } catch (error) {
-      setTemplateActionMessage(`创建失败: ${getErrorMessage(error)}`)
+      setTemplateActionMessage(`模板保存失败: ${getErrorMessage(error)}`)
     } finally {
       setIsTemplateCreating(false)
+    }
+  }
+
+  const openCreateTemplateModal = () => {
+    setEditingTemplateId(null)
+    setTemplateForm(EMPTY_TEMPLATE_FORM)
+    setIsTemplateModalOpen(true)
+  }
+
+  const openEditTemplateModal = (template: NotificationTemplate) => {
+    setEditingTemplateId(template.id)
+    setTemplateForm({
+      name: template.name,
+      template: template.template,
+      channel: template.channel,
+    })
+    setIsTemplateModalOpen(true)
+  }
+
+  const deleteTemplate = async (template: NotificationTemplate) => {
+    setIsTemplateDeletingId(template.id)
+    setTemplateActionMessage(null)
+    try {
+      await notificationsApi.deleteTemplate(template.id)
+      setTemplateActionMessage('模板删除成功')
+      await loadTemplates()
+    } catch (error) {
+      setTemplateActionMessage(`模板删除失败: ${getErrorMessage(error)}`)
+    } finally {
+      setIsTemplateDeletingId(null)
     }
   }
 
@@ -276,7 +317,7 @@ export function Notifications() {
       <div className="p-8">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-3xl font-bold text-gray-900">通知中心</h1>
-          <Button onClick={() => setIsTemplateModalOpen(true)}>
+          <Button onClick={openCreateTemplateModal}>
             <Plus className="w-5 h-5 inline mr-2" />
             新建模板
           </Button>
@@ -337,6 +378,13 @@ export function Notifications() {
                       <Copy className="w-5 h-5" />
                     </button>
                     <button
+                      className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition"
+                      onClick={() => openEditTemplateModal(template)}
+                      aria-label="编辑模板"
+                    >
+                      <Pencil className="w-5 h-5" />
+                    </button>
+                    <button
                       className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition disabled:opacity-50"
                       onClick={() => {
                         void sendNow(template.id, template.channel)
@@ -345,6 +393,16 @@ export function Notifications() {
                       aria-label="发送通知"
                     >
                       <Send className="w-5 h-5" />
+                    </button>
+                    <button
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition disabled:opacity-50"
+                      onClick={() => {
+                        void deleteTemplate(template)
+                      }}
+                      disabled={isTemplateDeletingId === template.id}
+                      aria-label="删除模板"
+                    >
+                      <Trash2 className="w-5 h-5" />
                     </button>
                   </div>
                 </div>
@@ -461,8 +519,11 @@ export function Notifications() {
 
         <Modal
           isOpen={isTemplateModalOpen}
-          onClose={() => setIsTemplateModalOpen(false)}
-          title="新建通知模板"
+          onClose={() => {
+            setIsTemplateModalOpen(false)
+            setEditingTemplateId(null)
+          }}
+          title={editingTemplateId ? '编辑通知模板' : '新建通知模板'}
           footer={
             <div className="flex gap-2 justify-end">
               <Button variant="secondary" onClick={() => setIsTemplateModalOpen(false)}>
@@ -470,11 +531,11 @@ export function Notifications() {
               </Button>
               <Button
                 onClick={() => {
-                  void createTemplate()
+                  void saveTemplate()
                 }}
                 loading={isTemplateCreating}
               >
-                创建
+                保存
               </Button>
             </div>
           }
