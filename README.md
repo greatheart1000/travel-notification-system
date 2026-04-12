@@ -215,6 +215,8 @@ python dev-server.py verify --full-tests
 - 连通性报告：`docs/api_connectivity_report.md`
 - 上线/联调 Runbook：`docs/api_connectivity_runbook.md`
 - 联调交接执行清单：`docs/api_connectivity_runbook.md`（章节：`7. 联调交接执行清单`）
+- MySQL 表结构与种子数据：`docs/mysql_schema_seed.sql`
+- MySQL 设计说明：`docs/mysql-table-design.md`
 
 ## 测试边界说明
 
