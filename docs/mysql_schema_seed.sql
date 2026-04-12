@@ -158,18 +158,30 @@ VALUES
 INSERT INTO t_notification_template (template_code, template_name, notification_type, channel, content, version, is_active)
 VALUES
 ('tpl-default-trip-start', '默认行程提醒', 'daily_reminder', 'sms', '{{customer_name}}，您的{{destination}}行程即将开始，请准时集合。', 1, 1),
-('tpl-pretrip-safety', '行前保险与集合提醒', 'pre_trip_reminder', 'wechat_work_group', '【行前提醒】请确认保险、证件与集合时间，如有变化请立即联系司导。', 1, 1),
-('tpl-intrip-daily', '行中每日温馨提示', 'daily_reminder', 'wechat_work_group', '【今日提示】天气{{weather}}，请注意{{safety_tip}}。', 1, 1),
-('tpl-posttrip-survey', '下团满意度回访', 'satisfaction', 'sms', '感谢本次出行，欢迎填写满意度问卷：{{survey_link}}。', 1, 1);
+('tpl-pretrip-flight-notice', '行前3天-航班与行前提示', 'pre_trip_reminder', 'wechat_work_group', '亲爱的游客朋友们：请确认航班和证件信息，提前2-3小时到机场，注意行李规格和安检要求。', 1, 1),
+('tpl-pretrip-group-welcome', '行前1天-入群欢迎词', 'pre_trip_reminder', 'wechat_work_group', '欢迎来到美丽的新疆！我是您的专属AI小管家小琪，旅途中有需求随时联系。', 1, 1),
+('tpl-ontrip-urumqi-day1', '落地首日-乌鲁木齐推荐', 'daily_reminder', 'wechat_work_group', '落地首日推荐：国际大巴扎、新疆美术馆、新疆古生态园；请注意时差和安保检查。', 1, 1),
+('tpl-ontrip-morning-spring', '晨间提示-春季', 'daily_reminder', 'sms', '春季早晚温差大，请添衣保暖；上车后请全员系好安全带。', 1, 1),
+('tpl-ontrip-morning-summer', '晨间提示-夏季', 'daily_reminder', 'sms', '夏季紫外线强，请防晒补水；上车后请全员系好安全带。', 1, 1),
+('tpl-ontrip-morning-autumn', '晨间提示-秋季', 'daily_reminder', 'sms', '秋季清晨偏冷，请检查行李并增添外套；上车后请全员系好安全带。', 1, 1),
+('tpl-ontrip-morning-winter', '晨间提示-冬季', 'daily_reminder', 'sms', '冬季低温路滑，请做好保暖与防滑；上车后请全员系好安全带。', 1, 1),
+('tpl-ontrip-noon-rainy', '场景提示-雨天', 'risk_alert', 'wechat_work_group', '雨天道路湿滑，请备好雨具、减速慢行，优先选择室内就餐并及时更换干爽衣物。', 1, 1),
+('tpl-ontrip-scene-horse', '场景提示-骑马', 'risk_alert', 'wechat_work_group', '请选择正规马队，检查骑具，按教练指导操作，不要靠近马后方。', 1, 1),
+('tpl-ontrip-scene-ski', '场景提示-滑雪日', 'risk_alert', 'wechat_work_group', '滑雪前请准备防风保暖装备，佩戴头盔雪镜并充分热身。', 1, 1),
+('tpl-ontrip-evening-preview', '晚间播报-次日行程', 'daily_reminder', 'wechat_work_group', '明日行程与天气提醒已更新，请按时集合，退房时带齐随身物品。', 1, 1),
+('tpl-ontrip-issue-coordination', '行中协同-问题协调', 'risk_alert', 'wechat_work_group', '如遇酒店/车辆/景区问题，请在群内@管家和司导，我们将第一时间协调处理。', 1, 1),
+('tpl-posttrip-survey', '下团满意度回访', 'satisfaction', 'sms', '感谢本次新疆之行，欢迎填写满意度问卷：{{survey_link}}。', 1, 1),
+('tpl-posttrip-farewell', '下团欢送词', 'farewell', 'wechat_work_group', '感谢大家的陪伴与支持，祝一路平安，欢迎再来新疆！', 1, 1),
+('tpl-posttrip-group-close', '解散群文案', 'farewell', 'wechat_work_group', '感谢同行，本群即将解散，感恩相伴，顺颂时祺。', 1, 1);
 
 INSERT INTO t_notification_rule (rule_code, rule_name, stage, time_slot, scene, template_id, priority, enabled, conditions_json)
 VALUES
 ('rule-pre-3day', '行前3天沟通提醒', 'pre_trip', 'morning', 'normal', 1, 10, 1, JSON_OBJECT('time_node', '出发前3天')),
 ('rule-pre-1day', '行前1天保险核查提醒', 'pre_trip', 'evening', 'normal', 2, 20, 1, JSON_OBJECT('time_node', '出发前1天')),
-('rule-intrip-arrival', '落地当日本地指引', 'in_trip', 'afternoon', 'normal', 3, 30, 1, JSON_OBJECT('time_node', '游客落地乌鲁木齐当日')),
-('rule-intrip-daily', '行中每日固定时段提醒', 'in_trip', 'all_day', 'normal', 3, 40, 1, JSON_OBJECT('time_node', '每日固定时段')),
-('rule-intrip-scene', '特殊场景安全提醒', 'in_trip', 'afternoon', 'weather_alert', 3, 50, 1, JSON_OBJECT('time_node', '特殊游玩场景', 'scene_tags', JSON_ARRAY('骑马', '滑雪', '高原', '边境口岸', '极寒', '紫外线强'))),
-('rule-posttrip-survey', '下团满意度调研', 'post_trip', 'evening', 'normal', 4, 60, 1, JSON_OBJECT('time_node', '下团即时'));
+('rule-intrip-arrival', '落地当日本地指引', 'in_trip', 'afternoon', 'normal', 4, 30, 1, JSON_OBJECT('time_node', '游客落地乌鲁木齐当日')),
+('rule-intrip-daily', '行中每日固定时段提醒', 'in_trip', 'all_day', 'normal', 12, 40, 1, JSON_OBJECT('time_node', '每日固定时段')),
+('rule-intrip-scene', '特殊场景安全提醒', 'in_trip', 'afternoon', 'weather_alert', 9, 50, 1, JSON_OBJECT('time_node', '特殊游玩场景', 'scene_tags', JSON_ARRAY('骑马', '滑雪', '高原', '边境口岸', '极寒', '紫外线强'))),
+('rule-posttrip-survey', '下团满意度调研', 'post_trip', 'evening', 'normal', 14, 60, 1, JSON_OBJECT('time_node', '下团即时'));
 
 INSERT INTO t_notification_rule_channel (rule_id, channel, sort_order)
 VALUES

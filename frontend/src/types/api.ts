@@ -130,6 +130,13 @@ export interface CreateTemplateInput {
   channel: ChannelCode
 }
 
+export interface UpdateTemplateInput {
+  name?: string
+  template?: string
+  channel?: ChannelCode
+  enabled?: boolean
+}
+
 export type NotificationRuleStageCode = 'pre_trip' | 'on_trip' | 'post_trip' | 'custom' | 'unknown'
 export type NotificationRuleTimeSlotCode = 'morning' | 'afternoon' | 'evening' | 'night' | 'all_day' | 'unknown'
 

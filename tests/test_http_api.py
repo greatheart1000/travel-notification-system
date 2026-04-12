@@ -110,6 +110,31 @@ def test_template_crud_and_admin_guard() -> None:
     assert missing.status_code == 404
 
 
+def test_notification_template_alias_supports_update_and_delete() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    seeded = client.get("/api/notifications/templates", headers=headers)
+    assert seeded.status_code == 200
+    items = seeded.json()["data"]["items"]
+    assert len(items) >= 10
+    template_id = items[0]["id"]
+
+    updated = client.put(
+        f"/api/notifications/templates/{template_id}",
+        headers=headers,
+        json={"name": "模板别名更新测试", "is_active": False},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["name"] == "模板别名更新测试"
+    assert updated.json()["data"]["is_active"] is False
+
+    deleted = client.delete(f"/api/notifications/templates/{template_id}", headers=headers)
+    assert deleted.status_code == 200
+
+
 def test_trip_creation_triggers_notification_history_and_audit() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
