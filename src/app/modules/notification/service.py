@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
+import re
 from time import monotonic
 from typing import Any, Protocol
 
@@ -122,6 +123,10 @@ class NotificationService:
         self.attempt_repository = attempt_repository
 
     def render(self, template: NotificationTemplate, variables: dict[str, str]) -> str:
+        placeholders = set(re.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", template.content))
+        missing_fields = [name for name in sorted(placeholders) if name not in variables]
+        if missing_fields:
+            raise ValueError(f"missing_template_variables:{','.join(missing_fields)}")
         content = template.content
         for key, value in variables.items():
             content = content.replace("{{" + key + "}}", value)
