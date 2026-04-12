@@ -16,6 +16,7 @@ DEFAULT_MYSQL_PORT = 3306
 DEFAULT_MYSQL_USER = "root"
 DEFAULT_MYSQL_PASSWORD = "123456"
 DEFAULT_MYSQL_DATABASE = "travel_notification_system"
+DEFAULT_TENANT_ID = "tenant-a"
 
 
 def _json_default(value: Any) -> Any:
@@ -178,6 +179,11 @@ def _normalize_task_status(raw: Any) -> str:
     return "pending"
 
 
+def _normalize_tenant_id(raw: Any) -> str:
+    tenant_id = str(raw or "").strip()
+    return tenant_id or DEFAULT_TENANT_ID
+
+
 @dataclass(slots=True)
 class JsonFileStore:
     """Storage facade: MySQL by default, JSON files as explicit fallback."""
@@ -239,6 +245,32 @@ class JsonFileStore:
         connection = self._mysql_connect()
         try:
             with connection.cursor() as cursor:
+
+                def has_table(table_name: str) -> bool:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = %s
+                        """,
+                        (table_name,),
+                    )
+                    return int((cursor.fetchone() or {}).get("cnt", 0)) > 0
+
+                def has_column(table_name: str, column_name: str) -> bool:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = %s
+                          AND COLUMN_NAME = %s
+                        """,
+                        (table_name, column_name),
+                    )
+                    return int((cursor.fetchone() or {}).get("cnt", 0)) > 0
+
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS t_collection_store (
@@ -255,40 +287,100 @@ class JsonFileStore:
                     """
                 )
 
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) AS cnt
-                    FROM information_schema.COLUMNS
-                    WHERE TABLE_SCHEMA = DATABASE()
-                      AND TABLE_NAME = 't_notification_task'
-                      AND COLUMN_NAME = 'team_id'
-                    """
-                )
-                has_team_id = int((cursor.fetchone() or {}).get("cnt", 0)) > 0
-                if not has_team_id:
+                if has_table("t_notification_task"):
+                    if not has_column("t_notification_task", "team_id"):
+                        cursor.execute(
+                            """
+                            ALTER TABLE t_notification_task
+                            ADD COLUMN team_id VARCHAR(64) NOT NULL DEFAULT '' AFTER trip_id
+                            """
+                        )
+                    if not has_column("t_notification_task", "tenant_id"):
+                        cursor.execute(
+                            f"""
+                            ALTER TABLE t_notification_task
+                            ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}'
+                            AFTER customer_id
+                            """
+                        )
                     cursor.execute(
                         """
-                        ALTER TABLE t_notification_task
-                        ADD COLUMN team_id VARCHAR(64) NOT NULL DEFAULT '' AFTER trip_id
+                        SELECT IS_NULLABLE AS nullable_flag
+                        FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = 't_notification_task'
+                          AND COLUMN_NAME = 'trip_id'
                         """
                     )
-
-                cursor.execute(
-                    """
-                    SELECT IS_NULLABLE AS nullable_flag
-                    FROM information_schema.COLUMNS
-                    WHERE TABLE_SCHEMA = DATABASE()
-                      AND TABLE_NAME = 't_notification_task'
-                      AND COLUMN_NAME = 'trip_id'
-                    """
-                )
-                trip_nullable = (cursor.fetchone() or {}).get("nullable_flag") == "YES"
-                if not trip_nullable:
+                    trip_nullable = (cursor.fetchone() or {}).get("nullable_flag") == "YES"
+                    if not trip_nullable:
+                        cursor.execute(
+                            """
+                            ALTER TABLE t_notification_task
+                            MODIFY COLUMN trip_id BIGINT UNSIGNED NULL
+                            """
+                        )
                     cursor.execute(
                         """
-                        ALTER TABLE t_notification_task
-                        MODIFY COLUMN trip_id BIGINT UNSIGNED NULL
+                        UPDATE t_notification_task
+                        SET tenant_id = %s
+                        WHERE tenant_id IS NULL OR tenant_id = ''
+                        """,
+                        (DEFAULT_TENANT_ID,),
+                    )
+
+                if has_table("t_trip"):
+                    if not has_column("t_trip", "tenant_id"):
+                        cursor.execute(
+                            f"""
+                            ALTER TABLE t_trip
+                            ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}'
+                            AFTER owner_user_id
+                            """
+                        )
+                    cursor.execute(
                         """
+                        UPDATE t_trip
+                        SET tenant_id = %s
+                        WHERE tenant_id IS NULL OR tenant_id = ''
+                        """,
+                        (DEFAULT_TENANT_ID,),
+                    )
+
+                if has_table("t_notification_template"):
+                    if not has_column("t_notification_template", "tenant_id"):
+                        cursor.execute(
+                            f"""
+                            ALTER TABLE t_notification_template
+                            ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}'
+                            AFTER template_name
+                            """
+                        )
+                    cursor.execute(
+                        """
+                        UPDATE t_notification_template
+                        SET tenant_id = %s
+                        WHERE tenant_id IS NULL OR tenant_id = ''
+                        """,
+                        (DEFAULT_TENANT_ID,),
+                    )
+
+                if has_table("t_notification_rule"):
+                    if not has_column("t_notification_rule", "tenant_id"):
+                        cursor.execute(
+                            f"""
+                            ALTER TABLE t_notification_rule
+                            ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}'
+                            AFTER rule_name
+                            """
+                        )
+                    cursor.execute(
+                        """
+                        UPDATE t_notification_rule
+                        SET tenant_id = %s
+                        WHERE tenant_id IS NULL OR tenant_id = ''
+                        """,
+                        (DEFAULT_TENANT_ID,),
                     )
         finally:
             connection.close()
@@ -429,7 +521,7 @@ class JsonFileStore:
                 cursor.execute(
                     """
                     SELECT trip_code, destination, team_id, start_date, end_date,
-                           participants, status, owner_user_id, created_at, updated_at
+                           participants, status, owner_user_id, tenant_id, created_at, updated_at
                     FROM t_trip
                     ORDER BY created_at DESC, id DESC
                     """
@@ -452,6 +544,7 @@ class JsonFileStore:
                     "participants": int(row.get("participants") or 0),
                     "status": _normalize_trip_status(row.get("status")),
                     "user_id": str(row.get("owner_user_id") or ""),
+                    "tenant_id": _normalize_tenant_id(row.get("tenant_id")),
                     "created_at": _to_iso_datetime(row.get("created_at")),
                     "updated_at": _to_iso_datetime(row.get("updated_at")),
                 }
@@ -474,8 +567,8 @@ class JsonFileStore:
                     """
                     INSERT INTO t_trip
                     (trip_code, destination, team_id, start_date, end_date, participants, status,
-                     owner_user_id, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     owner_user_id, tenant_id, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                       destination = VALUES(destination),
                       team_id = VALUES(team_id),
@@ -484,6 +577,7 @@ class JsonFileStore:
                       participants = VALUES(participants),
                       status = VALUES(status),
                       owner_user_id = VALUES(owner_user_id),
+                      tenant_id = VALUES(tenant_id),
                       updated_at = VALUES(updated_at)
                     """,
                     (
@@ -495,6 +589,7 @@ class JsonFileStore:
                         int(item.get("participants") or 0),
                         _normalize_trip_status(item.get("status")),
                         str(item.get("user_id") or "admin"),
+                        _normalize_tenant_id(item.get("tenant_id")),
                         created_at,
                         updated_at,
                     ),
@@ -540,7 +635,7 @@ class JsonFileStore:
                 cursor.execute(
                     """
                     SELECT template_code, template_name, notification_type, channel,
-                           content, version, is_active, created_at, updated_at
+                           tenant_id, content, version, is_active, created_at, updated_at
                     FROM t_notification_template
                     ORDER BY updated_at DESC, id DESC
                     """
@@ -561,6 +656,7 @@ class JsonFileStore:
                     "id": template_code,
                     "name": str(row.get("template_name") or ""),
                     "version": int(row.get("version") or 1),
+                    "tenant_id": _normalize_tenant_id(row.get("tenant_id")),
                     "notification_type": _normalize_notification_type(row.get("notification_type")),
                     "channel": _normalize_channel(row.get("channel")),
                     "content": str(row.get("content") or ""),
@@ -582,11 +678,12 @@ class JsonFileStore:
                     cursor.execute(
                         """
                         INSERT INTO t_notification_template
-                        (template_code, template_name, notification_type, channel, content,
+                        (template_code, template_name, tenant_id, notification_type, channel, content,
                          version, is_active, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
                           template_name = VALUES(template_name),
+                          tenant_id = VALUES(tenant_id),
                           notification_type = VALUES(notification_type),
                           channel = VALUES(channel),
                           content = VALUES(content),
@@ -597,6 +694,7 @@ class JsonFileStore:
                         (
                             template_code,
                             str(raw.get("name") or ""),
+                            _normalize_tenant_id(raw.get("tenant_id")),
                             _normalize_notification_type(raw.get("notification_type")),
                             _normalize_channel(raw.get("channel")),
                             str(raw.get("content") or ""),
@@ -659,7 +757,7 @@ class JsonFileStore:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT r.id, r.rule_code, r.rule_name, r.stage, r.time_slot, r.scene,
+                    SELECT r.id, r.rule_code, r.rule_name, r.tenant_id, r.stage, r.time_slot, r.scene,
                            r.priority, r.enabled, r.conditions_json,
                            r.created_at, r.updated_at,
                            t.template_code
@@ -704,6 +802,7 @@ class JsonFileStore:
                 {
                     "id": str(row.get("rule_code") or ""),
                     "name": str(row.get("rule_name") or ""),
+                    "tenant_id": _normalize_tenant_id(row.get("tenant_id")),
                     "stage": _normalize_rule_stage(row.get("stage")),
                     "time_slot": _normalize_rule_time_slot(row.get("time_slot")),
                     "scene": _normalize_rule_scene(row.get("scene")),
@@ -763,11 +862,12 @@ class JsonFileStore:
                     cursor.execute(
                         """
                         INSERT INTO t_notification_rule
-                        (rule_code, rule_name, stage, time_slot, scene, template_id, priority,
+                        (rule_code, rule_name, tenant_id, stage, time_slot, scene, template_id, priority,
                          enabled, conditions_json, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
                           rule_name = VALUES(rule_name),
+                          tenant_id = VALUES(tenant_id),
                           stage = VALUES(stage),
                           time_slot = VALUES(time_slot),
                           scene = VALUES(scene),
@@ -781,6 +881,7 @@ class JsonFileStore:
                         (
                             rule_code,
                             str(item.get("name") or ""),
+                            _normalize_tenant_id(item.get("tenant_id")),
                             _normalize_rule_stage(item.get("stage")),
                             _normalize_rule_time_slot(item.get("time_slot")),
                             _normalize_rule_scene(item.get("scene")),
@@ -837,6 +938,7 @@ class JsonFileStore:
         cursor: Any,
         *,
         trip_code: str,
+        tenant_id: str,
         team_id: str,
         customer_id: str,
         attempted_at: datetime,
@@ -850,8 +952,8 @@ class JsonFileStore:
             """
             INSERT INTO t_trip
             (trip_code, destination, team_id, start_date, end_date, participants, status,
-             owner_user_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             owner_user_id, tenant_id, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 trip_code,
@@ -862,6 +964,7 @@ class JsonFileStore:
                 0,
                 "planned",
                 customer_id or "admin",
+                _normalize_tenant_id(tenant_id),
                 attempted_at,
                 attempted_at,
             ),
@@ -875,6 +978,7 @@ class JsonFileStore:
 
         attempted_at = _to_mysql_datetime(item.get("attempted_at"))
         trip_code = str(item.get("trip_id") or "").strip()
+        tenant_id = _normalize_tenant_id(item.get("tenant_id"))
         team_id = str(item.get("team_id") or "").strip()
         customer_id = str(item.get("customer_id") or "").strip()
         trip_fk: int | None = None
@@ -883,6 +987,7 @@ class JsonFileStore:
             trip_fk = self._ensure_trip_exists(
                 cursor,
                 trip_code=trip_code,
+                tenant_id=tenant_id,
                 team_id=team_id,
                 customer_id=customer_id,
                 attempted_at=attempted_at,
@@ -891,15 +996,16 @@ class JsonFileStore:
         cursor.execute(
             """
             INSERT INTO t_notification_task
-            (task_code, trip_id, team_id, customer_id, notification_type,
+            (task_code, trip_id, team_id, customer_id, tenant_id, notification_type,
              primary_channel, fallback_channel, rendered_content,
              idempotency_key, status, retry_count, max_retry,
              manual_intervention_required, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
               trip_id = VALUES(trip_id),
               team_id = VALUES(team_id),
               customer_id = VALUES(customer_id),
+              tenant_id = VALUES(tenant_id),
               primary_channel = VALUES(primary_channel),
               status = VALUES(status),
               retry_count = GREATEST(retry_count, VALUES(retry_count)),
@@ -912,6 +1018,7 @@ class JsonFileStore:
                 trip_fk,
                 team_id,
                 customer_id,
+                tenant_id,
                 _normalize_notification_type(item.get("notification_type")),
                 _normalize_channel(item.get("channel"), allow_email=True),
                 None,
@@ -993,6 +1100,7 @@ class JsonFileStore:
                            a.attempted_at,
                            t.task_code,
                            t.customer_id,
+                           t.tenant_id,
                            t.status,
                            t.team_id,
                            tr.trip_code,
@@ -1015,6 +1123,7 @@ class JsonFileStore:
                     "attempt_id": str(row.get("attempt_id") or ""),
                     "task_id": str(row.get("task_code") or ""),
                     "trip_id": str(row.get("trip_code") or ""),
+                    "tenant_id": _normalize_tenant_id(row.get("tenant_id")),
                     "team_id": team_id,
                     "customer_id": str(row.get("customer_id") or ""),
                     "attempt_no": int(row.get("attempt_no") or 1),

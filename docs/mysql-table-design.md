@@ -23,6 +23,7 @@
 补充说明：
 - `t_notification_task.trip_id` 允许为空（支持手工发送/无行程通知场景）
 - `t_notification_task.team_id` 冗余存储团号，便于按团队维度查询通知历史
+- 多租户上下文统一落库：`t_trip / t_notification_template / t_notification_rule / t_notification_task` 均包含 `tenant_id`
 
 ## 3. 你关心的 CRUD 覆盖
 

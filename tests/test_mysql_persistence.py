@@ -87,6 +87,39 @@ def test_app_context_defaults_to_mysql_backend() -> None:
     assert getattr(ctx.store, "_mysql_enabled", False) is True
 
 
+def test_mysql_schema_and_seeded_rows_keep_tenant_id() -> None:
+    reset_state(purge_persistence=True)
+
+    with _mysql_connect() as connection:
+        with connection.cursor() as cursor:
+            for table in (
+                "t_trip",
+                "t_notification_template",
+                "t_notification_rule",
+                "t_notification_task",
+            ):
+                cursor.execute(f"SHOW COLUMNS FROM {table} LIKE 'tenant_id'")
+                assert cursor.fetchone() is not None
+
+            cursor.execute(
+                "SELECT COUNT(*) AS cnt FROM t_trip WHERE tenant_id IS NULL OR tenant_id = ''"
+            )
+            trip_missing = int((cursor.fetchone() or {}).get("cnt", 0))
+            assert trip_missing == 0
+
+            cursor.execute(
+                "SELECT COUNT(*) AS cnt FROM t_notification_template WHERE tenant_id IS NULL OR tenant_id = ''"
+            )
+            template_missing = int((cursor.fetchone() or {}).get("cnt", 0))
+            assert template_missing == 0
+
+            cursor.execute(
+                "SELECT COUNT(*) AS cnt FROM t_notification_rule WHERE tenant_id IS NULL OR tenant_id = ''"
+            )
+            rule_missing = int((cursor.fetchone() or {}).get("cnt", 0))
+            assert rule_missing == 0
+
+
 def test_template_service_loads_latest_version_for_same_template_code(monkeypatch) -> None:
     monkeypatch.setenv("TRAVEL_NOTIFICATION_MYSQL_HOST", "127.0.0.1")
     monkeypatch.setenv("TRAVEL_NOTIFICATION_MYSQL_PORT", "3306")
