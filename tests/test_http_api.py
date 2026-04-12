@@ -257,3 +257,18 @@ def test_notification_rules_contract_smoke() -> None:
     listed_after = client.get("/api/notifications/rules", headers=headers)
     assert listed_after.status_code == 200
     assert all(item["id"] != rule_id for item in listed_after.json()["data"]["items"])
+
+
+def test_default_seed_data_visible_for_admin() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    trips = client.get("/api/trips", headers=headers)
+    assert trips.status_code == 200
+    assert trips.json()["data"]["total"] >= 1
+
+    rules = client.get("/api/notifications/rules", headers=headers)
+    assert rules.status_code == 200
+    assert rules.json()["data"]["total"] >= 1

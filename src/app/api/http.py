@@ -340,6 +340,128 @@ def _serialize_template(template: Any) -> dict[str, Any]:
     }
 
 
+def _seed_default_trips(trip_repository: TripRepository) -> None:
+    if trip_repository.list():
+        return
+
+    now = datetime.now(tz=UTC).isoformat()
+    default_trips: list[dict[str, Any]] = [
+        {
+            "id": "trip-default-pretrip",
+            "destination": "乌鲁木齐-喀纳斯精品线",
+            "team": "TEAM-DEMO-PRE",
+            "team_id": "TEAM-DEMO-PRE",
+            "start_date": "2026-05-08",
+            "end_date": "2026-05-14",
+            "participants": 18,
+            "status": "planned",
+            "user_id": "admin",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "trip-default-ontrip",
+            "destination": "伊犁草原深度游",
+            "team": "TEAM-DEMO-ON",
+            "team_id": "TEAM-DEMO-ON",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-26",
+            "participants": 22,
+            "status": "in_progress",
+            "user_id": "admin",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "trip-default-posttrip",
+            "destination": "阿勒泰禾木轻奢团",
+            "team": "TEAM-DEMO-POST",
+            "team_id": "TEAM-DEMO-POST",
+            "start_date": "2026-03-10",
+            "end_date": "2026-03-16",
+            "participants": 16,
+            "status": "completed",
+            "user_id": "admin",
+            "created_at": now,
+            "updated_at": now,
+        },
+    ]
+    for trip in default_trips:
+        trip_repository.create(trip)
+
+
+def _seed_default_notification_rules(
+    rule_repository: NotificationRuleRepository, template_id: str
+) -> None:
+    if rule_repository.list_rules():
+        return
+
+    default_rules: list[dict[str, Any]] = [
+        {
+            "id": "rule-default-pre-3day",
+            "name": "行前3天沟通与行程单提醒",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "channels": ["sms", "wechat_work_group"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 10,
+            "conditions": {"time_node": "出发前3天"},
+        },
+        {
+            "id": "rule-default-pre-1day",
+            "name": "行前1天保险核查与群提醒",
+            "stage": "pre_trip",
+            "time_slot": "evening",
+            "scene": "normal",
+            "channels": ["wechat_work_group"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 20,
+            "conditions": {"time_node": "出发前1天"},
+        },
+        {
+            "id": "rule-default-ontrip-daily",
+            "name": "行中固定时段温馨提示",
+            "stage": "on_trip",
+            "time_slot": "all_day",
+            "scene": "normal",
+            "channels": ["wechat_work_group", "sms"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 30,
+            "conditions": {"time_node": "每日固定时段"},
+        },
+        {
+            "id": "rule-default-ontrip-scene",
+            "name": "行中特殊场景安全提示",
+            "stage": "on_trip",
+            "time_slot": "afternoon",
+            "scene": "weather_alert",
+            "channels": ["sms", "wechat_work_group"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 40,
+            "conditions": {"scene_tags": ["骑马", "高原", "边境口岸", "极寒"]},
+        },
+        {
+            "id": "rule-default-posttrip-survey",
+            "name": "下团满意度调研提醒",
+            "stage": "post_trip",
+            "time_slot": "evening",
+            "scene": "normal",
+            "channels": ["sms", "email"],
+            "template_id": template_id,
+            "enabled": True,
+            "priority": 50,
+            "conditions": {"time_node": "下团即时"},
+        },
+    ]
+    for rule in default_rules:
+        rule_repository.create_rule(rule)
+
+
 def _build_context(store: JsonFileStore | None = None) -> AppContext:
     persistence = store or JsonFileStore()
     trip_repository = TripRepository(store=persistence)
@@ -348,6 +470,10 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     preference_service = UserPreferenceService(store=persistence)
     notification_attempt_repository = NotificationAttemptRepository(store=persistence)
     notification_rule_repository = NotificationRuleRepository(store=persistence)
+    _seed_default_trips(trip_repository)
+    _seed_default_notification_rules(
+        notification_rule_repository, template_id=template_service.ensure_default_template().id
+    )
     notification_service = NotificationService(attempt_repository=notification_attempt_repository)
     audit_service = AuditService(repository=AuditLogRepository(store=persistence))
     auth_service = AuthService()
