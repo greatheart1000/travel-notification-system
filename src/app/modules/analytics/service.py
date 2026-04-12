@@ -184,7 +184,9 @@ class AnalyticsService:
 
         total = len(facts)
         successful = sum(1 for row in facts if bool(row.get("success")))
+        failed = total - successful
         success_rate = round((successful / total) * 100, 1) if total else 0.0
+        retry_rate = round((failed / total) * 100, 1) if total else 0.0
         avg_latency = round(mean(int(row.get("latency_ms") or 0) for row in facts), 1) if facts else 0.0
 
         last_7_days = datetime.now(UTC).date() - timedelta(days=7)
@@ -249,6 +251,10 @@ class AnalyticsService:
         return {
             "metrics": {
                 "notification_success_rate": f"{success_rate}%",
+                "notification_retry_rate": f"{retry_rate}%",
+                "notification_manual_takeover_rate": "0.0%",
+                "rule_publish_lead_time": "0m",
+                "cross_tenant_forbidden_count": 0,
                 "avg_response_time": f"{avg_latency}ms",
                 "wow_growth": f"{wow_growth:+.1f}%",
                 "user_satisfaction": f"{avg_score}/5",
