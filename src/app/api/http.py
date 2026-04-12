@@ -20,6 +20,7 @@ from starlette.routing import Router as StarletteRouter
 
 from app.core.entities import Channel as PreferenceChannel
 from app.core.models import Channel
+from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
 from app.modules.integration.persistence import JsonFileStore, TripRepository
@@ -69,6 +70,7 @@ class AppContext:
     notification_rule_repository: NotificationRuleRepository
     notification_service: NotificationService
     audit_service: AuditService
+    analytics_service: AnalyticsService
 
 
 class LoginRequest(BaseModel):
@@ -600,6 +602,11 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     )
     notification_service = NotificationService(attempt_repository=notification_attempt_repository)
     audit_service = AuditService(repository=AuditLogRepository(store=persistence))
+    analytics_service = AnalyticsService(
+        repository=AnalyticsRepository(store=persistence),
+        attempt_repository=notification_attempt_repository,
+        trip_repository=trip_repository,
+    )
     auth_service = AuthService()
     return AppContext(
         store=persistence,
@@ -611,6 +618,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         notification_rule_repository=notification_rule_repository,
         notification_service=notification_service,
         audit_service=audit_service,
+        analytics_service=analytics_service,
     )
 
 
@@ -1267,22 +1275,7 @@ def create_app() -> FastAPI:
         _: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        attempts = ctx.notification_attempt_repository.list_history(limit=9999)
-        sent = sum(1 for item in attempts if item.get("ok") is True)
-        total = len(attempts)
-        success_rate = f"{round((sent / total) * 100, 1) if total else 0.0}%"
-        return _ok(
-            {
-                "metrics": {
-                    "notification_success_rate": success_rate,
-                    "avg_response_time": "1.2s",
-                    "wow_growth": "+0.0%",
-                    "user_satisfaction": "4.5/5",
-                },
-                "channel_performance": [],
-                "top_trips": [],
-            }
-        )
+        return _ok(ctx.analytics_service.build_metrics_snapshot())
 
     return fastapi_app
 
