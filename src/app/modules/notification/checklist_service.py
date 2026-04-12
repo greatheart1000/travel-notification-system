@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 @dataclass(slots=True)
@@ -15,7 +15,7 @@ class ChecklistTask:
 @dataclass(slots=True)
 class DailyChecklist:
     trip_id: str
-    generated_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    generated_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     tasks: list[ChecklistTask] = field(default_factory=list)
 
 

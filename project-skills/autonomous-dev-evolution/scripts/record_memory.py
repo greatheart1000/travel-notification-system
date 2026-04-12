@@ -6,7 +6,7 @@ import getpass
 import json
 import subprocess
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,7 @@ def _repo_root() -> Path:
 
 
 def _now_utc() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _parse_tags(tags: str) -> list[str]:
