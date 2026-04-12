@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Any
 from uuid import uuid4
@@ -15,7 +15,7 @@ from app.modules.analytics.models import (
 from app.modules.integration.persistence import JsonFileStore, TripRepository
 from app.modules.notification.service import NotificationAttemptRepository
 
-UTC = UTC
+UTC = timezone.utc
 
 
 class AnalyticsRepository:
