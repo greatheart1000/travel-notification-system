@@ -11,6 +11,7 @@
 5. `t_notification_rule_channel`：规则渠道表（主渠道 + 兜底渠道）
 6. `t_notification_task`：通知发送任务主表
 7. `t_notification_attempt`：通知发送尝试明细表（用于统计“已发送/成功率”）
+8. `t_collection_store`：通用 JSON 集合表（承载偏好设置、审计、分析快照等扩展集合）
 
 ## 2. 关系说明
 
@@ -18,6 +19,10 @@
 - `t_notification_rule_channel.rule_id -> t_notification_rule.id`
 - `t_notification_task.trip_id -> t_trip.id`
 - `t_notification_attempt.task_id -> t_notification_task.id`
+
+补充说明：
+- `t_notification_task.trip_id` 允许为空（支持手工发送/无行程通知场景）
+- `t_notification_task.team_id` 冗余存储团号，便于按团队维度查询通知历史
 
 ## 3. 你关心的 CRUD 覆盖
 

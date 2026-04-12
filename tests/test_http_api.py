@@ -315,3 +315,71 @@ def test_default_seed_data_visible_for_admin() -> None:
     rules = client.get("/api/notifications/rules", headers=headers)
     assert rules.status_code == 200
     assert rules.json()["data"]["total"] >= 1
+
+
+def test_delete_template_rebinds_rule_dependency_in_mysql(monkeypatch) -> None:
+    monkeypatch.setenv("TRAVEL_NOTIFICATION_MYSQL_HOST", "127.0.0.1")
+    monkeypatch.setenv("TRAVEL_NOTIFICATION_MYSQL_PORT", "3306")
+    monkeypatch.setenv("TRAVEL_NOTIFICATION_MYSQL_USER", "root")
+    monkeypatch.setenv("TRAVEL_NOTIFICATION_MYSQL_PASSWORD", "123456")
+    monkeypatch.setenv("TRAVEL_NOTIFICATION_MYSQL_DATABASE", "travel_notification_system")
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    template_a = client.post(
+        "/api/templates",
+        headers=headers,
+        json={
+            "name": "待删除模板A",
+            "content": "A: {{customer_name}}",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+            "is_active": True,
+        },
+    )
+    assert template_a.status_code == 201
+    template_a_id = template_a.json()["data"]["id"]
+
+    template_b = client.post(
+        "/api/templates",
+        headers=headers,
+        json={
+            "name": "保留模板B",
+            "content": "B: {{customer_name}}",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+            "is_active": True,
+        },
+    )
+    assert template_b.status_code == 201
+
+    created_rule = client.post(
+        "/api/notifications/rules",
+        headers=headers,
+        json={
+            "name": "模板依赖规则",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "channels": ["sms"],
+            "template_id": template_a_id,
+            "enabled": True,
+            "priority": 30,
+        },
+    )
+    assert created_rule.status_code == 201
+    rule_id = created_rule.json()["data"]["id"]
+    assert created_rule.json()["data"]["template_id"] == template_a_id
+
+    deleted = client.delete(f"/api/templates/{template_a_id}", headers=headers)
+    assert deleted.status_code == 200
+
+    listed = client.get("/api/templates", headers=headers)
+    assert listed.status_code == 200
+    ids = [item["id"] for item in listed.json()["data"]["items"]]
+    assert template_a_id not in ids
+
+    rule_detail = client.get(f"/api/notifications/rules/{rule_id}", headers=headers)
+    assert rule_detail.status_code == 200

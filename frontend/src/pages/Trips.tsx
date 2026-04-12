@@ -41,6 +41,7 @@ function statusBadgeVariant(status: TripStatusCode): 'success' | 'info' | 'defau
 export function Trips() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [editingTripId, setEditingTripId] = useState<string | null>(null)
   const [trips, setTrips] = useState<Trip[]>([])
   const [form, setForm] = useState<TripFormState>(EMPTY_FORM)
 
@@ -68,9 +69,32 @@ export function Trips() {
     void loadTrips()
   }, [])
 
-  const createTrip = async () => {
+  const closeTripModal = () => {
+    setIsModalOpen(false)
+    setEditingTripId(null)
+    setForm(EMPTY_FORM)
+  }
+
+  const openCreateModal = () => {
+    setEditingTripId(null)
+    setForm(EMPTY_FORM)
+    setIsModalOpen(true)
+  }
+
+  const openEditModal = (trip: Trip) => {
+    setEditingTripId(trip.id)
+    setForm({
+      destination: trip.destination,
+      teamId: trip.teamId,
+      startDate: trip.startDate,
+      endDate: trip.endDate,
+    })
+    setIsModalOpen(true)
+  }
+
+  const submitTrip = async () => {
     if (!form.destination || !form.teamId || !form.startDate || !form.endDate) {
-      setActionMessage('创建失败: 请完整填写目的地、团队和日期')
+      setActionMessage('保存失败: 请完整填写目的地、团队和日期')
       return
     }
 
@@ -78,20 +102,29 @@ export function Trips() {
     setActionMessage(null)
 
     try {
-      await tripsApi.create({
-        destination: form.destination,
-        teamId: form.teamId,
-        startDate: form.startDate,
-        endDate: form.endDate,
-        participants: 0,
-        status: 'planned',
-      })
-      setIsModalOpen(false)
-      setForm(EMPTY_FORM)
-      setActionMessage('行程创建成功')
+      if (editingTripId) {
+        await tripsApi.update(editingTripId, {
+          destination: form.destination,
+          teamId: form.teamId,
+          startDate: form.startDate,
+          endDate: form.endDate,
+        })
+        setActionMessage('行程修改成功')
+      } else {
+        await tripsApi.create({
+          destination: form.destination,
+          teamId: form.teamId,
+          startDate: form.startDate,
+          endDate: form.endDate,
+          participants: 0,
+          status: 'planned',
+        })
+        setActionMessage('行程创建成功')
+      }
+      closeTripModal()
       await loadTrips()
     } catch (error) {
-      setActionMessage(`创建失败: ${getErrorMessage(error)}`)
+      setActionMessage(`保存失败: ${getErrorMessage(error)}`)
     } finally {
       setIsSubmitting(false)
     }
@@ -159,7 +192,7 @@ export function Trips() {
           <Upload className="w-5 h-5 inline mr-2" />
           Excel导入
         </Button>
-        <Button onClick={() => setIsModalOpen(true)}>
+        <Button onClick={openCreateModal}>
           <Plus className="w-5 h-5 inline mr-2" />
           新建行程
         </Button>
@@ -231,6 +264,10 @@ export function Trips() {
                 </div>
 
                 <div className="flex gap-2 pt-4 border-t border-gray-200">
+                  <Button variant="secondary" size="sm" className="flex-1" onClick={() => openEditModal(trip)}>
+                    <Edit className="w-4 h-4 inline mr-1" />
+                    修改
+                  </Button>
                   <Button variant="secondary" size="sm" className="flex-1" onClick={() => void markCompleted(trip.id)}>
                     <Edit className="w-4 h-4 inline mr-1" />
                     完成
@@ -247,15 +284,15 @@ export function Trips() {
 
         <Modal
           isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          title="新建行程"
+          onClose={closeTripModal}
+          title={editingTripId ? '修改行程' : '新建行程'}
           footer={
             <div className="flex gap-2 justify-end">
-              <Button variant="secondary" onClick={() => setIsModalOpen(false)}>
+              <Button variant="secondary" onClick={closeTripModal}>
                 取消
               </Button>
-              <Button onClick={() => void createTrip()} loading={isSubmitting}>
-                创建
+              <Button onClick={() => void submitTrip()} loading={isSubmitting}>
+                {editingTripId ? '保存' : '创建'}
               </Button>
             </div>
           }

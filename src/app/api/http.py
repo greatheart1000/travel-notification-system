@@ -296,17 +296,25 @@ def _read_xlsx_rows(raw: bytes) -> list[dict[str, str]]:
         shared_strings: list[str] = []
         if "xl/sharedStrings.xml" in archive.namelist():
             shared_root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
-            for item in shared_root.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"):
+            for item in shared_root.findall(
+                ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"
+            ):
                 text = "".join(
                     node.text or ""
-                    for node in item.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
+                    for node in item.findall(
+                        ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t"
+                    )
                 )
                 shared_strings.append(text)
 
         parsed_rows: list[list[str]] = []
-        for row_node in worksheet.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"):
+        for row_node in worksheet.findall(
+            ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"
+        ):
             cells: dict[int, str] = {}
-            for cell in row_node.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
+            for cell in row_node.findall(
+                "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"
+            ):
                 ref = cell.attrib.get("r", "")
                 cell_type = cell.attrib.get("t", "")
                 index = _extract_column_index(ref)
@@ -316,7 +324,9 @@ def _read_xlsx_rows(raw: bytes) -> list[dict[str, str]]:
                     )
                     cells[index] = (text_node.text or "").strip() if text_node is not None else ""
                     continue
-                value_node = cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
+                value_node = cell.find(
+                    "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v"
+                )
                 value = (value_node.text or "").strip() if value_node is not None else ""
                 if cell_type == "s" and value.isdigit():
                     shared_index = int(value)
@@ -668,17 +678,72 @@ def _seed_concierge_templates(template_service: TemplateService) -> None:
             "channel": "wechat_work_group",
             "notification_type": "daily_reminder",
         },
-        {"name": "晨间提示-春季", "key": "morning_spring", "channel": "sms", "notification_type": "daily_reminder"},
-        {"name": "晨间提示-夏季", "key": "morning_summer", "channel": "sms", "notification_type": "daily_reminder"},
-        {"name": "晨间提示-秋季", "key": "morning_autumn", "channel": "sms", "notification_type": "daily_reminder"},
-        {"name": "晨间提示-冬季", "key": "morning_winter", "channel": "sms", "notification_type": "daily_reminder"},
-        {"name": "午间提示-春季", "key": "noon_spring", "channel": "wechat_work_group", "notification_type": "daily_reminder"},
-        {"name": "午间提示-夏季", "key": "noon_summer", "channel": "wechat_work_group", "notification_type": "daily_reminder"},
-        {"name": "午间提示-秋季", "key": "noon_autumn", "channel": "wechat_work_group", "notification_type": "daily_reminder"},
-        {"name": "午间提示-冬季", "key": "noon_winter", "channel": "wechat_work_group", "notification_type": "daily_reminder"},
-        {"name": "场景提示-雨天", "key": "noon_rainy", "channel": "wechat_work_group", "notification_type": "risk_alert"},
-        {"name": "场景提示-骑马", "key": "horse_riding_notice", "channel": "wechat_work_group", "notification_type": "risk_alert"},
-        {"name": "场景提示-滑雪日", "key": "ski_day_notice", "channel": "wechat_work_group", "notification_type": "risk_alert"},
+        {
+            "name": "晨间提示-春季",
+            "key": "morning_spring",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "晨间提示-夏季",
+            "key": "morning_summer",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "晨间提示-秋季",
+            "key": "morning_autumn",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "晨间提示-冬季",
+            "key": "morning_winter",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "午间提示-春季",
+            "key": "noon_spring",
+            "channel": "wechat_work_group",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "午间提示-夏季",
+            "key": "noon_summer",
+            "channel": "wechat_work_group",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "午间提示-秋季",
+            "key": "noon_autumn",
+            "channel": "wechat_work_group",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "午间提示-冬季",
+            "key": "noon_winter",
+            "channel": "wechat_work_group",
+            "notification_type": "daily_reminder",
+        },
+        {
+            "name": "场景提示-雨天",
+            "key": "noon_rainy",
+            "channel": "wechat_work_group",
+            "notification_type": "risk_alert",
+        },
+        {
+            "name": "场景提示-骑马",
+            "key": "horse_riding_notice",
+            "channel": "wechat_work_group",
+            "notification_type": "risk_alert",
+        },
+        {
+            "name": "场景提示-滑雪日",
+            "key": "ski_day_notice",
+            "channel": "wechat_work_group",
+            "notification_type": "risk_alert",
+        },
         {
             "name": "晚间播报-次日行程",
             "key": "evening_next_day_preview",
@@ -689,7 +754,7 @@ def _seed_concierge_templates(template_service: TemplateService) -> None:
             "name": "行中协同-问题协调",
             "key": "issue_coordination_notice",
             "channel": "wechat_work_group",
-            "notification_type": "complaint_escalation",
+            "notification_type": "risk_alert",
         },
         {
             "name": "下团调研-满意度回访",
@@ -697,8 +762,18 @@ def _seed_concierge_templates(template_service: TemplateService) -> None:
             "channel": "sms",
             "notification_type": "satisfaction",
         },
-        {"name": "下团欢送词", "key": "farewell_message", "channel": "wechat_work_group", "notification_type": "farewell"},
-        {"name": "解散群文案", "key": "group_close_message", "channel": "wechat_work_group", "notification_type": "farewell"},
+        {
+            "name": "下团欢送词",
+            "key": "farewell_message",
+            "channel": "wechat_work_group",
+            "notification_type": "farewell",
+        },
+        {
+            "name": "解散群文案",
+            "key": "group_close_message",
+            "channel": "wechat_work_group",
+            "notification_type": "farewell",
+        },
     ]
 
     for spec in template_specs:
@@ -1183,7 +1258,9 @@ def create_app() -> FastAPI:
         for row in parsed_rows:
             destination = _extract_import_field(row, ["destination", "目的地", "行程名称"])
             team_id = _extract_import_field(row, ["team_id", "team", "teamid", "团队ID", "团队"])
-            start_date = _extract_import_field(row, ["start_date", "startdate", "开始日期", "开始时间"])
+            start_date = _extract_import_field(
+                row, ["start_date", "startdate", "开始日期", "开始时间"]
+            )
             end_date = _extract_import_field(row, ["end_date", "enddate", "结束日期", "结束时间"])
             participants_text = _extract_import_field(row, ["participants", "人数", "参与人数"])
             try:
@@ -1213,6 +1290,18 @@ def create_app() -> FastAPI:
                 "items": created_items,
             }
         )
+
+    @fastapi_app.get("/api/trips/{trip_id}")
+    def get_trip(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        return _ok(_serialize_trip(trip))
 
     @fastapi_app.put("/api/trips/{trip_id}")
     def update_trip(

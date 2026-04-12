@@ -96,7 +96,8 @@ CREATE TABLE t_notification_rule_channel (
 CREATE TABLE t_notification_task (
     id                          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     task_code                   VARCHAR(64) NOT NULL COMMENT '任务编号（业务唯一）',
-    trip_id                     BIGINT UNSIGNED NOT NULL,
+    trip_id                     BIGINT UNSIGNED NULL,
+    team_id                     VARCHAR(64) NOT NULL DEFAULT '' COMMENT '团号（冗余字段，便于按团号查询）',
     customer_id                 VARCHAR(64) NOT NULL,
     notification_type           ENUM('pre_trip_reminder','daily_reminder','risk_alert','satisfaction','farewell') NOT NULL,
     primary_channel             ENUM('sms','wechat_work_group','email') NOT NULL DEFAULT 'sms',
@@ -196,11 +197,11 @@ VALUES
 (6, 'sms', 1),
 (6, 'email', 2);
 
-INSERT INTO t_notification_task (task_code, trip_id, customer_id, notification_type, primary_channel, fallback_channel, rendered_content, idempotency_key, status, retry_count, max_retry, manual_intervention_required)
+INSERT INTO t_notification_task (task_code, trip_id, team_id, customer_id, notification_type, primary_channel, fallback_channel, rendered_content, idempotency_key, status, retry_count, max_retry, manual_intervention_required)
 VALUES
-('task-20260412-0001', 1, 'cust-1001', 'pre_trip_reminder', 'sms', 'wechat_work_group', '王敏，您的乌鲁木齐-喀纳斯精品线行程即将开始，请准时集合。', 'TEAM-DEMO-PRE:cust-1001:pre_trip_reminder:2026-05-05', 'sent', 0, 2, 0),
-('task-20260412-0002', 2, 'cust-2001', 'daily_reminder', 'wechat_work_group', 'sms', '【今日提示】天气晴，注意防晒和补水。', 'TEAM-DEMO-ON:cust-2001:daily_reminder:2026-04-20-morning', 'sent', 1, 2, 0),
-('task-20260412-0003', 3, 'cust-3001', 'satisfaction', 'sms', 'email', '感谢本次出行，欢迎填写满意度问卷。', 'TEAM-DEMO-POST:cust-3001:satisfaction:2026-03-16', 'manual_intervention', 2, 2, 1);
+('task-20260412-0001', 1, 'TEAM-DEMO-PRE', 'cust-1001', 'pre_trip_reminder', 'sms', 'wechat_work_group', '王敏，您的乌鲁木齐-喀纳斯精品线行程即将开始，请准时集合。', 'TEAM-DEMO-PRE:cust-1001:pre_trip_reminder:2026-05-05', 'sent', 0, 2, 0),
+('task-20260412-0002', 2, 'TEAM-DEMO-ON', 'cust-2001', 'daily_reminder', 'wechat_work_group', 'sms', '【今日提示】天气晴，注意防晒和补水。', 'TEAM-DEMO-ON:cust-2001:daily_reminder:2026-04-20-morning', 'sent', 1, 2, 0),
+('task-20260412-0003', 3, 'TEAM-DEMO-POST', 'cust-3001', 'satisfaction', 'sms', 'email', '感谢本次出行，欢迎填写满意度问卷。', 'TEAM-DEMO-POST:cust-3001:satisfaction:2026-03-16', 'manual_intervention', 2, 2, 1);
 
 INSERT INTO t_notification_attempt (task_id, attempt_no, channel, ok, reason, provider_message, latency_ms, attempted_at)
 VALUES

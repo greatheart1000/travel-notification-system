@@ -54,13 +54,22 @@ class NotificationAttemptRepository:
     def record_attempt(
         self, task: NotificationTask, attempt: NotificationAttempt
     ) -> dict[str, Any]:
+        latest_attempt_no = max(
+            (
+                int(item.get("attempt_no", 0))
+                for item in self._records
+                if str(item.get("task_id", "")) == task.id
+            ),
+            default=0,
+        )
+        persisted_attempt_no = latest_attempt_no + 1
         payload = {
             "attempt_id": attempt.id,
             "task_id": task.id,
             "trip_id": task.trip_id,
             "team_id": task.team_id,
             "customer_id": task.customer_id,
-            "attempt_no": attempt.attempt_no,
+            "attempt_no": persisted_attempt_no,
             "channel": attempt.channel.value,
             "ok": attempt.ok,
             "reason": attempt.reason,

@@ -25,6 +25,9 @@ Learning is implemented through local memory artifacts, not model-weight changes
   - Convert event history into:
     - `.codex-memory/self-evolution/fast_path.md`
     - `.codex-memory/self-evolution/metrics.json`
+- `scripts/migrate_cross_project_memory.py`
+  - `sync-global`: sync project memory to user-level global memory (`~/.codex-memory/global-self-evolution`)
+  - `bootstrap-project`: seed a new project with global high-value patterns
 
 ## Standard Usage
 - Record user instruction:
@@ -46,6 +49,19 @@ project-skills/autonomous-dev-evolution/scripts/run_with_memory.sh \
 - Distill latest playbook:
 ```bash
 python project-skills/autonomous-dev-evolution/scripts/distill_playbook.py
+```
+
+- Sync current project memory into user-level global scope:
+```bash
+python project-skills/autonomous-dev-evolution/scripts/migrate_cross_project_memory.py \
+  sync-global
+```
+
+- Seed a new project template from global memory:
+```bash
+python project-skills/autonomous-dev-evolution/scripts/migrate_cross_project_memory.py \
+  bootstrap-project \
+  --target-root /path/to/new-project
 ```
 
 ## Quality Rules

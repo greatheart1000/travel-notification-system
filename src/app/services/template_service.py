@@ -67,9 +67,17 @@ class TemplateService:
             with connection.cursor(connector.cursors.DictCursor) as cursor:
                 cursor.execute(
                     """
-                    SELECT template_code, template_name, notification_type, channel, content, version, is_active
-                    FROM t_notification_template
-                    ORDER BY updated_at DESC
+                    SELECT t.template_code, t.template_name, t.notification_type, t.channel,
+                           t.content, t.version, t.is_active
+                    FROM t_notification_template AS t
+                    INNER JOIN (
+                        SELECT template_code, MAX(version) AS max_version
+                        FROM t_notification_template
+                        GROUP BY template_code
+                    ) AS latest
+                      ON latest.template_code = t.template_code
+                     AND latest.max_version = t.version
+                    ORDER BY t.updated_at DESC, t.id DESC
                     """
                 )
                 rows = cursor.fetchall()
@@ -104,6 +112,18 @@ class TemplateService:
         raw = str(value).strip().lower()
         matched = next((item for item in NotificationType if item.value == raw), None)
         return matched or NotificationType.DAILY_REMINDER
+
+    def _to_mysql_notification_type(self, value: NotificationType) -> str:
+        mapping = {
+            NotificationType.PRE_TRIP_REMINDER: "pre_trip_reminder",
+            NotificationType.DAILY_REMINDER: "daily_reminder",
+            NotificationType.RISK_ALERT: "risk_alert",
+            NotificationType.SATISFACTION: "satisfaction",
+            NotificationType.FAREWELL: "farewell",
+            NotificationType.COMPLAINT_ESCALATION: "risk_alert",
+            NotificationType.BOOKING_SUCCESS: "pre_trip_reminder",
+        }
+        return mapping.get(value, "daily_reminder")
 
     def _to_payload(self, template: NotificationTemplate) -> dict[str, object]:
         return {
@@ -162,7 +182,7 @@ class TemplateService:
                         (
                             template.id,
                             template.name,
-                            template.notification_type.value,
+                            self._to_mysql_notification_type(template.notification_type),
                             template.channel.value,
                             template.content,
                             template.version,
@@ -285,17 +305,62 @@ class TemplateService:
     def delete_notification_template(self, template_id: str) -> bool:
         if template_id not in self.notification_templates:
             return False
-        if self.mysql_enabled:
-            connector = self._mysql_connector()
-            connection = connector.connect(**self.mysql_config)
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute(
-                        "DELETE FROM t_notification_template WHERE template_code = %s",
-                        (template_id,),
-                    )
-            finally:
-                connection.close()
+        deleted = False
+        if self.store is not None:
+            deleted = self.store.delete(self.collection, template_id, key="id")
+        elif self.mysql_enabled:
+            deleted = self._delete_mysql_template_with_rebind(template_id)
+        else:
+            deleted = True
+
+        if not deleted:
+            return False
+
         del self.notification_templates[template_id]
         self._flush()
         return True
+
+    def _delete_mysql_template_with_rebind(self, template_id: str) -> bool:
+        connector = self._mysql_connector()
+        connection = connector.connect(**self.mysql_config)
+        connection.autocommit(False)
+        try:
+            with connection.cursor(connector.cursors.DictCursor) as cursor:
+                cursor.execute(
+                    "SELECT id FROM t_notification_template WHERE template_code = %s",
+                    (template_id,),
+                )
+                target = cursor.fetchone()
+                if target is None:
+                    connection.rollback()
+                    return False
+
+                cursor.execute(
+                    """
+                    SELECT id FROM t_notification_template
+                    WHERE template_code <> %s
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (template_id,),
+                )
+                replacement = cursor.fetchone()
+                if replacement is None:
+                    connection.rollback()
+                    return False
+
+                cursor.execute(
+                    "UPDATE t_notification_rule SET template_id = %s WHERE template_id = %s",
+                    (int(replacement["id"]), int(target["id"])),
+                )
+                cursor.execute(
+                    "DELETE FROM t_notification_template WHERE id = %s",
+                    (int(target["id"]),),
+                )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
