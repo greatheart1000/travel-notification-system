@@ -131,6 +131,11 @@ class NotificationRuleRepository:
         if not partial or "id" in payload:
             raw_rule_id = str(payload.get("id") or "").strip()
             normalized["id"] = raw_rule_id or f"rule-{uuid4().hex[:10]}"
+        if not partial or "tenant_id" in payload:
+            tenant_id = str(payload.get("tenant_id") or "").strip()
+            if not tenant_id:
+                raise RuleValidationError("tenant_id is required")
+            normalized["tenant_id"] = tenant_id
 
         if not partial or "name" in payload:
             name = str(payload.get("name") or "").strip()
@@ -197,12 +202,13 @@ class NotificationRuleRepository:
     def list_rules(
         self,
         *,
+        tenant_id: str,
         enabled: bool | None = None,
         stage: str | None = None,
         time_slot: str | None = None,
         scene: str | None = None,
     ) -> list[dict[str, Any]]:
-        items = list(self._rules.values())
+        items = [item for item in self._rules.values() if item.get("tenant_id") == tenant_id]
         if enabled is not None:
             items = [item for item in items if bool(item.get("enabled")) is enabled]
         if stage is not None:
@@ -224,9 +230,11 @@ class NotificationRuleRepository:
             ),
         )
 
-    def get_rule(self, rule_id: str) -> dict[str, Any] | None:
+    def get_rule(self, rule_id: str, *, tenant_id: str) -> dict[str, Any] | None:
         rule = self._rules.get(rule_id)
         if rule is None:
+            return None
+        if rule.get("tenant_id") != tenant_id:
             return None
         return dict(rule)
 
@@ -239,9 +247,13 @@ class NotificationRuleRepository:
         self._persist()
         return dict(normalized)
 
-    def update_rule(self, rule_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def update_rule(
+        self, rule_id: str, payload: dict[str, Any], *, tenant_id: str
+    ) -> dict[str, Any] | None:
         current = self._rules.get(rule_id)
         if current is None:
+            return None
+        if current.get("tenant_id") != tenant_id:
             return None
         normalized_patch = self._normalize_rule(payload, partial=True)
         next_rule = dict(current)
@@ -252,8 +264,11 @@ class NotificationRuleRepository:
         self._persist()
         return dict(next_rule)
 
-    def delete_rule(self, rule_id: str) -> bool:
-        if rule_id not in self._rules:
+    def delete_rule(self, rule_id: str, *, tenant_id: str) -> bool:
+        rule = self._rules.get(rule_id)
+        if rule is None:
+            return False
+        if rule.get("tenant_id") != tenant_id:
             return False
         del self._rules[rule_id]
         self._persist()
