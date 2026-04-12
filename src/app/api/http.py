@@ -386,6 +386,7 @@ def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
         "participants": int(trip.get("participants", 0)),
         "status": _normalize_trip_status(str(trip.get("status", "planned"))),
         "user_id": trip.get("user_id", ""),
+        "tenant_id": trip.get("tenant_id", ""),
         "created_at": trip.get("created_at"),
         "updated_at": trip.get("updated_at"),
     }
@@ -401,6 +402,7 @@ def _normalize_history_item(item: dict[str, Any]) -> dict[str, Any]:
         "id": item.get("attempt_id", ""),
         "attempt_id": item.get("attempt_id", ""),
         "task_id": item.get("task_id", ""),
+        "tenant_id": item.get("tenant_id", ""),
         "trip_id": item.get("trip_id", ""),
         "team_id": item.get("team_id", ""),
         "team": item.get("team_id", ""),
@@ -493,6 +495,7 @@ def _query_notification_items(
     trip_id: str | None,
     team_id: str | None,
     customer_id: str | None,
+    tenant_id: str | None = None,
     channel: str | None = None,
     status: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -503,6 +506,8 @@ def _query_notification_items(
         customer_id=customer_id,
     )
     normalized = [_normalize_history_item(item) for item in raw_items]
+    if tenant_id:
+        normalized = [item for item in normalized if item["tenant_id"] == tenant_id]
     if channel:
         normalized = [item for item in normalized if item["channel"] == channel.lower()]
     if status:
@@ -521,6 +526,7 @@ def _serialize_template(template: Any) -> dict[str, Any]:
         "id": template.id,
         "name": template.name,
         "version": template.version,
+        "tenant_id": getattr(template, "tenant_id", ""),
         "notification_type": template.notification_type.value,
         "channel": template.channel.value,
         "status": status,
@@ -549,6 +555,7 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
             "participants": 18,
             "status": "planned",
             "user_id": "admin",
+            "tenant_id": "tenant-a",
             "created_at": now,
             "updated_at": now,
         },
@@ -562,6 +569,7 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
             "participants": 22,
             "status": "in_progress",
             "user_id": "admin",
+            "tenant_id": "tenant-a",
             "created_at": now,
             "updated_at": now,
         },
@@ -575,6 +583,7 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
             "participants": 16,
             "status": "completed",
             "user_id": "admin",
+            "tenant_id": "tenant-a",
             "created_at": now,
             "updated_at": now,
         },
@@ -584,9 +593,9 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
 
 
 def _seed_default_notification_rules(
-    rule_repository: NotificationRuleRepository, template_id: str
+    rule_repository: NotificationRuleRepository, template_id: str, tenant_id: str
 ) -> None:
-    if rule_repository.list_rules():
+    if rule_repository.list_rules(tenant_id=tenant_id):
         return
 
     default_rules: list[dict[str, Any]] = [
@@ -652,11 +661,12 @@ def _seed_default_notification_rules(
         },
     ]
     for rule in default_rules:
+        rule["tenant_id"] = tenant_id
         rule_repository.create_rule(rule)
 
 
-def _seed_concierge_templates(template_service: TemplateService) -> None:
-    if template_service.list_notification_templates():
+def _seed_concierge_templates(template_service: TemplateService, tenant_id: str) -> None:
+    if template_service.list_notification_templates(tenant_id=tenant_id):
         return
 
     template_specs: list[dict[str, str]] = [
@@ -781,6 +791,7 @@ def _seed_concierge_templates(template_service: TemplateService) -> None:
         if not content:
             continue
         template_service.create_notification_template(
+            tenant_id=tenant_id,
             name=spec["name"],
             content=content,
             channel=spec["channel"],
@@ -793,14 +804,16 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     persistence = store or JsonFileStore()
     trip_repository = TripRepository(store=persistence)
     template_service = TemplateService(store=persistence)
-    _seed_concierge_templates(template_service)
-    template_service.ensure_default_template()
+    _seed_concierge_templates(template_service, tenant_id="tenant-a")
+    template_service.ensure_default_template(tenant_id="tenant-a")
     preference_service = UserPreferenceService(store=persistence)
     notification_attempt_repository = NotificationAttemptRepository(store=persistence)
     notification_rule_repository = NotificationRuleRepository(store=persistence)
     _seed_default_trips(trip_repository)
     _seed_default_notification_rules(
-        notification_rule_repository, template_id=template_service.ensure_default_template().id
+        notification_rule_repository,
+        template_id=template_service.ensure_default_template(tenant_id="tenant-a").id,
+        tenant_id="tenant-a",
     )
     notification_service = NotificationService(attempt_repository=notification_attempt_repository)
     audit_service = AuditService(repository=AuditLogRepository(store=persistence))
@@ -850,7 +863,16 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="Admin role required")
         return user
 
+    def _current_tenant_id(user: dict[str, str]) -> str:
+        tenant_id = str(user.get("tenant_id") or "").strip()
+        if not tenant_id:
+            raise HTTPException(status_code=403, detail="Tenant context missing")
+        return tenant_id
+
     def assert_trip_access(user: dict[str, str], trip: dict[str, Any]) -> None:
+        user_tenant_id = _current_tenant_id(user)
+        if str(trip.get("tenant_id") or "") != user_tenant_id:
+            raise HTTPException(status_code=403, detail="Cross-tenant access denied")
         if user.get("role") == "admin":
             return
         if trip.get("user_id") != user.get("id"):
@@ -975,21 +997,25 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/templates")
     def list_templates(
-        _: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
         items = [
-            _serialize_template(item) for item in ctx.template_service.list_notification_templates()
+            _serialize_template(item)
+            for item in ctx.template_service.list_notification_templates(tenant_id=tenant_id)
         ]
         return _ok({"total": len(items), "items": items})
 
     @fastapi_app.get("/api/templates/{template_id}")
     def get_template(
         template_id: str,
-        _: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        template = ctx.template_service.get_notification_template(template_id)
+        template = ctx.template_service.get_notification_template(
+            template_id, tenant_id=_current_tenant_id(user)
+        )
         if template is None:
             raise HTTPException(status_code=404, detail="Template not found")
         return _ok(_serialize_template(template))
@@ -997,10 +1023,11 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/templates", status_code=201)
     def create_template(
         payload: TemplateCreateRequest,
-        _: dict[str, str] = Depends(require_admin),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         template = ctx.template_service.create_notification_template(
+            tenant_id=_current_tenant_id(user),
             name=payload.name,
             content=payload.content,
             channel=_parse_channel(payload.channel).value,
@@ -1013,9 +1040,13 @@ def create_app() -> FastAPI:
     def update_template(
         template_id: str,
         payload: TemplateUpdateRequest,
-        _: dict[str, str] = Depends(require_admin),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        existing = ctx.template_service.get_notification_template(template_id, tenant_id=tenant_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Template not found")
         template = ctx.template_service.update_notification_template(
             template_id,
             name=payload.name,
@@ -1034,9 +1065,14 @@ def create_app() -> FastAPI:
     @fastapi_app.delete("/api/templates/{template_id}")
     def delete_template(
         template_id: str,
-        _: dict[str, str] = Depends(require_admin),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        template = ctx.template_service.get_notification_template(
+            template_id, tenant_id=_current_tenant_id(user)
+        )
+        if template is None:
+            raise HTTPException(status_code=404, detail="Template not found")
         deleted = ctx.template_service.delete_notification_template(template_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Template not found")
@@ -1083,11 +1119,13 @@ def create_app() -> FastAPI:
         stage: str | None = None,
         time_slot: str | None = None,
         scene: str | None = None,
-        _: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         try:
+            tenant_id = _current_tenant_id(user)
             items = ctx.notification_rule_repository.list_rules(
+                tenant_id=tenant_id,
                 enabled=enabled,
                 stage=stage,
                 time_slot=time_slot,
@@ -1100,10 +1138,10 @@ def create_app() -> FastAPI:
     @fastapi_app.get("/api/notifications/rules/{rule_id}")
     def get_notification_rule(
         rule_id: str,
-        _: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        rule = ctx.notification_rule_repository.get_rule(rule_id)
+        rule = ctx.notification_rule_repository.get_rule(rule_id, tenant_id=_current_tenant_id(user))
         if rule is None:
             raise HTTPException(status_code=404, detail="Rule not found")
         return _ok_with_message(rule, "rule found")
@@ -1111,11 +1149,13 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/notifications/rules", status_code=201)
     def create_notification_rule(
         payload: NotificationRuleCreateRequest,
-        _: dict[str, str] = Depends(require_admin),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         try:
-            rule = ctx.notification_rule_repository.create_rule(payload.model_dump())
+            rule = ctx.notification_rule_repository.create_rule(
+                {**payload.model_dump(), "tenant_id": _current_tenant_id(user)}
+            )
         except RuleValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _ok_with_message(rule, "rule created")
@@ -1124,12 +1164,14 @@ def create_app() -> FastAPI:
     def update_notification_rule(
         rule_id: str,
         payload: NotificationRuleUpdateRequest,
-        _: dict[str, str] = Depends(require_admin),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         try:
             rule = ctx.notification_rule_repository.update_rule(
-                rule_id, payload.model_dump(exclude_none=True)
+                rule_id,
+                payload.model_dump(exclude_none=True),
+                tenant_id=_current_tenant_id(user),
             )
         except RuleValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1140,10 +1182,12 @@ def create_app() -> FastAPI:
     @fastapi_app.delete("/api/notifications/rules/{rule_id}")
     def delete_notification_rule(
         rule_id: str,
-        _: dict[str, str] = Depends(require_admin),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        deleted = ctx.notification_rule_repository.delete_rule(rule_id)
+        deleted = ctx.notification_rule_repository.delete_rule(
+            rule_id, tenant_id=_current_tenant_id(user)
+        )
         if not deleted:
             raise HTTPException(status_code=404, detail="Rule not found")
         return _ok_with_message({"deleted": True, "id": rule_id}, "rule deleted")
@@ -1153,7 +1197,8 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        items = ctx.trip_repository.list()
+        tenant_id = _current_tenant_id(user)
+        items = [item for item in ctx.trip_repository.list() if item.get("tenant_id") == tenant_id]
         if user.get("role") != "admin":
             items = [item for item in items if item.get("user_id") == user.get("id")]
         normalized_items = [_serialize_trip(item) for item in items]
@@ -1180,14 +1225,21 @@ def create_app() -> FastAPI:
             "participants": payload.participants,
             "status": _normalize_trip_status(payload.status),
             "user_id": user["id"],
+            "tenant_id": _current_tenant_id(user),
             "created_at": now,
             "updated_at": now,
         }
         ctx.trip_repository.create(trip)
 
         template = next(
-            (item for item in ctx.template_service.list_notification_templates() if item.is_active),
-            ctx.template_service.ensure_default_template(),
+            (
+                item
+                for item in ctx.template_service.list_notification_templates(
+                    tenant_id=_current_tenant_id(user)
+                )
+                if item.is_active
+            ),
+            ctx.template_service.ensure_default_template(tenant_id=_current_tenant_id(user)),
         )
         rendered = ctx.template_service.render_notification(
             template,
@@ -1197,6 +1249,7 @@ def create_app() -> FastAPI:
             },
         )
         task = NotificationTask(
+            tenant_id=_current_tenant_id(user),
             team_id=team_id,
             trip_id=trip_id,
             customer_id=user["id"],
@@ -1358,18 +1411,21 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         template = None
+        tenant_id = _current_tenant_id(user)
         if payload.template_id:
-            template = ctx.template_service.get_notification_template(payload.template_id)
+            template = ctx.template_service.get_notification_template(
+                payload.template_id, tenant_id=tenant_id
+            )
             if template is None:
                 raise HTTPException(status_code=404, detail="Template not found")
         if template is None:
             template = next(
                 (
                     item
-                    for item in ctx.template_service.list_notification_templates()
+                    for item in ctx.template_service.list_notification_templates(tenant_id=tenant_id)
                     if item.is_active
                 ),
-                ctx.template_service.ensure_default_template(),
+                ctx.template_service.ensure_default_template(tenant_id=tenant_id),
             )
 
         destination = payload.destination or "未指定行程"
@@ -1377,6 +1433,7 @@ def create_app() -> FastAPI:
         if payload.trip_id:
             trip = ctx.trip_repository.get(payload.trip_id)
             if trip is not None:
+                assert_trip_access(user, trip)
                 destination = trip.get("destination", destination)
                 team_id = str(trip.get("team_id") or trip.get("team") or team_id)
 
@@ -1388,6 +1445,7 @@ def create_app() -> FastAPI:
             },
         )
         task = NotificationTask(
+            tenant_id=tenant_id,
             team_id=team_id,
             trip_id=payload.trip_id or "",
             customer_id=user["id"],
@@ -1423,6 +1481,7 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         customer_id = None if user.get("role") == "admin" else user["id"]
+        tenant_id = _current_tenant_id(user)
         resolved_team_id = _resolve_team_id(team, team_id)
         items = _query_notification_items(
             repository=ctx.notification_attempt_repository,
@@ -1430,6 +1489,7 @@ def create_app() -> FastAPI:
             trip_id=trip_id,
             team_id=resolved_team_id or None,
             customer_id=customer_id,
+            tenant_id=tenant_id,
             channel=channel,
             status=status,
         )
@@ -1447,6 +1507,7 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         customer_id = None if user.get("role") == "admin" else user["id"]
+        tenant_id = _current_tenant_id(user)
         resolved_team_id = _resolve_team_id(team, team_id)
         items = _query_notification_items(
             repository=ctx.notification_attempt_repository,
@@ -1454,6 +1515,7 @@ def create_app() -> FastAPI:
             trip_id=trip_id,
             team_id=resolved_team_id or None,
             customer_id=customer_id,
+            tenant_id=tenant_id,
             channel=channel,
             status=status,
         )
@@ -1477,6 +1539,7 @@ def create_app() -> FastAPI:
             trip_id=trip_id,
             team_id=None,
             customer_id=customer_id,
+            tenant_id=_current_tenant_id(user),
         )
         logs = ctx.audit_service.repository.list_by_target_payload(trip_id)
         return _ok(
@@ -1485,18 +1548,22 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/dashboard/stats")
     def dashboard_stats(
-        _: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        attempts = ctx.notification_attempt_repository.list_history(limit=9999)
+        tenant_id = _current_tenant_id(user)
+        attempts = [
+            item
+            for item in ctx.notification_attempt_repository.list_history(limit=9999)
+            if item.get("tenant_id") == tenant_id
+        ]
         sent = sum(1 for item in attempts if item.get("ok") is True)
         total = len(attempts)
+        scoped_trips = [t for t in ctx.trip_repository.list() if t.get("tenant_id") == tenant_id]
         return _ok(
             {
                 "today_notifications": total,
-                "active_trips": len(
-                    [t for t in ctx.trip_repository.list() if t.get("status") != "已完成"]
-                ),
+                "active_trips": len([t for t in scoped_trips if t.get("status") != "已完成"]),
                 "total_users": len(ctx.auth_service.users),
                 "pending_complaints": 0,
                 "notification_success_rate": round((sent / total) * 100, 1) if total else 0.0,

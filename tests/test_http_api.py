@@ -25,6 +25,38 @@ def test_auth_login_and_role_resolution() -> None:
     user_me = client.get("/api/users/me", headers={"Authorization": f"Bearer {user_token}"})
     assert user_me.status_code == 200
     assert user_me.json()["data"]["role"] == "user"
+    assert user_me.json()["data"]["tenant_id"] == "tenant-a"
+
+
+def test_tenant_isolation_for_trip_and_history_queries() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    user_token = _login(client, "user", "123456")
+    partner_token = _login(client, "partner", "123456")
+
+    user_headers = {"Authorization": f"Bearer {user_token}"}
+    partner_headers = {"Authorization": f"Bearer {partner_token}"}
+
+    created = client.post(
+        "/api/trips",
+        headers=user_headers,
+        json={
+            "destination": "赛里木湖",
+            "team": "TEAM-TENANT-A",
+            "start_date": "2026-07-01",
+            "end_date": "2026-07-03",
+            "participants": 10,
+        },
+    )
+    assert created.status_code == 201
+    trip_id = created.json()["data"]["trip"]["id"]
+
+    forbidden_trip = client.get(f"/api/trips/{trip_id}/timeline", headers=partner_headers)
+    assert forbidden_trip.status_code == 403
+
+    partner_history = client.get("/api/notifications/history?limit=20", headers=partner_headers)
+    assert partner_history.status_code == 200
+    assert partner_history.json()["data"]["total"] == 0
 
 
 def test_preferences_read_write() -> None:

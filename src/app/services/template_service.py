@@ -128,6 +128,7 @@ class TemplateService:
     def _to_payload(self, template: NotificationTemplate) -> dict[str, object]:
         return {
             "id": template.id,
+            "tenant_id": template.tenant_id,
             "name": template.name,
             "version": template.version,
             "notification_type": template.notification_type.value,
@@ -141,6 +142,7 @@ class TemplateService:
     def _from_payload(self, row: dict[str, object]) -> NotificationTemplate:
         return NotificationTemplate(
             id=str(row.get("id", "")),
+            tenant_id=str(row.get("tenant_id", "")),
             name=str(row.get("name", "")),
             version=int(row.get("version", 1)),
             notification_type=self._parse_notification_type(
@@ -237,17 +239,31 @@ class TemplateService:
             content = content.replace(f"{{{{{key}}}}}", str(value))
         return content
 
-    def list_notification_templates(self) -> list[NotificationTemplate]:
-        return list(self.notification_templates.values())
+    def list_notification_templates(self, tenant_id: str | None = None) -> list[NotificationTemplate]:
+        if not tenant_id:
+            return list(self.notification_templates.values())
+        return [
+            item
+            for item in self.notification_templates.values()
+            if item.tenant_id == tenant_id
+        ]
 
-    def get_notification_template(self, template_id: str) -> NotificationTemplate | None:
-        return self.notification_templates.get(template_id)
+    def get_notification_template(
+        self, template_id: str, tenant_id: str | None = None
+    ) -> NotificationTemplate | None:
+        template = self.notification_templates.get(template_id)
+        if template is None:
+            return None
+        if tenant_id and template.tenant_id != tenant_id:
+            return None
+        return template
 
-    def ensure_default_template(self) -> NotificationTemplate:
-        existing = self.list_notification_templates()
+    def ensure_default_template(self, tenant_id: str = "") -> NotificationTemplate:
+        existing = self.list_notification_templates(tenant_id=tenant_id)
         if existing:
             return existing[0]
         return self.create_notification_template(
+            tenant_id=tenant_id,
             name="默认行程提醒",
             content="{{customer_name}}，您的{{destination}}行程即将开始，请准时集合。",
             channel="sms",
@@ -257,6 +273,7 @@ class TemplateService:
 
     def create_notification_template(
         self,
+        tenant_id: str,
         name: str,
         content: str,
         channel: str,
@@ -264,6 +281,7 @@ class TemplateService:
         is_active: bool,
     ) -> NotificationTemplate:
         template = NotificationTemplate(
+            tenant_id=tenant_id,
             name=name,
             content=content,
             channel=self._parse_channel(channel),

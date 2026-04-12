@@ -17,6 +17,7 @@ class DispatchStatus(str, Enum):
 
 @dataclass(slots=True)
 class NotificationTemplate(BaseRecord):
+    tenant_id: str = ""
     name: str = ""
     version: int = 1
     notification_type: NotificationType = NotificationType.DAILY_REMINDER
@@ -39,6 +40,7 @@ class NotificationAttempt(BaseRecord):
 
 @dataclass(slots=True)
 class NotificationTask(BaseRecord):
+    tenant_id: str = ""
     team_id: str = ""
     trip_id: str = ""
     customer_id: str = ""

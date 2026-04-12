@@ -66,6 +66,7 @@ class NotificationAttemptRepository:
         payload = {
             "attempt_id": attempt.id,
             "task_id": task.id,
+            "tenant_id": task.tenant_id,
             "trip_id": task.trip_id,
             "team_id": task.team_id,
             "customer_id": task.customer_id,
