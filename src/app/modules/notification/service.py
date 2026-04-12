@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 import re
 from time import monotonic
@@ -17,7 +17,7 @@ from app.modules.notification.models import (
     NotificationTemplate,
 )
 
-UTC = UTC
+UTC = timezone.utc
 
 
 class ChannelProvider(Protocol):

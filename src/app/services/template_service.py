@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import os
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.entities import EventName
@@ -12,7 +12,7 @@ from app.core.models import Channel, NotificationType
 from app.modules.integration.persistence import JsonFileStore
 from app.modules.notification.models import NotificationTemplate
 
-UTC = UTC
+UTC = timezone.utc
 
 
 @dataclass(slots=True)
