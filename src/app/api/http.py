@@ -23,12 +23,14 @@ from app.core.models import Channel
 from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
+from app.modules.integration.rbac import PermissionDenied, assert_tenant_scope, require_permission
 from app.modules.integration.persistence import JsonFileStore, TripRepository
 from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
 from app.modules.notification.rule_service import NotificationRuleRepository, RuleValidationError
 from app.modules.notification.service import NotificationAttemptRepository, NotificationService
+from app.services.async_dispatch import AsyncDispatchService
 from app.services.preference_service import UserPreferenceService
 from app.services.template_service import TemplateService
 
@@ -71,8 +73,10 @@ class AppContext:
     notification_attempt_repository: NotificationAttemptRepository
     notification_rule_repository: NotificationRuleRepository
     notification_service: NotificationService
+    async_dispatch_service: AsyncDispatchService
     audit_service: AuditService
     analytics_service: AnalyticsService
+    notification_tasks: dict[str, NotificationTask]
 
 
 class LoginRequest(BaseModel):
@@ -169,6 +173,7 @@ class NotificationSendRequest(BaseModel):
     customer_name: str | None = None
     destination: str | None = None
     channel: str = "sms"
+    async_delivery: bool = False
 
 
 def _ok(data: Any) -> dict[str, Any]:
@@ -820,6 +825,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         idempotency_store=IdempotencyStore(store=persistence),
         attempt_repository=notification_attempt_repository,
     )
+    async_dispatch_service = AsyncDispatchService(notification_service=notification_service)
     audit_service = AuditService(repository=AuditLogRepository(store=persistence))
     analytics_service = AnalyticsService(
         repository=AnalyticsRepository(store=persistence),
@@ -836,8 +842,10 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         notification_attempt_repository=notification_attempt_repository,
         notification_rule_repository=notification_rule_repository,
         notification_service=notification_service,
+        async_dispatch_service=async_dispatch_service,
         audit_service=audit_service,
         analytics_service=analytics_service,
+        notification_tasks={},
     )
 
 
@@ -873,10 +881,18 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="Tenant context missing")
         return tenant_id
 
+    def _require_permission_or_403(user: dict[str, str], permission: str) -> None:
+        try:
+            require_permission(user, permission)
+        except PermissionDenied as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
+
     def assert_trip_access(user: dict[str, str], trip: dict[str, Any]) -> None:
-        user_tenant_id = _current_tenant_id(user)
-        if str(trip.get("tenant_id") or "") != user_tenant_id:
-            raise HTTPException(status_code=403, detail="Cross-tenant access denied")
+        try:
+            assert_tenant_scope(user, str(trip.get("tenant_id") or ""))
+            require_permission(user, "trip:read")
+        except PermissionDenied as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
         if user.get("role") == "admin":
             return
         if trip.get("user_id") != user.get("id"):
@@ -902,10 +918,12 @@ def create_app() -> FastAPI:
     @fastapi_app.get("/api/health/detail")
     def get_health_detail(ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
         attempts = ctx.notification_attempt_repository.list_history(limit=9999)
+        queue_health = ctx.async_dispatch_service.health_snapshot()
         return _ok(
             {
                 "status": "ok",
                 "time": datetime.now(tz=UTC).isoformat(),
+                **queue_health,
                 "components": {
                     "auth": {"status": "ok", "users": len(ctx.auth_service.users)},
                     "persistence": {"status": "ok", "base_dir": str(ctx.store.base_dir)},
@@ -1004,6 +1022,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "template:read")
         tenant_id = _current_tenant_id(user)
         items = [
             _serialize_template(item)
@@ -1030,6 +1049,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "template:write")
         template = ctx.template_service.create_notification_template(
             tenant_id=_current_tenant_id(user),
             name=payload.name,
@@ -1047,6 +1067,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "template:write")
         tenant_id = _current_tenant_id(user)
         existing = ctx.template_service.get_notification_template(template_id, tenant_id=tenant_id)
         if existing is None:
@@ -1072,6 +1093,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "template:write")
         template = ctx.template_service.get_notification_template(
             template_id, tenant_id=_current_tenant_id(user)
         )
@@ -1126,6 +1148,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:read")
         try:
             tenant_id = _current_tenant_id(user)
             items = ctx.notification_rule_repository.list_rules(
@@ -1156,6 +1179,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:write")
         try:
             rule = ctx.notification_rule_repository.create_rule(
                 {**payload.model_dump(), "tenant_id": _current_tenant_id(user)}
@@ -1171,6 +1195,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:write")
         try:
             rule = ctx.notification_rule_repository.update_rule(
                 rule_id,
@@ -1189,6 +1214,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "rule:write")
         deleted = ctx.notification_rule_repository.delete_rule(
             rule_id, tenant_id=_current_tenant_id(user)
         )
@@ -1201,6 +1227,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
         tenant_id = _current_tenant_id(user)
         items = [item for item in ctx.trip_repository.list() if item.get("tenant_id") == tenant_id]
         if user.get("role") != "admin":
@@ -1262,6 +1289,7 @@ def create_app() -> FastAPI:
             primary_channel=Channel.SMS,
             fallback_channel=Channel.WECHAT_WORK_GROUP,
         )
+        ctx.notification_tasks[task.id] = task
         dispatch_result = ctx.notification_service.dispatch(task)
         ctx.audit_service.record(
             operator_id=user["id"],
@@ -1290,6 +1318,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:write")
         created = create_trip_record(payload=payload, user=user, ctx=ctx)
         return _ok(created)
 
@@ -1414,6 +1443,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
         template = None
         tenant_id = _current_tenant_id(user)
         if payload.template_id:
@@ -1458,20 +1488,26 @@ def create_app() -> FastAPI:
             primary_channel=_parse_channel(payload.channel),
             fallback_channel=Channel.WECHAT_WORK_GROUP,
         )
-        dispatch_result = ctx.notification_service.dispatch(task)
+        ctx.notification_tasks[task.id] = task
+        if payload.async_delivery:
+            job = ctx.async_dispatch_service.enqueue(task, channel=task.primary_channel.value)
+            dispatch_result = {"ok": True, "reason": "queued", "job_id": job.job_id}
+        else:
+            dispatch_result = ctx.notification_service.dispatch(task)
         ctx.audit_service.record(
             operator_id=user["id"],
             action="notification_dispatched",
             target=payload.trip_id or "manual",
-            detail={"ok": dispatch_result["ok"], "attempts": len(task.attempts)},
-        )
-        return _ok(
-            {
+            detail={
                 "ok": dispatch_result["ok"],
-                "notification_id": task.id,
-                "status": task.status.value,
-            }
+                "attempts": len(task.attempts),
+                "async_delivery": payload.async_delivery,
+            },
         )
+        response = {"ok": dispatch_result["ok"], "notification_id": task.id, "status": task.status.value}
+        if "job_id" in dispatch_result:
+            response["job_id"] = dispatch_result["job_id"]
+        return _ok(response)
 
     @fastapi_app.get("/api/notifications/history")
     def notification_history(
@@ -1498,6 +1534,37 @@ def create_app() -> FastAPI:
             status=status,
         )
         return _ok({"total": len(items), "items": items})
+
+    @fastapi_app.get("/api/notifications/jobs")
+    def list_notification_jobs(
+        limit: int = 50,
+        trip_id: str | None = None,
+        team_id: str | None = None,
+        team: str | None = None,
+        status: str | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:read")
+        tenant_id = _current_tenant_id(user)
+        resolved_team_id = _resolve_team_id(team, team_id)
+        items = ctx.async_dispatch_service.list_jobs(
+            tenant_id=tenant_id,
+            team_id=resolved_team_id or None,
+            trip_id=trip_id,
+            status=status,
+            limit=limit,
+        )
+        return _ok({"total": len(items), "items": items})
+
+    @fastapi_app.post("/api/notifications/jobs/run")
+    def run_notification_jobs(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        items = ctx.async_dispatch_service.run_due_jobs(ctx.notification_tasks)
+        return _ok({"processed": len(items), "items": items})
 
     @fastapi_app.get("/api/notifications/recent")
     def recent_notifications(
