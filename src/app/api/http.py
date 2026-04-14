@@ -965,6 +965,8 @@ def create_app() -> FastAPI:
             if token is None:
                 raise HTTPException(status_code=401, detail="Invalid credentials")
             return _ok(token)
+        except HTTPException:
+            raise
         except Exception as e:
             import traceback
 
