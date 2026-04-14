@@ -28,6 +28,15 @@ def test_auth_login_and_role_resolution() -> None:
     assert user_me.json()["data"]["tenant_id"] == "tenant-a"
 
 
+def test_auth_login_invalid_credentials_returns_401() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+
+    response = client.post("/api/auth/login", json={"username": "admin", "password": "wrong-password"})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
+
+
 def test_tenant_isolation_for_trip_and_history_queries() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
