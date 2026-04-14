@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import re
 import zipfile
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from xml.etree import ElementTree
 import uvicorn
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
@@ -867,6 +869,19 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
 def create_app() -> FastAPI:
     _patch_starlette_router_compat()
     fastapi_app = FastAPI(title="Travel Notification API", version="0.2.0")
+    cors_origins = [
+        origin.strip()
+        for origin in os.getenv("TRAVEL_NOTIFICATION_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    if cors_origins:
+        fastapi_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     fastapi_app.state.ctx = _build_context()
 
     security = HTTPBearer(auto_error=False)

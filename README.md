@@ -33,6 +33,8 @@ source .venv/bin/activate
 python -m pip install -e .
 ```
 
+> 说明：`python-multipart` 已纳入项目依赖，无需额外手工安装，可直接用于 `/api/trips/import` 等上传接口。
+
 前端依赖（首次）：
 
 ```bash
@@ -79,8 +81,11 @@ npm -C frontend run build
 ### 启动后端（端口 18000）
 
 ```bash
+TRAVEL_NOTIFICATION_CORS_ORIGINS=http://127.0.0.1:4180 \
 PYTHONPATH=src python -m uvicorn app.api.http:app --host 127.0.0.1 --port 18000
 ```
+
+> `TRAVEL_NOTIFICATION_CORS_ORIGINS` 支持逗号分隔多个来源（例如 `http://127.0.0.1:4180,http://localhost:5173`）。
 
 ### 启动前端代理（端口 4180）
 
