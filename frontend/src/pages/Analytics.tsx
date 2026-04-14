@@ -1,35 +1,28 @@
 import { useEffect, useState } from 'react'
 import { Header } from '../components/Header'
 import { Card } from '../components/Card'
-import { Badge } from '../components/Badge'
 import { PageState } from '../components/PageState'
-import { BarChart3, TrendingUp, Clock, CheckCircle } from 'lucide-react'
-import { analyticsApi, getErrorMessage } from '../services/api'
-import { type AnalyticsData } from '../types/api'
+import { TrendingUp, Clock, CheckCircle, Mail } from 'lucide-react'
+import { api, getErrorMessage } from '../services/api'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
 
-type LoadState = 'loading' | 'ready' | 'error' | 'empty'
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
 export function Analytics() {
-  const [loadState, setLoadState] = useState<LoadState>('loading')
-  const [errorMessage, setErrorMessage] = useState('')
-  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [data, setData] = useState<any>(null)
 
   const loadData = async () => {
-    setLoadState('loading')
-    setErrorMessage('')
-
+    setLoading(true)
     try {
-      const data = await analyticsApi.metrics()
-      setAnalyticsData(data)
-
-      if (data.channelPerformance.length === 0 && data.topTrips.length === 0) {
-        setLoadState('empty')
-      } else {
-        setLoadState('ready')
-      }
-    } catch (error) {
-      setLoadState('error')
-      setErrorMessage(getErrorMessage(error))
+      const res = await api.get('/analytics/metrics')
+      setData(res)
+      setError('')
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -37,189 +30,76 @@ export function Analytics() {
     void loadData()
   }, [])
 
-  if (loadState === 'loading') {
-    return (
-      <>
-        <Header />
-        <div className="p-8">
-          <PageState kind="loading" title="正在加载数据分析" />
-        </div>
-      </>
-    )
-  }
+  if (loading) return <><Header /><div className="p-8"><PageState kind="loading" title="正在加载高级报表" /></div></>
+  if (error) return <><Header /><div className="p-8"><PageState kind="error" title="加载失败" description={error} onRetry={loadData} /></div></>
 
-  if (loadState === 'error') {
-    return (
-      <>
-        <Header />
-        <div className="p-8">
-          <PageState
-            kind="error"
-            title="数据分析加载失败"
-            description={errorMessage}
-            onRetry={() => {
-              void loadData()
-            }}
-          />
-        </div>
-      </>
-    )
-  }
-
-  if (loadState === 'empty' || !analyticsData) {
-    return (
-      <>
-        <Header />
-        <div className="p-8">
-          <PageState
-            kind="empty"
-            title="暂无分析数据"
-            description="当前没有可展示的渠道和行程指标"
-            onRetry={() => {
-              void loadData()
-            }}
-          />
-        </div>
-      </>
-    )
-  }
-
-  const metrics = [
-    {
-      title: '通知成功率',
-      value: analyticsData.metrics.notificationSuccessRate,
-      icon: CheckCircle,
-      color: 'bg-green-50 text-green-600',
-      change: '实时',
-    },
-    {
-      title: '平均响应时间',
-      value: analyticsData.metrics.avgResponseTime,
-      icon: Clock,
-      color: 'bg-blue-50 text-blue-600',
-      change: '实时',
-    },
-    {
-      title: '周环比增长',
-      value: analyticsData.metrics.wowGrowth,
-      icon: TrendingUp,
-      color: 'bg-purple-50 text-purple-600',
-      change: '实时',
-    },
-    {
-      title: '用户满意度',
-      value: analyticsData.metrics.userSatisfaction,
-      icon: BarChart3,
-      color: 'bg-orange-50 text-orange-600',
-      change: '实时',
-    },
+  const summary = [
+    { title: '总通知发送量', value: data.summary.total_notifications, icon: Mail, color: 'bg-blue-50 text-blue-600' },
+    { title: '平均成功率', value: `${data.summary.success_rate}%`, icon: CheckCircle, color: 'bg-green-50 text-green-600' },
+    { title: '平均延迟', value: `${data.summary.avg_latency_ms}ms`, icon: Clock, color: 'bg-yellow-50 text-yellow-600' },
+    { title: '周环比增长', value: `${data.summary.wow_growth}%`, icon: TrendingUp, color: 'bg-purple-50 text-purple-600' },
   ]
 
   return (
     <>
       <Header />
-      <div className="p-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">数据分析</h1>
+      <div className="p-8 max-w-7xl mx-auto">
+        <h1 className="text-3xl font-bold text-gray-900 mb-8">高级统计分析报表</h1>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {metrics.map((metric) => {
-            const Icon = metric.icon
-            return (
-              <Card key={metric.title}>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600 mb-1">{metric.title}</p>
-                    <p className="text-3xl font-bold text-gray-900">{metric.value}</p>
-                    <p className="text-xs text-green-600 mt-2">{metric.change}</p>
-                  </div>
-                  <div className={`p-3 rounded-lg ${metric.color}`}>
-                    <Icon className="w-6 h-6" />
-                  </div>
+          {summary.map((s) => (
+            <Card key={s.title}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">{s.title}</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">{s.value}</p>
                 </div>
-              </Card>
-            )
-          })}
+                <div className={`p-3 rounded-xl ${s.color}`}><s.icon size={24} /></div>
+              </div>
+            </Card>
+          ))}
         </div>
 
-        <Card title="渠道性能" className="mb-6">
-          {analyticsData.channelPerformance.length === 0 ? (
-            <PageState
-              kind="empty"
-              title="暂无渠道性能数据"
-              onRetry={() => {
-                void loadData()
-              }}
-            />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">渠道</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">总发送</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">成功</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">失败</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">成功率</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analyticsData.channelPerformance.map((channel) => (
-                    <tr key={channel.channel} className="border-b border-gray-100 hover:bg-gray-50 transition">
-                      <td className="py-3 px-4 font-medium text-gray-900">{channel.channelLabel}</td>
-                      <td className="py-3 px-4 text-gray-600">{channel.sent}</td>
-                      <td className="py-3 px-4">
-                        <Badge variant="success">{channel.successful}</Badge>
-                      </td>
-                      <td className="py-3 px-4">
-                        <Badge variant="danger">{channel.failed}</Badge>
-                      </td>
-                      <td className="py-3 px-4 font-semibold text-green-600">{channel.rate}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <Card title="发送量趋势 (近7日)">
+            <div className="h-[300px] mt-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data.charts.notification_trend}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#9ca3af', fontSize: 12}} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{fill: '#9ca3af', fontSize: 12}} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="count" name="总发送" stroke="#3b82f6" strokeWidth={3} dot={{r: 4, fill: '#3b82f6'}} activeDot={{r: 6}} />
+                  <Line type="monotone" dataKey="success" name="成功数" stroke="#10b981" strokeWidth={3} dot={{r: 4, fill: '#10b981'}} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
-          )}
-        </Card>
+          </Card>
 
-        <Card title="热门行程排行">
-          {analyticsData.topTrips.length === 0 ? (
-            <PageState
-              kind="empty"
-              title="暂无热门行程"
-              onRetry={() => {
-                void loadData()
-              }}
-            />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">行程</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">通知数</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">用户满意度</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">评级</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analyticsData.topTrips.map((trip) => (
-                    <tr key={trip.name} className="border-b border-gray-100 hover:bg-gray-50 transition">
-                      <td className="py-3 px-4 font-medium text-gray-900">{trip.name}</td>
-                      <td className="py-3 px-4 text-gray-600">{trip.notifications}</td>
-                      <td className="py-3 px-4">{trip.satisfaction}/5.0</td>
-                      <td className="py-3 px-4">
-                        <Badge variant={trip.satisfaction >= 4.5 ? 'success' : 'warning'}>
-                          {'⭐'.repeat(Math.max(1, Math.round(trip.satisfaction)))}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <Card title="发送渠道分布">
+            <div className="h-[300px] mt-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={data.charts.channel_distribution}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={100}
+                    paddingAngle={5}
+                    dataKey="value"
+                  >
+                    {data.charts.channel_distribution.map((_: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend verticalAlign="bottom" height={36}/>
+                </PieChart>
+              </ResponsiveContainer>
             </div>
-          )}
-        </Card>
+          </Card>
+        </div>
       </div>
     </>
   )

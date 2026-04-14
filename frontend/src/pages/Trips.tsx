@@ -5,7 +5,7 @@ import { Button } from '../components/Button'
 import { Badge } from '../components/Badge'
 import { Modal } from '../components/Modal'
 import { PageState } from '../components/PageState'
-import { Plus, Edit, Trash2, Calendar, Users, Upload } from 'lucide-react'
+import { Plus, Edit, Trash2, Calendar, Users, Upload, CheckCircle } from 'lucide-react'
 import { tripsApi, getErrorMessage } from '../services/api'
 import { type Trip, type TripStatusCode } from '../types/api'
 
@@ -91,6 +91,8 @@ export function Trips() {
     })
     setIsModalOpen(true)
   }
+
+
 
   const submitTrip = async () => {
     if (!form.destination || !form.teamId || !form.startDate || !form.endDate) {

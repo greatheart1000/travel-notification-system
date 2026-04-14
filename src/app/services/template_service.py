@@ -3,8 +3,10 @@ from __future__ import annotations
 import importlib
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
+
+from jinja2 import Template as JinjaTemplate
 
 from app.core.entities import EventName
 from app.core.entities import Template as RuleTemplate
@@ -12,7 +14,7 @@ from app.core.models import Channel, NotificationType
 from app.modules.integration.persistence import JsonFileStore
 from app.modules.notification.models import NotificationTemplate
 
-UTC = timezone.utc
+UTC = UTC
 
 
 @dataclass(slots=True)
@@ -233,19 +235,25 @@ class TemplateService:
             content = content.replace(f"{{{{{key}}}}}", value)
         return content
 
-    def render_notification(self, template: NotificationTemplate, variables: dict[str, str]) -> str:
-        content = template.content
-        for key, value in variables.items():
-            content = content.replace(f"{{{{{key}}}}}", str(value))
-        return content
+    def render_notification(self, template: NotificationTemplate, variables: dict[str, Any]) -> str:
+        """使用 Jinja2 渲染模板，支持复杂逻辑和默认值"""
+        try:
+            jinja_tmpl = JinjaTemplate(template.content)
+            return jinja_tmpl.render(**variables)
+        except Exception:
+            # 回退到基础替换逻辑
+            content = template.content
+            for key, value in variables.items():
+                content = content.replace(f"{{{{{key}}}}}", str(value))
+            return content
 
-    def list_notification_templates(self, tenant_id: str | None = None) -> list[NotificationTemplate]:
+    def list_notification_templates(
+        self, tenant_id: str | None = None
+    ) -> list[NotificationTemplate]:
         if not tenant_id:
             return list(self.notification_templates.values())
         return [
-            item
-            for item in self.notification_templates.values()
-            if item.tenant_id == tenant_id
+            item for item in self.notification_templates.values() if item.tenant_id == tenant_id
         ]
 
     def get_notification_template(

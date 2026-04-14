@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from statistics import mean
 from typing import Any
 from uuid import uuid4
@@ -15,7 +15,7 @@ from app.modules.analytics.models import (
 from app.modules.integration.persistence import JsonFileStore, TripRepository
 from app.modules.notification.service import NotificationAttemptRepository
 
-UTC = timezone.utc
+UTC = UTC
 
 
 class AnalyticsRepository:
@@ -186,21 +186,21 @@ class AnalyticsService:
         successful = sum(1 for row in facts if bool(row.get("success")))
         failed = total - successful
         success_rate = round((successful / total) * 100, 1) if total else 0.0
-        retry_rate = round((failed / total) * 100, 1) if total else 0.0
-        avg_latency = round(mean(int(row.get("latency_ms") or 0) for row in facts), 1) if facts else 0.0
+        avg_latency = (
+            round(mean(int(row.get("latency_ms") or 0) for row in facts), 1) if facts else 0.0
+        )
 
         last_7_days = datetime.now(UTC).date() - timedelta(days=7)
         recent = [row for row in facts if str(row.get("event_date", "")) >= str(last_7_days)]
         previous = [
             row
             for row in facts
-            if str(last_7_days - timedelta(days=7)) <= str(row.get("event_date", "")) < str(last_7_days)
+            if str(last_7_days - timedelta(days=7))
+            <= str(row.get("event_date", ""))
+            < str(last_7_days)
         ]
         wow_growth = 0.0
-        if previous:
-            wow_growth = round(((len(recent) - len(previous)) / len(previous)) * 100, 1)
-
-        avg_score = round(mean(float(row.get("score") or 0.0) for row in feedbacks), 1) if feedbacks else 0.0
+        wow_growth = round(((len(recent) - len(previous)) / len(previous)) * 100, 1)
 
         by_channel: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in facts:
@@ -247,18 +247,33 @@ class AnalyticsService:
             )
 
         trip_rows.sort(key=lambda item: item["notifications"], reverse=True)
+        # 补齐按日期分布的趋势数据 (Time Series)
+        trend_map = defaultdict(lambda: {"total": 0, "success": 0})
+        for row in facts:
+            dt = str(row.get("event_date"))
+            trend_map[dt]["total"] += 1
+            if bool(row.get("success")):
+                trend_map[dt]["success"] += 1
+
+        sorted_dates = sorted(trend_map.keys())[-7:]
+        trend_data = []
+        for d in sorted_dates:
+            trend_data.append(
+                {"date": d, "count": trend_map[d]["total"], "success": trend_map[d]["success"]}
+            )
+
+        # 补齐渠道分布数据
+        channel_map = defaultdict(int)
+        for row in facts:
+            channel_map[str(row.get("channel"))] += 1
+        channel_data = [{"name": k, "value": v} for k, v in channel_map.items()]
 
         return {
-            "metrics": {
-                "notification_success_rate": f"{success_rate}%",
-                "notification_retry_rate": f"{retry_rate}%",
-                "notification_manual_takeover_rate": "0.0%",
-                "rule_publish_lead_time": "0m",
-                "cross_tenant_forbidden_count": 0,
-                "avg_response_time": f"{avg_latency}ms",
-                "wow_growth": f"{wow_growth:+.1f}%",
-                "user_satisfaction": f"{avg_score}/5",
+            "summary": {
+                "total_notifications": total,
+                "success_rate": success_rate,
+                "avg_latency_ms": avg_latency,
+                "wow_growth": wow_growth,
             },
-            "channel_performance": channel_rows,
-            "top_trips": trip_rows[:5],
+            "charts": {"notification_trend": trend_data, "channel_distribution": channel_data},
         }

@@ -1,6 +1,6 @@
 import { MapPin, Bell, Settings, BarChart3, Home, Plane } from 'lucide-react'
 
-type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics'
+type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics' | 'templates'
 
 interface SidebarProps {
   currentPage: Page
@@ -12,6 +12,7 @@ export function Sidebar({ currentPage, onPageChange }: SidebarProps) {
     { id: 'dashboard' as const, label: '仪表盘', icon: Home },
     { id: 'trips' as const, label: '行程管理', icon: Plane },
     { id: 'notifications' as const, label: '通知中心', icon: Bell },
+    { id: 'templates' as const, label: '消息模板', icon: Bell },
     { id: 'analytics' as const, label: '数据分析', icon: BarChart3 },
     { id: 'preferences' as const, label: '偏好设置', icon: Settings },
   ]

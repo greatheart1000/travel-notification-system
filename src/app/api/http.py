@@ -5,7 +5,7 @@ import io
 import re
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from xml.etree import ElementTree
@@ -23,8 +23,9 @@ from app.core.models import Channel
 from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
-from app.modules.integration.rbac import PermissionDenied, assert_tenant_scope, require_permission
 from app.modules.integration.persistence import JsonFileStore, TripRepository
+from app.modules.integration.rbac import PermissionDenied, assert_tenant_scope, require_permission
+from app.modules.integration.weather_provider import WeatherProvider
 from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
@@ -33,8 +34,9 @@ from app.modules.notification.service import NotificationAttemptRepository, Noti
 from app.services.async_dispatch import AsyncDispatchService
 from app.services.preference_service import UserPreferenceService
 from app.services.template_service import TemplateService
+from app.services.workflow_orchestrator import WorkflowOrchestrator
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def _patch_starlette_router_compat() -> None:
@@ -958,10 +960,18 @@ def create_app() -> FastAPI:
 
     @fastapi_app.post("/api/auth/login")
     def login(payload: LoginRequest, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
-        token = ctx.auth_service.login(payload.username, payload.password)
-        if token is None:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        return _ok(token)
+        try:
+            token = ctx.auth_service.login(payload.username, payload.password)
+            if token is None:
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            return _ok(token)
+        except Exception as e:
+            import traceback
+
+            error_detail = traceback.format_exc()
+            return JSONResponse(
+                status_code=500, content={"code": 500, "error": str(e), "detail": error_detail}
+            )
 
     @fastapi_app.post("/api/auth/logout")
     def logout(
@@ -1183,7 +1193,9 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        rule = ctx.notification_rule_repository.get_rule(rule_id, tenant_id=_current_tenant_id(user))
+        rule = ctx.notification_rule_repository.get_rule(
+            rule_id, tenant_id=_current_tenant_id(user)
+        )
         if rule is None:
             raise HTTPException(status_code=404, detail="Rule not found")
         return _ok_with_message(rule, "rule found")
@@ -1237,7 +1249,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Rule not found")
         return _ok_with_message({"deleted": True, "id": rule_id}, "rule deleted")
 
-    def _record_rule_audit(user: dict[str, str], ctx: AppContext, action: str, rule: dict[str, Any]) -> None:
+    def _record_rule_audit(
+        user: dict[str, str], ctx: AppContext, action: str, rule: dict[str, Any]
+    ) -> None:
         ctx.audit_service.record(
             operator_id=user["id"],
             action=action,
@@ -1550,6 +1564,7 @@ def create_app() -> FastAPI:
         updated = ctx.trip_repository.update(trip_id, patch)
         if updated is None:
             raise HTTPException(status_code=404, detail="Trip not found")
+
         ctx.audit_service.record(
             operator_id=user["id"], action="trip_updated", target=trip_id, detail=patch
         )
@@ -1590,7 +1605,9 @@ def create_app() -> FastAPI:
             template = next(
                 (
                     item
-                    for item in ctx.template_service.list_notification_templates(tenant_id=tenant_id)
+                    for item in ctx.template_service.list_notification_templates(
+                        tenant_id=tenant_id
+                    )
                     if item.is_active
                 ),
                 ctx.template_service.ensure_default_template(tenant_id=tenant_id),
@@ -1638,7 +1655,11 @@ def create_app() -> FastAPI:
                 "async_delivery": payload.async_delivery,
             },
         )
-        response = {"ok": dispatch_result["ok"], "notification_id": task.id, "status": task.status.value}
+        response = {
+            "ok": dispatch_result["ok"],
+            "notification_id": task.id,
+            "status": task.status.value,
+        }
         if "job_id" in dispatch_result:
             response["job_id"] = dispatch_result["job_id"]
         return _ok(response)
@@ -1773,6 +1794,50 @@ def create_app() -> FastAPI:
                 "pending_complaints": 0,
                 "notification_success_rate": round((sent / total) * 100, 1) if total else 0.0,
             }
+        )
+
+    @fastapi_app.post("/api/admin/run-automation-scan")
+    def run_automation_scan(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        orchestrator = WorkflowOrchestrator(
+            trip_repository=ctx.trip_repository,
+            template_service=ctx.template_service,
+            notification_service=ctx.notification_service,
+        )
+        result = orchestrator.scan_and_trigger(tenant_id=_current_tenant_id(user))
+        return _ok(result)
+
+    @fastapi_app.post("/api/admin/trigger-weather-check")
+    def trigger_weather_check(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        weather_provider = WeatherProvider()
+        active_trips = [t for t in ctx.trip_repository.list() if t.get("status") == "in_progress"]
+        triggered_count = 0
+
+        for trip in active_trips:
+            info = weather_provider.get_weather(trip.get("destination", ""))
+            if info.warning_level:
+                # 命中恶劣天气，触发通知
+                rendered = f"【天气预警】您在 {info.destination} 的行程受 {info.condition} 影响，当前气温 {info.temperature}C，请注意安全。"
+                task = NotificationTask(
+                    tenant_id=_current_tenant_id(user),
+                    team_id=str(trip.get("team_id", "")),
+                    trip_id=str(trip.get("id", "")),
+                    customer_id="system",
+                    rendered_content=rendered,
+                    idempotency_key=f"weather:{trip.get('id')}:{datetime.now().date()}",
+                    primary_channel=Channel.SMS,
+                )
+                ctx.notification_tasks[task.id] = task
+                ctx.notification_service.dispatch(task)
+                triggered_count += 1
+
+        return _ok(
+            {"active_trips_checked": len(active_trips), "triggered_notifications": triggered_count}
         )
 
     @fastapi_app.get("/api/analytics/metrics")

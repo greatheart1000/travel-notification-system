@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
 import re
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from enum import Enum
 from time import monotonic
 from typing import Any, Protocol
 
 from app.core.models import Channel
 from app.modules.integration.persistence import JsonFileStore
+from app.modules.integration.sms_provider import MockSMSProvider, SMSProvider
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import (
     DispatchStatus,
@@ -17,12 +18,25 @@ from app.modules.notification.models import (
     NotificationTemplate,
 )
 
-UTC = timezone.utc
+UTC = UTC
 
 
 class ChannelProvider(Protocol):
     def send(self, customer_id: str, content: str) -> tuple[bool, str]:
         """Return (ok, provider_message)."""
+
+
+class RealWorldSMSProvider:
+    """适配 SMSProvider 接口到 NotificationService 的 ChannelProvider 协议。"""
+
+    def __init__(self, provider: SMSProvider):
+        self.provider = provider
+
+    def send(self, customer_id: str, content: str) -> tuple[bool, str]:
+        # 假设 customer_id 就是手机号，实际场景需要从 Repository 查询
+        phone = customer_id if customer_id.isdigit() else "13800000000"
+        result = self.provider.send_sms(phone, content)
+        return result["ok"], result.get("msg_id", result.get("error", "unknown"))
 
 
 class StubProvider:
@@ -115,8 +129,9 @@ class NotificationService:
         attempt_repository: NotificationAttemptRepository | None = None,
     ) -> None:
         default_provider = StubProvider()
+        sms_backend = RealWorldSMSProvider(MockSMSProvider())
         self.providers: dict[Channel, ChannelProvider] = providers or {
-            Channel.SMS: default_provider,
+            Channel.SMS: sms_backend,
             Channel.WECHAT_WORK_GROUP: default_provider,
         }
         self.idempotency_store = idempotency_store or IdempotencyStore()

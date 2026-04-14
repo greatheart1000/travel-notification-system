@@ -6,10 +6,11 @@ import { Trips } from './pages/Trips'
 import { Notifications } from './pages/Notifications'
 import { Preferences } from './pages/Preferences'
 import { Analytics } from './pages/Analytics'
+import { Templates } from './pages/Templates'
 import { AUTH_STATE_CHANGED_EVENT, hasAccessToken } from './adapters/authAdapter'
 import { authApi, getErrorMessage } from './services/api'
 
-type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics'
+type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics' | 'templates'
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard')
@@ -104,6 +105,8 @@ export default function App() {
         return <Preferences />
       case 'analytics':
         return <Analytics />
+      case 'templates':
+        return <Templates />
       default:
         return <Dashboard />
     }
