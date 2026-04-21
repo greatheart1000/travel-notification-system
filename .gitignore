@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 .codex
 .codex-memory/
+.env.local
+*.local
 
 # local embedded repositories
 /everything-claude-code/

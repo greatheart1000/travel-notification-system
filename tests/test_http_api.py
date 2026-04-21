@@ -32,7 +32,9 @@ def test_auth_login_invalid_credentials_returns_401() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
 
-    response = client.post("/api/auth/login", json={"username": "admin", "password": "wrong-password"})
+    response = client.post(
+        "/api/auth/login", json={"username": "admin", "password": "wrong-password"}
+    )
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid credentials"
 
@@ -174,6 +176,55 @@ def test_notification_template_alias_supports_update_and_delete() -> None:
 
     deleted = client.delete(f"/api/notifications/templates/{template_id}", headers=headers)
     assert deleted.status_code == 200
+
+
+def test_project_notification_config_crud() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    user_token = _login(client, "user", "123456")
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    user_headers = {"Authorization": f"Bearer {user_token}"}
+
+    forbidden = client.put(
+        "/api/project-configs/proj-xinjiang",
+        headers=user_headers,
+        json={"project_name": "新疆阿勒泰团"},
+    )
+    assert forbidden.status_code == 403
+
+    updated = client.put(
+        "/api/project-configs/proj-xinjiang",
+        headers=admin_headers,
+        json={
+            "project_name": "新疆阿勒泰团",
+            "weather_enabled": True,
+            "qweather_location_id": "101130101",
+            "qweather_lat": "43.82",
+            "qweather_lon": "87.62",
+            "weather_alert_thresholds": {
+                "warning_levels": ["yellow", "orange", "red"],
+                "min_temp_c": 2,
+            },
+            "sms_provider": "aliyun",
+            "sms_sign_name": "新疆团",
+            "sms_template_code_normal": "SMS_XJ_NORMAL",
+            "sms_template_code_weather_alert": "SMS_XJ_ALERT",
+            "manual_takeover_target": "管家值班群",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["project_id"] == "proj-xinjiang"
+    assert updated.json()["data"]["sms_sign_name"] == "新疆团"
+    assert updated.json()["data"]["weather_alert_thresholds"]["min_temp_c"] == 2
+
+    detail = client.get("/api/project-configs/proj-xinjiang", headers=admin_headers)
+    assert detail.status_code == 200
+    assert detail.json()["data"]["sms_template_code_weather_alert"] == "SMS_XJ_ALERT"
+
+    listed = client.get("/api/project-configs", headers=admin_headers)
+    assert listed.status_code == 200
+    assert any(item["project_id"] == "proj-xinjiang" for item in listed.json()["data"]["items"])
 
 
 def test_trip_creation_triggers_notification_history_and_audit() -> None:
@@ -374,7 +425,12 @@ def test_notification_rule_approval_workflow_and_simulation() -> None:
     before_publish = client.post(
         "/api/notifications/rules/simulate",
         headers=headers,
-        json={"stage": "pre_trip", "time_slot": "morning", "scene": "normal", "context": {"vip": True}},
+        json={
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "context": {"vip": True},
+        },
     )
     assert before_publish.status_code == 200
     assert before_publish.json()["data"]["matches"] == []
@@ -402,7 +458,12 @@ def test_notification_rule_approval_workflow_and_simulation() -> None:
     simulated = client.post(
         "/api/notifications/rules/simulate",
         headers=headers,
-        json={"stage": "pre_trip", "time_slot": "morning", "scene": "normal", "context": {"vip": True}},
+        json={
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "context": {"vip": True},
+        },
     )
     assert simulated.status_code == 200
     assert len(simulated.json()["data"]["matches"]) >= 1

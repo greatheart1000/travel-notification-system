@@ -4,7 +4,7 @@ import importlib
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import Enum
 from pathlib import Path
 from threading import RLock
@@ -184,6 +184,20 @@ def _normalize_tenant_id(raw: Any) -> str:
     return tenant_id or DEFAULT_TENANT_ID
 
 
+def _parse_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if raw in (None, ""):
+        return {}
+    if isinstance(raw, bytes | bytearray):
+        raw = raw.decode("utf-8", "ignore")
+    try:
+        parsed = json.loads(str(raw))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 @dataclass(slots=True)
 class JsonFileStore:
     """Storage facade: MySQL by default, JSON files as explicit fallback."""
@@ -287,6 +301,240 @@ class JsonFileStore:
                     """
                 )
 
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_project_notification_config (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        tenant_id VARCHAR(64) NOT NULL DEFAULT 'tenant-a',
+                        project_id VARCHAR(64) NOT NULL,
+                        project_name VARCHAR(128) NOT NULL DEFAULT '',
+                        weather_enabled TINYINT(1) NOT NULL DEFAULT 1,
+                        qweather_credential_id VARCHAR(64) NOT NULL DEFAULT '',
+                        qweather_location_id VARCHAR(64) NOT NULL DEFAULT '',
+                        qweather_lat VARCHAR(32) NOT NULL DEFAULT '',
+                        qweather_lon VARCHAR(32) NOT NULL DEFAULT '',
+                        weather_alert_threshold_json JSON NULL,
+                        sms_provider VARCHAR(32) NOT NULL DEFAULT 'aliyun',
+                        sms_sign_name VARCHAR(64) NOT NULL DEFAULT '',
+                        sms_template_code_normal VARCHAR(64) NOT NULL DEFAULT '',
+                        sms_template_code_weather_alert VARCHAR(64) NOT NULL DEFAULT '',
+                        manual_takeover_target VARCHAR(128) NOT NULL DEFAULT '',
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_project_notification_config (tenant_id, project_id),
+                        KEY idx_project_name (project_name)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS t_trip (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        trip_code VARCHAR(64) NOT NULL,
+                        destination VARCHAR(128) NOT NULL,
+                        team_id VARCHAR(64) NOT NULL,
+                        start_date DATE NOT NULL,
+                        end_date DATE NOT NULL,
+                        participants INT UNSIGNED NOT NULL DEFAULT 0,
+                        status ENUM('planned','in_progress','completed','cancelled') NOT NULL DEFAULT 'planned',
+                        owner_user_id VARCHAR(64) NOT NULL DEFAULT 'admin',
+                        tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}',
+                        ext_data JSON NULL,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_trip_code (trip_code),
+                        KEY idx_team_id (team_id),
+                        KEY idx_status_dates (status, start_date, end_date)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS t_notification_template (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        template_code VARCHAR(64) NOT NULL,
+                        template_name VARCHAR(128) NOT NULL,
+                        tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}',
+                        project_id VARCHAR(64) NOT NULL DEFAULT '',
+                        notification_type ENUM('pre_trip_reminder','daily_reminder','risk_alert','satisfaction','farewell')
+                            NOT NULL DEFAULT 'daily_reminder',
+                        channel ENUM('sms','wechat_work_group','email') NOT NULL DEFAULT 'sms',
+                        stage VARCHAR(32) NOT NULL DEFAULT '',
+                        time_slot VARCHAR(32) NOT NULL DEFAULT '',
+                        scene VARCHAR(32) NOT NULL DEFAULT '',
+                        sms_sign_name VARCHAR(64) NOT NULL DEFAULT '',
+                        provider_template_code VARCHAR(64) NOT NULL DEFAULT '',
+                        content TEXT NOT NULL,
+                        version INT UNSIGNED NOT NULL DEFAULT 1,
+                        is_active TINYINT(1) NOT NULL DEFAULT 1,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_template_code_version (template_code, version),
+                        KEY idx_template_active (is_active)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                if has_table("t_notification_template"):
+                    if not has_column("t_notification_template", "tenant_id"):
+                        cursor.execute(
+                            f"""
+                            ALTER TABLE t_notification_template
+                            ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}'
+                            AFTER template_name
+                            """
+                        )
+                    if not has_column("t_notification_template", "project_id"):
+                        cursor.execute(
+                            """
+                            ALTER TABLE t_notification_template
+                            ADD COLUMN project_id VARCHAR(64) NOT NULL DEFAULT '' AFTER tenant_id
+                            """
+                        )
+                    if not has_column("t_notification_template", "stage"):
+                        cursor.execute(
+                            """
+                            ALTER TABLE t_notification_template
+                            ADD COLUMN stage VARCHAR(32) NOT NULL DEFAULT '' AFTER channel
+                            """
+                        )
+                    if not has_column("t_notification_template", "time_slot"):
+                        cursor.execute(
+                            """
+                            ALTER TABLE t_notification_template
+                            ADD COLUMN time_slot VARCHAR(32) NOT NULL DEFAULT '' AFTER stage
+                            """
+                        )
+                    if not has_column("t_notification_template", "scene"):
+                        cursor.execute(
+                            """
+                            ALTER TABLE t_notification_template
+                            ADD COLUMN scene VARCHAR(32) NOT NULL DEFAULT '' AFTER time_slot
+                            """
+                        )
+                    if not has_column("t_notification_template", "sms_sign_name"):
+                        cursor.execute(
+                            """
+                            ALTER TABLE t_notification_template
+                            ADD COLUMN sms_sign_name VARCHAR(64) NOT NULL DEFAULT '' AFTER scene
+                            """
+                        )
+                    if not has_column("t_notification_template", "provider_template_code"):
+                        cursor.execute(
+                            """
+                            ALTER TABLE t_notification_template
+                            ADD COLUMN provider_template_code VARCHAR(64) NOT NULL DEFAULT '' AFTER sms_sign_name
+                            """
+                        )
+                    cursor.execute(
+                        """
+                        UPDATE t_notification_template
+                        SET tenant_id = %s
+                        WHERE tenant_id IS NULL OR tenant_id = ''
+                        """,
+                        (DEFAULT_TENANT_ID,),
+                    )
+
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS t_notification_rule (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        rule_code VARCHAR(64) NOT NULL,
+                        rule_name VARCHAR(128) NOT NULL,
+                        tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}',
+                        stage ENUM('pre_trip','in_trip','post_trip') NOT NULL,
+                        time_slot ENUM('morning','afternoon','evening','night','all_day')
+                            NOT NULL DEFAULT 'all_day',
+                        scene ENUM('normal','weather_alert','delay','complaint','manual')
+                            NOT NULL DEFAULT 'normal',
+                        template_id BIGINT UNSIGNED NOT NULL,
+                        priority INT UNSIGNED NOT NULL DEFAULT 100,
+                        enabled TINYINT(1) NOT NULL DEFAULT 1,
+                        conditions_json JSON NULL,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_rule_code (rule_code),
+                        KEY idx_rule_match (stage, time_slot, scene, enabled, priority),
+                        CONSTRAINT fk_rule_template FOREIGN KEY (template_id)
+                            REFERENCES t_notification_template(id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_notification_rule_channel (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        rule_id BIGINT UNSIGNED NOT NULL,
+                        channel ENUM('sms','wechat_work_group','email') NOT NULL,
+                        sort_order TINYINT UNSIGNED NOT NULL DEFAULT 1,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_rule_channel (rule_id, channel),
+                        KEY idx_rule_sort (rule_id, sort_order),
+                        CONSTRAINT fk_rule_channel_rule FOREIGN KEY (rule_id)
+                            REFERENCES t_notification_rule(id) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS t_notification_task (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        task_code VARCHAR(64) NOT NULL,
+                        trip_id BIGINT UNSIGNED NULL,
+                        team_id VARCHAR(64) NOT NULL DEFAULT '',
+                        customer_id VARCHAR(64) NOT NULL,
+                        tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}',
+                        notification_type ENUM('pre_trip_reminder','daily_reminder','risk_alert','satisfaction','farewell')
+                            NOT NULL,
+                        primary_channel ENUM('sms','wechat_work_group','email') NOT NULL DEFAULT 'sms',
+                        fallback_channel ENUM('sms','wechat_work_group','email') NULL,
+                        rendered_content TEXT NOT NULL,
+                        idempotency_key VARCHAR(128) NOT NULL,
+                        status ENUM('pending','sent','failed','manual_intervention','skipped')
+                            NOT NULL DEFAULT 'pending',
+                        retry_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+                        max_retry TINYINT UNSIGNED NOT NULL DEFAULT 2,
+                        manual_intervention_required TINYINT(1) NOT NULL DEFAULT 0,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_task_code (task_code),
+                        UNIQUE KEY uk_idempotency_key (idempotency_key),
+                        KEY idx_task_trip_status (trip_id, status, created_at),
+                        CONSTRAINT fk_task_trip FOREIGN KEY (trip_id) REFERENCES t_trip(id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_notification_attempt (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        task_id BIGINT UNSIGNED NOT NULL,
+                        attempt_no TINYINT UNSIGNED NOT NULL DEFAULT 1,
+                        channel ENUM('sms','wechat_work_group','email') NOT NULL,
+                        ok TINYINT(1) NOT NULL DEFAULT 0,
+                        reason VARCHAR(255) NOT NULL DEFAULT '',
+                        provider_message VARCHAR(255) NOT NULL DEFAULT '',
+                        latency_ms INT UNSIGNED NOT NULL DEFAULT 0,
+                        attempted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_task_attempt_no (task_id, attempt_no),
+                        KEY idx_attempted_at (attempted_at),
+                        CONSTRAINT fk_attempt_task FOREIGN KEY (task_id)
+                            REFERENCES t_notification_task(id) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
                 if has_table("t_notification_task"):
                     if not has_column("t_notification_task", "team_id"):
                         cursor.execute(
@@ -338,27 +586,16 @@ class JsonFileStore:
                             AFTER owner_user_id
                             """
                         )
-                    cursor.execute(
-                        """
-                        UPDATE t_trip
-                        SET tenant_id = %s
-                        WHERE tenant_id IS NULL OR tenant_id = ''
-                        """,
-                        (DEFAULT_TENANT_ID,),
-                    )
-
-                if has_table("t_notification_template"):
-                    if not has_column("t_notification_template", "tenant_id"):
+                    if not has_column("t_trip", "ext_data"):
                         cursor.execute(
-                            f"""
-                            ALTER TABLE t_notification_template
-                            ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}'
-                            AFTER template_name
+                            """
+                            ALTER TABLE t_trip
+                            ADD COLUMN ext_data JSON NULL AFTER tenant_id
                             """
                         )
                     cursor.execute(
                         """
-                        UPDATE t_notification_template
+                        UPDATE t_trip
                         SET tenant_id = %s
                         WHERE tenant_id IS NULL OR tenant_id = ''
                         """,
@@ -460,6 +697,8 @@ class JsonFileStore:
             return self._read_mysql_trips()
         if collection == "templates":
             return self._read_mysql_templates()
+        if collection == "project_notification_configs":
+            return self._read_mysql_project_notification_configs()
         if collection == "notification_rules":
             return self._read_mysql_notification_rules()
         if collection == "notification_attempts":
@@ -469,6 +708,9 @@ class JsonFileStore:
     def _write_collection_mysql(self, collection: str, items: list[dict[str, Any]]) -> None:
         if collection == "templates":
             self._write_mysql_templates(items)
+            return
+        if collection == "project_notification_configs":
+            self._write_mysql_project_notification_configs(items)
             return
         if collection == "notification_rules":
             self._write_mysql_notification_rules(items)
@@ -486,6 +728,9 @@ class JsonFileStore:
         if collection == "trips":
             self._upsert_mysql_trip(item, key)
             return item
+        if collection == "project_notification_configs":
+            self._upsert_mysql_project_notification_config(item, key)
+            return item
         self._upsert_mysql_generic(collection, item, key)
         return item
 
@@ -494,6 +739,8 @@ class JsonFileStore:
             return self._delete_mysql_trip(item_id)
         if collection == "templates" and key == "id":
             return self._delete_mysql_template(item_id)
+        if collection == "project_notification_configs" and key == "project_id":
+            return self._delete_mysql_project_notification_config(item_id)
         if collection == "notification_rules" and key == "id":
             return self._delete_mysql_rule(item_id)
         return self._delete_mysql_generic(collection, item_id, key)
@@ -508,6 +755,7 @@ class JsonFileStore:
                 cursor.execute("TRUNCATE TABLE t_notification_rule_channel")
                 cursor.execute("TRUNCATE TABLE t_notification_rule")
                 cursor.execute("TRUNCATE TABLE t_notification_template")
+                cursor.execute("TRUNCATE TABLE t_project_notification_config")
                 cursor.execute("TRUNCATE TABLE t_trip")
                 cursor.execute("TRUNCATE TABLE t_collection_store")
                 cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
@@ -521,7 +769,7 @@ class JsonFileStore:
                 cursor.execute(
                     """
                     SELECT trip_code, destination, team_id, start_date, end_date,
-                           participants, status, owner_user_id, tenant_id, created_at, updated_at
+                           participants, status, ext_data, owner_user_id, tenant_id, created_at, updated_at
                     FROM t_trip
                     ORDER BY created_at DESC, id DESC
                     """
@@ -533,22 +781,35 @@ class JsonFileStore:
         items: list[dict[str, Any]] = []
         for row in rows:
             team_id = str(row.get("team_id") or "")
-            items.append(
-                {
-                    "id": str(row.get("trip_code") or ""),
-                    "destination": str(row.get("destination") or ""),
-                    "team": team_id,
-                    "team_id": team_id,
-                    "start_date": _to_iso_date(row.get("start_date")),
-                    "end_date": _to_iso_date(row.get("end_date")),
-                    "participants": int(row.get("participants") or 0),
-                    "status": _normalize_trip_status(row.get("status")),
-                    "user_id": str(row.get("owner_user_id") or ""),
-                    "tenant_id": _normalize_tenant_id(row.get("tenant_id")),
-                    "created_at": _to_iso_datetime(row.get("created_at")),
-                    "updated_at": _to_iso_datetime(row.get("updated_at")),
-                }
-            )
+            ext_data_raw = row.get("ext_data")
+            ext_data = {}
+            if isinstance(ext_data_raw, str):
+                try:
+                    ext_data = json.loads(ext_data_raw)
+                except json.JSONDecodeError:
+                    pass
+            elif isinstance(ext_data_raw, dict):
+                ext_data = ext_data_raw
+
+            trip_item = {
+                "id": str(row.get("trip_code") or ""),
+                "destination": str(row.get("destination") or ""),
+                "team": team_id,
+                "team_id": team_id,
+                "start_date": _to_iso_date(row.get("start_date")),
+                "end_date": _to_iso_date(row.get("end_date")),
+                "participants": int(row.get("participants") or 0),
+                "status": _normalize_trip_status(row.get("status")),
+                "user_id": str(row.get("owner_user_id") or ""),
+                "tenant_id": _normalize_tenant_id(row.get("tenant_id")),
+                "created_at": _to_iso_datetime(row.get("created_at")),
+                "updated_at": _to_iso_datetime(row.get("updated_at")),
+            }
+            # 合并扩展数据 (itinerary, guests)
+            if isinstance(ext_data, dict):
+                trip_item.update(ext_data)
+
+            items.append(trip_item)
         return items
 
     def _upsert_mysql_trip(self, item: dict[str, Any], key: str = "id") -> None:
@@ -560,6 +821,12 @@ class JsonFileStore:
         created_at = _to_mysql_datetime(item.get("created_at"))
         updated_at = _to_mysql_datetime(item.get("updated_at"))
 
+        # 提取扩展数据
+        ext_data = {
+            "itinerary": item.get("itinerary", []),
+            "guests": item.get("guests", []),
+        }
+
         connection = self._mysql_connect()
         try:
             with connection.cursor() as cursor:
@@ -567,8 +834,8 @@ class JsonFileStore:
                     """
                     INSERT INTO t_trip
                     (trip_code, destination, team_id, start_date, end_date, participants, status,
-                     owner_user_id, tenant_id, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     ext_data, owner_user_id, tenant_id, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                       destination = VALUES(destination),
                       team_id = VALUES(team_id),
@@ -576,6 +843,7 @@ class JsonFileStore:
                       end_date = VALUES(end_date),
                       participants = VALUES(participants),
                       status = VALUES(status),
+                      ext_data = VALUES(ext_data),
                       owner_user_id = VALUES(owner_user_id),
                       tenant_id = VALUES(tenant_id),
                       updated_at = VALUES(updated_at)
@@ -588,6 +856,7 @@ class JsonFileStore:
                         _to_mysql_date(item.get("end_date")),
                         int(item.get("participants") or 0),
                         _normalize_trip_status(item.get("status")),
+                        json.dumps(ext_data, ensure_ascii=False),
                         str(item.get("user_id") or "admin"),
                         _normalize_tenant_id(item.get("tenant_id")),
                         created_at,
@@ -635,7 +904,9 @@ class JsonFileStore:
                 cursor.execute(
                     """
                     SELECT template_code, template_name, notification_type, channel,
-                           tenant_id, content, version, is_active, created_at, updated_at
+                           tenant_id, project_id, stage, time_slot, scene,
+                           sms_sign_name, provider_template_code,
+                           content, version, is_active, created_at, updated_at
                     FROM t_notification_template
                     ORDER BY updated_at DESC, id DESC
                     """
@@ -657,8 +928,14 @@ class JsonFileStore:
                     "name": str(row.get("template_name") or ""),
                     "version": int(row.get("version") or 1),
                     "tenant_id": _normalize_tenant_id(row.get("tenant_id")),
+                    "project_id": str(row.get("project_id") or ""),
                     "notification_type": _normalize_notification_type(row.get("notification_type")),
                     "channel": _normalize_channel(row.get("channel")),
+                    "stage": str(row.get("stage") or ""),
+                    "time_slot": str(row.get("time_slot") or ""),
+                    "scene": str(row.get("scene") or ""),
+                    "sms_sign_name": str(row.get("sms_sign_name") or ""),
+                    "provider_template_code": str(row.get("provider_template_code") or ""),
                     "content": str(row.get("content") or ""),
                     "is_active": bool(row.get("is_active")),
                     "created_at": _to_iso_datetime(row.get("created_at")),
@@ -678,14 +955,21 @@ class JsonFileStore:
                     cursor.execute(
                         """
                         INSERT INTO t_notification_template
-                        (template_code, template_name, tenant_id, notification_type, channel, content,
+                        (template_code, template_name, tenant_id, project_id, notification_type, channel,
+                         stage, time_slot, scene, sms_sign_name, provider_template_code, content,
                          version, is_active, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
                           template_name = VALUES(template_name),
                           tenant_id = VALUES(tenant_id),
+                          project_id = VALUES(project_id),
                           notification_type = VALUES(notification_type),
                           channel = VALUES(channel),
+                          stage = VALUES(stage),
+                          time_slot = VALUES(time_slot),
+                          scene = VALUES(scene),
+                          sms_sign_name = VALUES(sms_sign_name),
+                          provider_template_code = VALUES(provider_template_code),
                           content = VALUES(content),
                           version = VALUES(version),
                           is_active = VALUES(is_active),
@@ -695,8 +979,14 @@ class JsonFileStore:
                             template_code,
                             str(raw.get("name") or ""),
                             _normalize_tenant_id(raw.get("tenant_id")),
+                            str(raw.get("project_id") or ""),
                             _normalize_notification_type(raw.get("notification_type")),
                             _normalize_channel(raw.get("channel")),
+                            str(raw.get("stage") or ""),
+                            str(raw.get("time_slot") or ""),
+                            str(raw.get("scene") or ""),
+                            str(raw.get("sms_sign_name") or ""),
+                            str(raw.get("provider_template_code") or ""),
                             str(raw.get("content") or ""),
                             max(int(raw.get("version") or 1), 1),
                             1 if bool(raw.get("is_active", True)) else 0,
@@ -704,6 +994,145 @@ class JsonFileStore:
                             _to_mysql_datetime(raw.get("updated_at")),
                         ),
                     )
+        finally:
+            connection.close()
+
+    def _read_mysql_project_notification_configs(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT tenant_id, project_id, project_name, weather_enabled,
+                           qweather_credential_id, qweather_location_id, qweather_lat, qweather_lon,
+                           weather_alert_threshold_json, sms_provider, sms_sign_name,
+                           sms_template_code_normal, sms_template_code_weather_alert,
+                           manual_takeover_target, created_at, updated_at
+                    FROM t_project_notification_config
+                    ORDER BY updated_at DESC, id DESC
+                    """
+                )
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            items.append(
+                {
+                    "tenant_id": _normalize_tenant_id(row.get("tenant_id")),
+                    "project_id": str(row.get("project_id") or ""),
+                    "project_name": str(row.get("project_name") or ""),
+                    "weather_enabled": bool(row.get("weather_enabled", True)),
+                    "qweather_credential_id": str(row.get("qweather_credential_id") or ""),
+                    "qweather_location_id": str(row.get("qweather_location_id") or ""),
+                    "qweather_lat": str(row.get("qweather_lat") or ""),
+                    "qweather_lon": str(row.get("qweather_lon") or ""),
+                    "weather_alert_thresholds": _parse_json_object(
+                        row.get("weather_alert_threshold_json")
+                    ),
+                    "sms_provider": str(row.get("sms_provider") or "aliyun"),
+                    "sms_sign_name": str(row.get("sms_sign_name") or ""),
+                    "sms_template_code_normal": str(row.get("sms_template_code_normal") or ""),
+                    "sms_template_code_weather_alert": str(
+                        row.get("sms_template_code_weather_alert") or ""
+                    ),
+                    "manual_takeover_target": str(row.get("manual_takeover_target") or ""),
+                    "created_at": _to_iso_datetime(row.get("created_at")),
+                    "updated_at": _to_iso_datetime(row.get("updated_at")),
+                }
+            )
+        return items
+
+    def _write_mysql_project_notification_configs(self, items: list[dict[str, Any]]) -> None:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                for item in items:
+                    self._upsert_mysql_project_notification_config(
+                        item, "project_id", cursor=cursor
+                    )
+        finally:
+            connection.close()
+
+    def _upsert_mysql_project_notification_config(
+        self,
+        item: dict[str, Any],
+        key: str = "project_id",
+        *,
+        cursor: Any | None = None,
+    ) -> None:
+        project_id = str(item.get(key) or item.get("project_id") or "").strip()
+        if not project_id:
+            raise ValueError("project_id is required")
+
+        owned_connection = None
+        if cursor is None:
+            owned_connection = self._mysql_connect()
+            cursor = owned_connection.cursor()
+
+        try:
+            cursor.execute(
+                """
+                INSERT INTO t_project_notification_config
+                (tenant_id, project_id, project_name, weather_enabled,
+                 qweather_credential_id, qweather_location_id, qweather_lat, qweather_lon,
+                 weather_alert_threshold_json, sms_provider, sms_sign_name,
+                 sms_template_code_normal, sms_template_code_weather_alert,
+                 manual_takeover_target, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  project_name = VALUES(project_name),
+                  weather_enabled = VALUES(weather_enabled),
+                  qweather_credential_id = VALUES(qweather_credential_id),
+                  qweather_location_id = VALUES(qweather_location_id),
+                  qweather_lat = VALUES(qweather_lat),
+                  qweather_lon = VALUES(qweather_lon),
+                  weather_alert_threshold_json = VALUES(weather_alert_threshold_json),
+                  sms_provider = VALUES(sms_provider),
+                  sms_sign_name = VALUES(sms_sign_name),
+                  sms_template_code_normal = VALUES(sms_template_code_normal),
+                  sms_template_code_weather_alert = VALUES(sms_template_code_weather_alert),
+                  manual_takeover_target = VALUES(manual_takeover_target),
+                  updated_at = VALUES(updated_at)
+                """,
+                (
+                    _normalize_tenant_id(item.get("tenant_id")),
+                    project_id,
+                    str(item.get("project_name") or ""),
+                    1 if bool(item.get("weather_enabled", True)) else 0,
+                    str(item.get("qweather_credential_id") or ""),
+                    str(item.get("qweather_location_id") or ""),
+                    str(item.get("qweather_lat") or ""),
+                    str(item.get("qweather_lon") or ""),
+                    json.dumps(item.get("weather_alert_thresholds") or {}, ensure_ascii=False),
+                    str(item.get("sms_provider") or "aliyun"),
+                    str(item.get("sms_sign_name") or ""),
+                    str(item.get("sms_template_code_normal") or ""),
+                    str(item.get("sms_template_code_weather_alert") or ""),
+                    str(item.get("manual_takeover_target") or ""),
+                    _to_mysql_datetime(item.get("created_at")),
+                    _to_mysql_datetime(item.get("updated_at")),
+                ),
+            )
+            if owned_connection is not None:
+                owned_connection.commit()
+        finally:
+            if owned_connection is not None:
+                owned_connection.close()
+
+    def _delete_mysql_project_notification_config(self, project_id: str) -> bool:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                affected = cursor.execute(
+                    """
+                    DELETE FROM t_project_notification_config
+                    WHERE project_id = %s
+                    """,
+                    (project_id,),
+                )
+            return affected > 0
         finally:
             connection.close()
 
@@ -841,6 +1270,39 @@ class JsonFileStore:
                     "SELECT id, template_code FROM t_notification_template ORDER BY id ASC"
                 )
                 template_rows = cursor.fetchall()
+                if not template_rows:
+                    now = datetime.now(tz=UTC).replace(tzinfo=None)
+                    cursor.execute(
+                        """
+                        INSERT INTO t_notification_template
+                        (template_code, template_name, tenant_id, project_id, notification_type, channel,
+                         stage, time_slot, scene, sms_sign_name, provider_template_code, content,
+                         version, is_active, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            "tpl-bootstrap-default",
+                            "Bootstrap 默认模板",
+                            DEFAULT_TENANT_ID,
+                            "",
+                            "daily_reminder",
+                            "sms",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "{{customer_name}}，您好，请留意行程通知。",
+                            1,
+                            1,
+                            now,
+                            now,
+                        ),
+                    )
+                    cursor.execute(
+                        "SELECT id, template_code FROM t_notification_template ORDER BY id ASC"
+                    )
+                    template_rows = cursor.fetchall()
                 template_id_by_code = {
                     str(row.get("template_code") or ""): int(row.get("id") or 0)
                     for row in template_rows
@@ -1277,3 +1739,46 @@ class TripRepository:
 
     def delete(self, trip_id: str) -> bool:
         return self.store.delete(self.collection, trip_id)
+
+
+@dataclass(slots=True)
+class ProjectNotificationConfigRepository:
+    store: JsonFileStore
+    collection: str = "project_notification_configs"
+
+    def list(self, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        items = self.store.read_collection(self.collection)
+        if not tenant_id:
+            return items
+        return [item for item in items if item.get("tenant_id") == tenant_id]
+
+    def get(self, project_id: str, *, tenant_id: str) -> dict[str, Any] | None:
+        for item in self.list(tenant_id=tenant_id):
+            if str(item.get("project_id") or "") == project_id:
+                return item
+        return None
+
+    def upsert(self, payload: dict[str, Any]) -> dict[str, Any]:
+        item = dict(payload)
+        item["tenant_id"] = _normalize_tenant_id(item.get("tenant_id"))
+        item["project_id"] = str(item.get("project_id") or "").strip()
+        if not item["project_id"]:
+            raise ValueError("project_id is required")
+        item["project_name"] = str(item.get("project_name") or "")
+        item["weather_enabled"] = bool(item.get("weather_enabled", True))
+        item["qweather_credential_id"] = str(item.get("qweather_credential_id") or "")
+        item["qweather_location_id"] = str(item.get("qweather_location_id") or "")
+        item["qweather_lat"] = str(item.get("qweather_lat") or "")
+        item["qweather_lon"] = str(item.get("qweather_lon") or "")
+        item["weather_alert_thresholds"] = _parse_json_object(item.get("weather_alert_thresholds"))
+        item["sms_provider"] = str(item.get("sms_provider") or "aliyun")
+        item["sms_sign_name"] = str(item.get("sms_sign_name") or "")
+        item["sms_template_code_normal"] = str(item.get("sms_template_code_normal") or "")
+        item["sms_template_code_weather_alert"] = str(
+            item.get("sms_template_code_weather_alert") or ""
+        )
+        item["manual_takeover_target"] = str(item.get("manual_takeover_target") or "")
+        if not item.get("created_at"):
+            item["created_at"] = datetime.now(tz=UTC).isoformat()
+        item["updated_at"] = datetime.now(tz=UTC).isoformat()
+        return self.store.upsert(self.collection, item, key="project_id")

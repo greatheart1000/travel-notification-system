@@ -200,7 +200,8 @@ class AnalyticsService:
             < str(last_7_days)
         ]
         wow_growth = 0.0
-        wow_growth = round(((len(recent) - len(previous)) / len(previous)) * 100, 1)
+        if previous:
+            wow_growth = round(((len(recent) - len(previous)) / len(previous)) * 100, 1)
 
         by_channel: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in facts:

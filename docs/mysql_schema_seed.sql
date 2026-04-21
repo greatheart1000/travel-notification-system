@@ -10,6 +10,7 @@ DROP TABLE IF EXISTS t_notification_task;
 DROP TABLE IF EXISTS t_notification_rule_channel;
 DROP TABLE IF EXISTS t_notification_rule;
 DROP TABLE IF EXISTS t_notification_template;
+DROP TABLE IF EXISTS t_project_notification_config;
 DROP TABLE IF EXISTS t_lifecycle_playbook;
 DROP TABLE IF EXISTS t_trip;
 
@@ -53,8 +54,14 @@ CREATE TABLE t_notification_template (
     template_code       VARCHAR(64) NOT NULL COMMENT '模板编码（业务唯一）',
     template_name       VARCHAR(128) NOT NULL,
     tenant_id           VARCHAR(64) NOT NULL DEFAULT 'tenant-a' COMMENT '租户ID',
+    project_id          VARCHAR(64) NOT NULL DEFAULT '' COMMENT '项目ID，空表示租户默认模板',
     notification_type   ENUM('pre_trip_reminder','daily_reminder','risk_alert','satisfaction','farewell') NOT NULL DEFAULT 'daily_reminder',
     channel             ENUM('sms','wechat_work_group','email') NOT NULL DEFAULT 'sms',
+    stage               VARCHAR(32) NOT NULL DEFAULT '' COMMENT 'pre_trip/in_trip/post_trip',
+    time_slot           VARCHAR(32) NOT NULL DEFAULT '' COMMENT 'morning/afternoon/evening',
+    scene               VARCHAR(32) NOT NULL DEFAULT '' COMMENT 'normal/weather_alert 等',
+    sms_sign_name       VARCHAR(64) NOT NULL DEFAULT '' COMMENT '项目短信签名',
+    provider_template_code VARCHAR(64) NOT NULL DEFAULT '' COMMENT '供应商模板码',
     content             TEXT NOT NULL COMMENT '模板内容，支持变量 {{customer_name}}',
     version             INT UNSIGNED NOT NULL DEFAULT 1,
     is_active           TINYINT(1) NOT NULL DEFAULT 1,
@@ -64,6 +71,29 @@ CREATE TABLE t_notification_template (
     UNIQUE KEY uk_template_code_version (template_code, version),
     KEY idx_template_active (is_active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='通知模板表';
+
+CREATE TABLE t_project_notification_config (
+    id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'tenant-a' COMMENT '租户ID',
+    project_id          VARCHAR(64) NOT NULL COMMENT '项目ID',
+    project_name        VARCHAR(128) NOT NULL DEFAULT '' COMMENT '项目名称',
+    weather_enabled     TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用天气能力',
+    qweather_credential_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '和风天气凭据ID',
+    qweather_location_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '默认城市ID',
+    qweather_lat        VARCHAR(32) NOT NULL DEFAULT '' COMMENT '纬度',
+    qweather_lon        VARCHAR(32) NOT NULL DEFAULT '' COMMENT '经度',
+    weather_alert_threshold_json JSON NULL COMMENT '天气预警阈值配置',
+    sms_provider        VARCHAR(32) NOT NULL DEFAULT 'aliyun' COMMENT '短信供应商',
+    sms_sign_name       VARCHAR(64) NOT NULL DEFAULT '' COMMENT '短信签名',
+    sms_template_code_normal VARCHAR(64) NOT NULL DEFAULT '' COMMENT '常规短信模板码',
+    sms_template_code_weather_alert VARCHAR(64) NOT NULL DEFAULT '' COMMENT '天气预警短信模板码',
+    manual_takeover_target VARCHAR(128) NOT NULL DEFAULT '' COMMENT '人工接管群/负责人',
+    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_project_notification_config (tenant_id, project_id),
+    KEY idx_project_name (project_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='项目级通知与天气配置表';
 
 CREATE TABLE t_notification_rule (
     id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -160,30 +190,45 @@ VALUES
 ('post_trip', '下团后短期内', '售后跟进+客户存档', '1. 做好游客后续跟进及全流程售后服务；2. 对高品质游客信息进行专项存档，同步反馈给销售岗位。', 90),
 ('post_trip', '售后末期', '群聊解散', '向游客发送群解散通知及祝福，正式解散游客服务群。', 100);
 
-INSERT INTO t_notification_template (template_code, template_name, tenant_id, notification_type, channel, content, version, is_active)
+INSERT INTO t_notification_template (
+    template_code, template_name, tenant_id, project_id, notification_type, channel,
+    stage, time_slot, scene, sms_sign_name, provider_template_code, content, version, is_active
+)
 VALUES
-('tpl-default-trip-start', '默认行程提醒', 'tenant-a', 'daily_reminder', 'sms', '{{customer_name}}，您的{{destination}}行程即将开始，请准时集合。', 1, 1),
-('tpl-pretrip-flight-notice', '行前3天-航班与行前提示', 'tenant-a', 'pre_trip_reminder', 'wechat_work_group', '亲爱的游客朋友们：请确认航班和证件信息，提前2-3小时到机场，注意行李规格和安检要求。', 1, 1),
-('tpl-pretrip-group-welcome', '行前1天-入群欢迎词', 'tenant-a', 'pre_trip_reminder', 'wechat_work_group', '欢迎来到美丽的新疆！我是您的专属AI小管家小琪，旅途中有需求随时联系。', 1, 1),
-('tpl-ontrip-urumqi-day1', '落地首日-乌鲁木齐推荐', 'tenant-a', 'daily_reminder', 'wechat_work_group', '落地首日推荐：国际大巴扎、新疆美术馆、新疆古生态园；请注意时差和安保检查。', 1, 1),
-('tpl-ontrip-morning-spring', '晨间提示-春季', 'tenant-a', 'daily_reminder', 'sms', '春季早晚温差大，请添衣保暖；上车后请全员系好安全带。', 1, 1),
-('tpl-ontrip-morning-summer', '晨间提示-夏季', 'tenant-a', 'daily_reminder', 'sms', '夏季紫外线强，请防晒补水；上车后请全员系好安全带。', 1, 1),
-('tpl-ontrip-morning-autumn', '晨间提示-秋季', 'tenant-a', 'daily_reminder', 'sms', '秋季清晨偏冷，请检查行李并增添外套；上车后请全员系好安全带。', 1, 1),
-('tpl-ontrip-morning-winter', '晨间提示-冬季', 'tenant-a', 'daily_reminder', 'sms', '冬季低温路滑，请做好保暖与防滑；上车后请全员系好安全带。', 1, 1),
-('tpl-ontrip-noon-rainy', '场景提示-雨天', 'tenant-a', 'risk_alert', 'wechat_work_group', '雨天道路湿滑，请备好雨具、减速慢行，优先选择室内就餐并及时更换干爽衣物。', 1, 1),
-('tpl-ontrip-scene-horse', '场景提示-骑马', 'tenant-a', 'risk_alert', 'wechat_work_group', '请选择正规马队，检查骑具，按教练指导操作，不要靠近马后方。', 1, 1),
-('tpl-ontrip-scene-ski', '场景提示-滑雪日', 'tenant-a', 'risk_alert', 'wechat_work_group', '滑雪前请准备防风保暖装备，佩戴头盔雪镜并充分热身。', 1, 1),
-('tpl-ontrip-evening-preview', '晚间播报-次日行程', 'tenant-a', 'daily_reminder', 'wechat_work_group', '明日行程与天气提醒已更新，请按时集合，退房时带齐随身物品。', 1, 1),
-('tpl-ontrip-issue-coordination', '行中协同-问题协调', 'tenant-a', 'risk_alert', 'wechat_work_group', '如遇酒店/车辆/景区问题，请在群内@管家和司导，我们将第一时间协调处理。', 1, 1),
-('tpl-posttrip-survey', '下团满意度回访', 'tenant-a', 'satisfaction', 'sms', '感谢本次新疆之行，欢迎填写满意度问卷：{{survey_link}}。', 1, 1),
-('tpl-posttrip-farewell', '下团欢送词', 'tenant-a', 'farewell', 'wechat_work_group', '感谢大家的陪伴与支持，祝一路平安，欢迎再来新疆！', 1, 1),
-('tpl-posttrip-group-close', '解散群文案', 'tenant-a', 'farewell', 'wechat_work_group', '感谢同行，本群即将解散，感恩相伴，顺颂时祺。', 1, 1);
+('tpl-default-trip-start', '默认行程提醒', 'tenant-a', '', 'daily_reminder', 'sms', '', '', '', '', '', '{{customer_name}}，您的{{destination}}行程即将开始，请准时集合。', 1, 1),
+('tpl-pretrip-flight-notice', '行前3天-航班与行前提示', 'tenant-a', '', 'pre_trip_reminder', 'wechat_work_group', 'pre_trip', 'morning', 'normal', '', '', '亲爱的游客朋友们：请确认航班和证件信息，提前2-3小时到机场，注意行李规格和安检要求。', 1, 1),
+('tpl-pretrip-group-welcome', '行前1天-入群欢迎词', 'tenant-a', '', 'pre_trip_reminder', 'wechat_work_group', 'pre_trip', 'evening', 'normal', '', '', '欢迎来到美丽的新疆！我是您的专属AI小管家小琪，旅途中有需求随时联系。', 1, 1),
+('tpl-ontrip-urumqi-day1', '落地首日-乌鲁木齐推荐', 'tenant-a', '', 'daily_reminder', 'wechat_work_group', 'in_trip', 'afternoon', 'normal', '', '', '落地首日推荐：国际大巴扎、新疆美术馆、新疆古生态园；请注意时差和安保检查。', 1, 1),
+('tpl-ontrip-morning-spring', '晨间提示-春季', 'tenant-a', '', 'daily_reminder', 'sms', 'in_trip', 'morning', 'normal', '', '', '春季早晚温差大，请添衣保暖；上车后请全员系好安全带。', 1, 1),
+('tpl-ontrip-morning-summer', '晨间提示-夏季', 'tenant-a', '', 'daily_reminder', 'sms', 'in_trip', 'morning', 'normal', '', '', '夏季紫外线强，请防晒补水；上车后请全员系好安全带。', 1, 1),
+('tpl-ontrip-morning-autumn', '晨间提示-秋季', 'tenant-a', '', 'daily_reminder', 'sms', 'in_trip', 'morning', 'normal', '', '', '秋季清晨偏冷，请检查行李并增添外套；上车后请全员系好安全带。', 1, 1),
+('tpl-ontrip-morning-winter', '晨间提示-冬季', 'tenant-a', '', 'daily_reminder', 'sms', 'in_trip', 'morning', 'normal', '', '', '冬季低温路滑，请做好保暖与防滑；上车后请全员系好安全带。', 1, 1),
+('tpl-ontrip-noon-rainy', '场景提示-雨天', 'tenant-a', '', 'risk_alert', 'wechat_work_group', 'in_trip', 'afternoon', 'weather_alert', '', '', '雨天道路湿滑，请备好雨具、减速慢行，优先选择室内就餐并及时更换干爽衣物。', 1, 1),
+('tpl-ontrip-scene-horse', '场景提示-骑马', 'tenant-a', '', 'risk_alert', 'wechat_work_group', 'in_trip', 'afternoon', 'weather_alert', '', '', '请选择正规马队，检查骑具，按教练指导操作，不要靠近马后方。', 1, 1),
+('tpl-ontrip-scene-ski', '场景提示-滑雪日', 'tenant-a', '', 'risk_alert', 'wechat_work_group', 'in_trip', 'afternoon', 'weather_alert', '', '', '滑雪前请准备防风保暖装备，佩戴头盔雪镜并充分热身。', 1, 1),
+('tpl-ontrip-evening-preview', '晚间播报-次日行程', 'tenant-a', '', 'daily_reminder', 'wechat_work_group', 'in_trip', 'evening', 'normal', '', '', '明日行程与天气提醒已更新，请按时集合，退房时带齐随身物品。', 1, 1),
+('tpl-ontrip-issue-coordination', '行中协同-问题协调', 'tenant-a', '', 'risk_alert', 'wechat_work_group', 'in_trip', 'evening', 'weather_alert', '', '', '如遇酒店/车辆/景区问题，请在群内@管家和司导，我们将第一时间协调处理。', 1, 1),
+('tpl-posttrip-survey', '下团满意度回访', 'tenant-a', '', 'satisfaction', 'sms', 'post_trip', 'evening', 'normal', '', '', '感谢本次新疆之行，欢迎填写满意度问卷：{{survey_link}}。', 1, 1),
+('tpl-posttrip-farewell', '下团欢送词', 'tenant-a', '', 'farewell', 'wechat_work_group', 'post_trip', 'evening', 'normal', '', '', '感谢大家的陪伴与支持，祝一路平安，欢迎再来新疆！', 1, 1),
+('tpl-posttrip-group-close', '解散群文案', 'tenant-a', '', 'farewell', 'wechat_work_group', 'post_trip', 'evening', 'normal', '', '', '感谢同行，本群即将解散，感恩相伴，顺颂时祺。', 1, 1);
+
+INSERT INTO t_project_notification_config (
+    tenant_id, project_id, project_name, weather_enabled, qweather_credential_id,
+    qweather_location_id, qweather_lat, qweather_lon, weather_alert_threshold_json,
+    sms_provider, sms_sign_name, sms_template_code_normal, sms_template_code_weather_alert, manual_takeover_target
+)
+VALUES
+(
+    'tenant-a', 'proj-demo-xinjiang', '新疆阿勒泰团', 1, '',
+    '101130101', '43.82', '87.62', JSON_OBJECT('warning_levels', JSON_ARRAY('yellow', 'orange', 'red'), 'min_temp_c', 2),
+    'aliyun', '新疆团', 'SMS_XJ_NORMAL', 'SMS_XJ_ALERT', '管家值班群'
+);
 
 INSERT INTO t_notification_rule (rule_code, rule_name, tenant_id, stage, time_slot, scene, template_id, priority, enabled, conditions_json)
 VALUES
 ('rule-pre-3day', '行前3天沟通提醒', 'tenant-a', 'pre_trip', 'morning', 'normal', 1, 10, 1, JSON_OBJECT('time_node', '出发前3天')),
 ('rule-pre-1day', '行前1天保险核查提醒', 'tenant-a', 'pre_trip', 'evening', 'normal', 2, 20, 1, JSON_OBJECT('time_node', '出发前1天')),
-('rule-intrip-arrival', '落地当日本地指引', 'tenant-a', 'in_trip', 'afternoon', 'normal', 4, 30, 1, JSON_OBJECT('time_node', '游客落地乌鲁木齐当日')),
+('rule-intrip-arrival', '抵达当日当地指引', 'tenant-a', 'in_trip', 'afternoon', 'normal', 4, 30, 1, JSON_OBJECT('time_node', '游客落地乌鲁木齐当日')),
 ('rule-intrip-daily', '行中每日固定时段提醒', 'tenant-a', 'in_trip', 'all_day', 'normal', 12, 40, 1, JSON_OBJECT('time_node', '每日固定时段')),
 ('rule-intrip-scene', '特殊场景安全提醒', 'tenant-a', 'in_trip', 'afternoon', 'weather_alert', 9, 50, 1, JSON_OBJECT('time_node', '特殊游玩场景', 'scene_tags', JSON_ARRAY('骑马', '滑雪', '高原', '边境口岸', '极寒', '紫外线强'))),
 ('rule-posttrip-survey', '下团满意度调研', 'tenant-a', 'post_trip', 'evening', 'normal', 14, 60, 1, JSON_OBJECT('time_node', '下团即时'));

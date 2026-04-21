@@ -155,3 +155,119 @@ def test_template_service_loads_latest_version_for_same_template_code(monkeypatc
     assert template is not None
     assert template.version == 2
     assert template.name == "版本二"
+
+
+def test_project_notification_config_persists_to_mysql_table() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.put(
+        "/api/project-configs/proj-xinjiang",
+        headers=headers,
+        json={
+            "project_name": "新疆阿勒泰团",
+            "weather_enabled": True,
+            "qweather_location_id": "101130101",
+            "weather_alert_thresholds": {"warning_levels": ["orange", "red"]},
+            "sms_sign_name": "新疆团",
+            "sms_template_code_normal": "SMS_XJ_NORMAL",
+            "sms_template_code_weather_alert": "SMS_XJ_ALERT",
+        },
+    )
+    assert response.status_code == 200
+
+    with _mysql_connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT project_id, project_name, sms_sign_name,
+                       sms_template_code_normal, sms_template_code_weather_alert,
+                       weather_alert_threshold_json
+                FROM t_project_notification_config
+                WHERE tenant_id = %s AND project_id = %s
+                """,
+                ("tenant-a", "proj-xinjiang"),
+            )
+            row = cursor.fetchone()
+            assert row is not None
+            assert row["project_name"] == "新疆阿勒泰团"
+            assert row["sms_sign_name"] == "新疆团"
+            assert row["sms_template_code_normal"] == "SMS_XJ_NORMAL"
+            assert row["sms_template_code_weather_alert"] == "SMS_XJ_ALERT"
+            assert "orange" in str(row["weather_alert_threshold_json"])
+
+
+def test_mysql_schema_contains_project_notification_config_table() -> None:
+    reset_state(purge_persistence=True)
+
+    with _mysql_connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SHOW COLUMNS FROM t_project_notification_config")
+            columns = {row["Field"] for row in cursor.fetchall()}
+
+    assert {
+        "tenant_id",
+        "project_id",
+        "project_name",
+        "weather_alert_threshold_json",
+        "sms_sign_name",
+        "sms_template_code_normal",
+        "sms_template_code_weather_alert",
+    }.issubset(columns)
+
+
+def test_mysql_template_schema_migration_does_not_depend_on_rule_table() -> None:
+    with _mysql_connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+            cursor.execute("DROP TABLE IF EXISTS t_notification_attempt")
+            cursor.execute("DROP TABLE IF EXISTS t_notification_task")
+            cursor.execute("DROP TABLE IF EXISTS t_notification_rule_channel")
+            cursor.execute("DROP TABLE IF EXISTS t_notification_rule")
+            cursor.execute("DROP TABLE IF EXISTS t_notification_template")
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+            cursor.execute(
+                """
+                CREATE TABLE t_notification_template (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    template_code VARCHAR(64) NOT NULL,
+                    template_name VARCHAR(128) NOT NULL,
+                    notification_type ENUM(
+                        'pre_trip_reminder',
+                        'daily_reminder',
+                        'risk_alert',
+                        'satisfaction',
+                        'farewell'
+                    ) NOT NULL DEFAULT 'daily_reminder',
+                    channel ENUM('sms','wechat_work_group','email') NOT NULL DEFAULT 'sms',
+                    content TEXT NOT NULL,
+                    version INT UNSIGNED NOT NULL DEFAULT 1,
+                    is_active TINYINT(1) NOT NULL DEFAULT 1,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_template_code_version (template_code, version)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                """
+            )
+
+    JsonFileStore()
+
+    with _mysql_connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SHOW TABLES LIKE 't_notification_rule'")
+            assert cursor.fetchone() is not None
+            cursor.execute("SHOW COLUMNS FROM t_notification_template")
+            columns = {row["Field"] for row in cursor.fetchall()}
+
+    assert {
+        "tenant_id",
+        "project_id",
+        "stage",
+        "time_slot",
+        "scene",
+        "sms_sign_name",
+        "provider_template_code",
+    }.issubset(columns)

@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from app.core.models import Channel
 from app.modules.integration.persistence import JsonFileStore
-from app.modules.integration.sms_provider import MockSMSProvider, SMSProvider
+from app.modules.integration.sms_provider import SMSProvider, get_sms_provider
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import (
     DispatchStatus,
@@ -22,7 +22,12 @@ UTC = UTC
 
 
 class ChannelProvider(Protocol):
-    def send(self, customer_id: str, content: str) -> tuple[bool, str]:
+    def send(
+        self,
+        customer_id: str,
+        content: str,
+        provider_context: dict[str, str] | None = None,
+    ) -> tuple[bool, str]:
         """Return (ok, provider_message)."""
 
 
@@ -32,17 +37,34 @@ class RealWorldSMSProvider:
     def __init__(self, provider: SMSProvider):
         self.provider = provider
 
-    def send(self, customer_id: str, content: str) -> tuple[bool, str]:
+    def send(
+        self,
+        customer_id: str,
+        content: str,
+        provider_context: dict[str, str] | None = None,
+    ) -> tuple[bool, str]:
         # 假设 customer_id 就是手机号，实际场景需要从 Repository 查询
         phone = customer_id if customer_id.isdigit() else "13800000000"
-        result = self.provider.send_sms(phone, content)
+        metadata = provider_context or {}
+        result = self.provider.send_sms(
+            phone,
+            content,
+            sign_name=metadata.get("sms_sign_name", "TravelHub"),
+            template_code=metadata.get("provider_template_code", ""),
+            template_params=metadata.get("template_params"),
+        )
         return result["ok"], result.get("msg_id", result.get("error", "unknown"))
 
 
 class StubProvider:
     """Default provider used in MVP demo/tests."""
 
-    def send(self, customer_id: str, content: str) -> tuple[bool, str]:
+    def send(
+        self,
+        customer_id: str,
+        content: str,
+        provider_context: dict[str, str] | None = None,
+    ) -> tuple[bool, str]:
         if not content.strip():
             return False, "empty_content"
         return True, f"accepted:{customer_id}"
@@ -129,7 +151,7 @@ class NotificationService:
         attempt_repository: NotificationAttemptRepository | None = None,
     ) -> None:
         default_provider = StubProvider()
-        sms_backend = RealWorldSMSProvider(MockSMSProvider())
+        sms_backend = RealWorldSMSProvider(get_sms_provider())
         self.providers: dict[Channel, ChannelProvider] = providers or {
             Channel.SMS: sms_backend,
             Channel.WECHAT_WORK_GROUP: default_provider,
@@ -178,7 +200,14 @@ class NotificationService:
 
             for attempt in range(1, task.max_retry + 1):
                 start = monotonic()
-                ok, provider_message = provider.send(task.customer_id, task.rendered_content)
+                try:
+                    ok, provider_message = provider.send(
+                        task.customer_id,
+                        task.rendered_content,
+                        task.provider_context,
+                    )
+                except TypeError:
+                    ok, provider_message = provider.send(task.customer_id, task.rendered_content)
                 latency_ms = int((monotonic() - start) * 1000)
                 task.retry_count += 1
                 task.attempts.append(

@@ -104,6 +104,32 @@
   - `limit` 可选，不合法时回退到 `10`
   - `200`: 最近通知列表
 
+### Project Configs
+
+- `GET /api/project-configs`
+  - Auth: admin
+  - `200`: `data.total`, `data.items[]`
+- `GET /api/project-configs/{project_id}`
+  - Auth: admin
+  - `200`: 项目级天气/短信配置
+  - `404`: `Project config not found`
+- `PUT /api/project-configs/{project_id}`
+  - Auth: admin
+  - `200`: upsert 后的项目配置
+  - 请求体支持：
+    - `project_name`
+    - `weather_enabled`
+    - `qweather_credential_id`
+    - `qweather_location_id`
+    - `qweather_lat`
+    - `qweather_lon`
+    - `weather_alert_thresholds`
+    - `sms_provider`
+    - `sms_sign_name`
+    - `sms_template_code_normal`
+    - `sms_template_code_weather_alert`
+    - `manual_takeover_target`
+
 #### Rules V2 第一批（`/api/notifications/rules*`）
 
 #### `GET /api/notifications/rules`

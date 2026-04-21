@@ -69,7 +69,9 @@ class TemplateService:
             with connection.cursor(connector.cursors.DictCursor) as cursor:
                 cursor.execute(
                     """
-                    SELECT t.template_code, t.template_name, t.notification_type, t.channel,
+                    SELECT t.template_code, t.template_name, t.tenant_id, t.project_id,
+                           t.notification_type, t.channel, t.stage, t.time_slot, t.scene,
+                           t.sms_sign_name, t.provider_template_code,
                            t.content, t.version, t.is_active
                     FROM t_notification_template AS t
                     INNER JOIN (
@@ -90,12 +92,19 @@ class TemplateService:
     def _from_mysql_row(self, row: dict[str, Any]) -> NotificationTemplate:
         template = NotificationTemplate(
             id=str(row.get("template_code", "")),
+            tenant_id=str(row.get("tenant_id", "")),
+            project_id=str(row.get("project_id", "")),
             name=str(row.get("template_name", "")),
             version=int(row.get("version", 1)),
             notification_type=self._parse_notification_type(
                 str(row.get("notification_type", "daily_reminder"))
             ),
             channel=self._parse_channel(str(row.get("channel", "sms"))),
+            stage=str(row.get("stage", "")),
+            time_slot=str(row.get("time_slot", "")),
+            scene=str(row.get("scene", "")),
+            sms_sign_name=str(row.get("sms_sign_name", "")),
+            provider_template_code=str(row.get("provider_template_code", "")),
             content=str(row.get("content", "")),
             is_active=bool(row.get("is_active", True)),
         )
@@ -131,10 +140,16 @@ class TemplateService:
         return {
             "id": template.id,
             "tenant_id": template.tenant_id,
+            "project_id": template.project_id,
             "name": template.name,
             "version": template.version,
             "notification_type": template.notification_type.value,
             "channel": template.channel.value,
+            "stage": template.stage,
+            "time_slot": template.time_slot,
+            "scene": template.scene,
+            "sms_sign_name": template.sms_sign_name,
+            "provider_template_code": template.provider_template_code,
             "content": template.content,
             "is_active": template.is_active,
             "created_at": template.created_at.isoformat(),
@@ -145,12 +160,18 @@ class TemplateService:
         return NotificationTemplate(
             id=str(row.get("id", "")),
             tenant_id=str(row.get("tenant_id", "")),
+            project_id=str(row.get("project_id", "")),
             name=str(row.get("name", "")),
             version=int(row.get("version", 1)),
             notification_type=self._parse_notification_type(
                 str(row.get("notification_type", "daily_reminder"))
             ),
             channel=self._parse_channel(str(row.get("channel", "sms"))),
+            stage=str(row.get("stage", "")),
+            time_slot=str(row.get("time_slot", "")),
+            scene=str(row.get("scene", "")),
+            sms_sign_name=str(row.get("sms_sign_name", "")),
+            provider_template_code=str(row.get("provider_template_code", "")),
             content=str(row.get("content", "")),
             is_active=bool(row.get("is_active", True)),
         )
@@ -173,12 +194,20 @@ class TemplateService:
                     cursor.execute(
                         """
                         INSERT INTO t_notification_template
-                        (template_code, template_name, notification_type, channel, content, version, is_active)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (template_code, template_name, tenant_id, project_id, notification_type, channel,
+                         stage, time_slot, scene, sms_sign_name, provider_template_code, content, version, is_active)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
                           template_name = VALUES(template_name),
+                          tenant_id = VALUES(tenant_id),
+                          project_id = VALUES(project_id),
                           notification_type = VALUES(notification_type),
                           channel = VALUES(channel),
+                          stage = VALUES(stage),
+                          time_slot = VALUES(time_slot),
+                          scene = VALUES(scene),
+                          sms_sign_name = VALUES(sms_sign_name),
+                          provider_template_code = VALUES(provider_template_code),
                           content = VALUES(content),
                           is_active = VALUES(is_active),
                           version = VALUES(version)
@@ -186,8 +215,15 @@ class TemplateService:
                         (
                             template.id,
                             template.name,
+                            template.tenant_id,
+                            template.project_id,
                             self._to_mysql_notification_type(template.notification_type),
                             template.channel.value,
+                            template.stage,
+                            template.time_slot,
+                            template.scene,
+                            template.sms_sign_name,
+                            template.provider_template_code,
                             template.content,
                             template.version,
                             1 if template.is_active else 0,
@@ -237,15 +273,18 @@ class TemplateService:
 
     def render_notification(self, template: NotificationTemplate, variables: dict[str, Any]) -> str:
         """使用 Jinja2 渲染模板，支持复杂逻辑和默认值"""
+        from jinja2 import StrictUndefined
+        from jinja2.exceptions import UndefinedError
+
         try:
-            jinja_tmpl = JinjaTemplate(template.content)
+            jinja_tmpl = JinjaTemplate(template.content, undefined=StrictUndefined)
             return jinja_tmpl.render(**variables)
-        except Exception:
-            # 回退到基础替换逻辑
-            content = template.content
-            for key, value in variables.items():
-                content = content.replace(f"{{{{{key}}}}}", str(value))
-            return content
+        except UndefinedError as e:
+            # 必须抛出 ValueError，遵循契约
+            raise ValueError(f"missing_template_variables: {str(e)}")
+        except Exception as e:
+            # 语法错误等其他异常
+            raise ValueError(f"template_render_error: {str(e)}")
 
     def list_notification_templates(
         self, tenant_id: str | None = None
@@ -270,10 +309,20 @@ class TemplateService:
         existing = self.list_notification_templates(tenant_id=tenant_id)
         if existing:
             return existing[0]
+
+        # 预置高质量的默认行程提醒模板
+        content = (
+            "【行程提醒】尊敬的{{customer_name}}，您前往{{destination}}的行程即将在{{trip_date}}开始。\n"
+            "🚗 交通提示：{{flight_info}}\n"
+            "🏞️ 沿途亮点：{{highlight}}\n"
+            "⛅ 天气提醒：{{climate}}\n"
+            "👕 穿衣指南：{{dress_code}}\n"
+            "祝您旅途愉快！"
+        )
         return self.create_notification_template(
             tenant_id=tenant_id,
-            name="默认行程提醒",
-            content="{{customer_name}}，您的{{destination}}行程即将开始，请准时集合。",
+            name="精选默认行程提醒",
+            content=content,
             channel="sms",
             notification_type="daily_reminder",
             is_active=True,
@@ -287,13 +336,25 @@ class TemplateService:
         channel: str,
         notification_type: str,
         is_active: bool,
+        project_id: str = "",
+        stage: str = "",
+        time_slot: str = "",
+        scene: str = "",
+        sms_sign_name: str = "",
+        provider_template_code: str = "",
     ) -> NotificationTemplate:
         template = NotificationTemplate(
             tenant_id=tenant_id,
+            project_id=project_id,
             name=name,
             content=content,
             channel=self._parse_channel(channel),
             notification_type=self._parse_notification_type(notification_type),
+            stage=stage,
+            time_slot=time_slot,
+            scene=scene,
+            sms_sign_name=sms_sign_name,
+            provider_template_code=provider_template_code,
             is_active=is_active,
         )
         self.notification_templates[template.id] = template
@@ -309,10 +370,18 @@ class TemplateService:
         channel: str | None = None,
         notification_type: str | None = None,
         is_active: bool | None = None,
+        project_id: str | None = None,
+        stage: str | None = None,
+        time_slot: str | None = None,
+        scene: str | None = None,
+        sms_sign_name: str | None = None,
+        provider_template_code: str | None = None,
     ) -> NotificationTemplate | None:
         template = self.notification_templates.get(template_id)
         if template is None:
             return None
+        if project_id is not None:
+            template.project_id = project_id
         if name is not None:
             template.name = name
         if content is not None:
@@ -321,12 +390,65 @@ class TemplateService:
             template.channel = self._parse_channel(channel)
         if notification_type is not None:
             template.notification_type = self._parse_notification_type(notification_type)
+        if stage is not None:
+            template.stage = stage
+        if time_slot is not None:
+            template.time_slot = time_slot
+        if scene is not None:
+            template.scene = scene
+        if sms_sign_name is not None:
+            template.sms_sign_name = sms_sign_name
+        if provider_template_code is not None:
+            template.provider_template_code = provider_template_code
         if is_active is not None:
             template.is_active = is_active
         template.updated_at = datetime.now(tz=UTC)
         self.notification_templates[template_id] = template
         self._flush()
         return template
+
+    def pick_notification_template(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str,
+        stage: str,
+        time_slot: str,
+        scene: str,
+        channel: str,
+    ) -> NotificationTemplate | None:
+        channel_value = self._parse_channel(channel)
+        candidates = [
+            template
+            for template in self.notification_templates.values()
+            if template.tenant_id == tenant_id
+            and template.is_active
+            and template.channel == channel_value
+        ]
+        if not candidates:
+            return None
+
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                1 if item.project_id == project_id and item.project_id else 0,
+                1 if item.stage == stage and item.stage else 0,
+                1 if item.time_slot == time_slot and item.time_slot else 0,
+                1 if item.scene == scene and item.scene else 0,
+                item.updated_at.isoformat(),
+            ),
+            reverse=True,
+        )
+        selected = ranked[0]
+        score = (
+            (1 if selected.project_id == project_id and selected.project_id else 0)
+            + (1 if selected.stage == stage and selected.stage else 0)
+            + (1 if selected.time_slot == time_slot and selected.time_slot else 0)
+            + (1 if selected.scene == scene and selected.scene else 0)
+        )
+        if score == 0:
+            return None
+        return selected
 
     def delete_notification_template(self, template_id: str) -> bool:
         if template_id not in self.notification_templates:

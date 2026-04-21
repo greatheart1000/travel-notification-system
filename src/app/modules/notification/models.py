@@ -18,10 +18,16 @@ class DispatchStatus(str, Enum):
 @dataclass(slots=True)
 class NotificationTemplate(BaseRecord):
     tenant_id: str = ""
+    project_id: str = ""
     name: str = ""
     version: int = 1
     notification_type: NotificationType = NotificationType.DAILY_REMINDER
     channel: Channel = Channel.SMS
+    stage: str = ""
+    time_slot: str = ""
+    scene: str = ""
+    sms_sign_name: str = ""
+    provider_template_code: str = ""
     content: str = ""
     is_active: bool = True
 
@@ -41,6 +47,7 @@ class NotificationAttempt(BaseRecord):
 @dataclass(slots=True)
 class NotificationTask(BaseRecord):
     tenant_id: str = ""
+    project_id: str = ""
     team_id: str = ""
     trip_id: str = ""
     customer_id: str = ""
@@ -53,4 +60,5 @@ class NotificationTask(BaseRecord):
     manual_intervention_required: bool = False
     status: DispatchStatus = DispatchStatus.PENDING
     idempotency_key: str = ""
+    provider_context: dict[str, str] = field(default_factory=dict)
     attempts: list[NotificationAttempt] = field(default_factory=list)

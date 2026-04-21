@@ -23,7 +23,11 @@ from app.core.models import Channel
 from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
-from app.modules.integration.persistence import JsonFileStore, TripRepository
+from app.modules.integration.persistence import (
+    JsonFileStore,
+    ProjectNotificationConfigRepository,
+    TripRepository,
+)
 from app.modules.integration.rbac import PermissionDenied, assert_tenant_scope, require_permission
 from app.modules.integration.weather_provider import WeatherProvider
 from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
@@ -33,6 +37,7 @@ from app.modules.notification.rule_service import NotificationRuleRepository, Ru
 from app.modules.notification.service import NotificationAttemptRepository, NotificationService
 from app.services.async_dispatch import AsyncDispatchService
 from app.services.preference_service import UserPreferenceService
+from app.services.scheduler_service import init_scheduler
 from app.services.template_service import TemplateService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
@@ -70,6 +75,7 @@ class AppContext:
     store: JsonFileStore
     auth_service: AuthService
     trip_repository: TripRepository
+    project_notification_config_repository: ProjectNotificationConfigRepository
     template_service: TemplateService
     preference_service: UserPreferenceService
     notification_attempt_repository: NotificationAttemptRepository
@@ -78,6 +84,7 @@ class AppContext:
     async_dispatch_service: AsyncDispatchService
     audit_service: AuditService
     analytics_service: AnalyticsService
+    weather_provider: WeatherProvider
     notification_tasks: dict[str, NotificationTask]
 
 
@@ -105,6 +112,12 @@ class TemplateCreateRequest(BaseModel):
     channel: str = "sms"
     notification_type: str = "daily_reminder"
     is_active: bool = True
+    project_id: str = ""
+    stage: str = ""
+    time_slot: str = ""
+    scene: str = ""
+    sms_sign_name: str = ""
+    provider_template_code: str = ""
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -113,6 +126,12 @@ class TemplateUpdateRequest(BaseModel):
     channel: str | None = None
     notification_type: str | None = None
     is_active: bool | None = None
+    project_id: str | None = None
+    stage: str | None = None
+    time_slot: str | None = None
+    scene: str | None = None
+    sms_sign_name: str | None = None
+    provider_template_code: str | None = None
 
 
 class NotificationRuleCreateRequest(BaseModel):
@@ -193,12 +212,30 @@ class NotificationSendRequest(BaseModel):
     async_delivery: bool = False
 
 
+class ProjectNotificationConfigUpsertRequest(BaseModel):
+    project_name: str = ""
+    weather_enabled: bool = True
+    qweather_credential_id: str = ""
+    qweather_location_id: str = ""
+    qweather_lat: str = ""
+    qweather_lon: str = ""
+    weather_alert_thresholds: dict[str, Any] = Field(default_factory=dict)
+    sms_provider: str = "aliyun"
+    sms_sign_name: str = ""
+    sms_template_code_normal: str = ""
+    sms_template_code_weather_alert: str = ""
+    manual_takeover_target: str = ""
+
+
 def _ok(data: Any) -> dict[str, Any]:
     return {"code": 200, "data": data}
 
 
 def _error(status: int, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status, content={"code": status, "error": message})
+    return JSONResponse(
+        status_code=status,
+        content={"code": status, "error": message, "detail": message},
+    )
 
 
 def _ok_with_message(data: Any, message: str) -> dict[str, Any]:
@@ -550,8 +587,14 @@ def _serialize_template(template: Any) -> dict[str, Any]:
         "name": template.name,
         "version": template.version,
         "tenant_id": getattr(template, "tenant_id", ""),
+        "project_id": getattr(template, "project_id", ""),
         "notification_type": template.notification_type.value,
         "channel": template.channel.value,
+        "stage": getattr(template, "stage", ""),
+        "time_slot": getattr(template, "time_slot", ""),
+        "scene": getattr(template, "scene", ""),
+        "sms_sign_name": getattr(template, "sms_sign_name", ""),
+        "provider_template_code": getattr(template, "provider_template_code", ""),
         "status": status,
         "enabled": template.is_active,
         "template": template.content,
@@ -559,6 +602,29 @@ def _serialize_template(template: Any) -> dict[str, Any]:
         "is_active": template.is_active,
         "created_at": template.created_at,
         "updated_at": template.updated_at,
+    }
+
+
+def _serialize_project_notification_config(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tenant_id": str(payload.get("tenant_id") or ""),
+        "project_id": str(payload.get("project_id") or ""),
+        "project_name": str(payload.get("project_name") or ""),
+        "weather_enabled": bool(payload.get("weather_enabled", True)),
+        "qweather_credential_id": str(payload.get("qweather_credential_id") or ""),
+        "qweather_location_id": str(payload.get("qweather_location_id") or ""),
+        "qweather_lat": str(payload.get("qweather_lat") or ""),
+        "qweather_lon": str(payload.get("qweather_lon") or ""),
+        "weather_alert_thresholds": payload.get("weather_alert_thresholds") or {},
+        "sms_provider": str(payload.get("sms_provider") or "aliyun"),
+        "sms_sign_name": str(payload.get("sms_sign_name") or ""),
+        "sms_template_code_normal": str(payload.get("sms_template_code_normal") or ""),
+        "sms_template_code_weather_alert": str(
+            payload.get("sms_template_code_weather_alert") or ""
+        ),
+        "manual_takeover_target": str(payload.get("manual_takeover_target") or ""),
+        "created_at": payload.get("created_at"),
+        "updated_at": payload.get("updated_at"),
     }
 
 
@@ -698,114 +764,171 @@ def _seed_concierge_templates(template_service: TemplateService, tenant_id: str)
             "key": "pre_flight_notice",
             "channel": "wechat_work_group",
             "notification_type": "pre_trip_reminder",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
         },
         {
             "name": "行前1天-入群欢迎词",
             "key": "group_welcome",
             "channel": "wechat_work_group",
             "notification_type": "pre_trip_reminder",
+            "stage": "pre_trip",
+            "time_slot": "evening",
+            "scene": "normal",
         },
         {
             "name": "落地首日-乌鲁木齐推荐",
             "key": "urumqi_day1_recommendations",
             "channel": "wechat_work_group",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "afternoon",
+            "scene": "normal",
         },
         {
             "name": "晨间提示-春季",
             "key": "morning_spring",
             "channel": "sms",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "morning",
+            "scene": "normal",
         },
         {
             "name": "晨间提示-夏季",
             "key": "morning_summer",
             "channel": "sms",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "morning",
+            "scene": "normal",
         },
         {
             "name": "晨间提示-秋季",
             "key": "morning_autumn",
             "channel": "sms",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "morning",
+            "scene": "normal",
         },
         {
             "name": "晨间提示-冬季",
             "key": "morning_winter",
             "channel": "sms",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "morning",
+            "scene": "normal",
         },
         {
             "name": "午间提示-春季",
             "key": "noon_spring",
             "channel": "wechat_work_group",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "afternoon",
+            "scene": "normal",
         },
         {
             "name": "午间提示-夏季",
             "key": "noon_summer",
             "channel": "wechat_work_group",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "afternoon",
+            "scene": "normal",
         },
         {
             "name": "午间提示-秋季",
             "key": "noon_autumn",
             "channel": "wechat_work_group",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "afternoon",
+            "scene": "normal",
         },
         {
             "name": "午间提示-冬季",
             "key": "noon_winter",
             "channel": "wechat_work_group",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "afternoon",
+            "scene": "normal",
         },
         {
             "name": "场景提示-雨天",
             "key": "noon_rainy",
             "channel": "wechat_work_group",
             "notification_type": "risk_alert",
+            "stage": "in_trip",
+            "time_slot": "afternoon",
+            "scene": "weather_alert",
         },
         {
             "name": "场景提示-骑马",
             "key": "horse_riding_notice",
             "channel": "wechat_work_group",
             "notification_type": "risk_alert",
+            "stage": "in_trip",
+            "time_slot": "afternoon",
+            "scene": "weather_alert",
         },
         {
             "name": "场景提示-滑雪日",
             "key": "ski_day_notice",
             "channel": "wechat_work_group",
             "notification_type": "risk_alert",
+            "stage": "in_trip",
+            "time_slot": "afternoon",
+            "scene": "weather_alert",
         },
         {
             "name": "晚间播报-次日行程",
             "key": "evening_next_day_preview",
             "channel": "wechat_work_group",
             "notification_type": "daily_reminder",
+            "stage": "in_trip",
+            "time_slot": "evening",
+            "scene": "normal",
         },
         {
             "name": "行中协同-问题协调",
             "key": "issue_coordination_notice",
             "channel": "wechat_work_group",
             "notification_type": "risk_alert",
+            "stage": "in_trip",
+            "time_slot": "evening",
+            "scene": "weather_alert",
         },
         {
             "name": "下团调研-满意度回访",
             "key": "post_trip_survey_notice",
             "channel": "sms",
             "notification_type": "satisfaction",
+            "stage": "post_trip",
+            "time_slot": "evening",
+            "scene": "normal",
         },
         {
             "name": "下团欢送词",
             "key": "farewell_message",
             "channel": "wechat_work_group",
             "notification_type": "farewell",
+            "stage": "post_trip",
+            "time_slot": "evening",
+            "scene": "normal",
         },
         {
             "name": "解散群文案",
             "key": "group_close_message",
             "channel": "wechat_work_group",
             "notification_type": "farewell",
+            "stage": "post_trip",
+            "time_slot": "evening",
+            "scene": "normal",
         },
     ]
 
@@ -820,19 +943,26 @@ def _seed_concierge_templates(template_service: TemplateService, tenant_id: str)
             channel=spec["channel"],
             notification_type=spec["notification_type"],
             is_active=True,
+            project_id=spec.get("project_id", ""),
+            stage=spec.get("stage", ""),
+            time_slot=spec.get("time_slot", ""),
+            scene=spec.get("scene", ""),
+            sms_sign_name=spec.get("sms_sign_name", ""),
+            provider_template_code=spec.get("provider_template_code", ""),
         )
 
 
 def _build_context(store: JsonFileStore | None = None) -> AppContext:
     persistence = store or JsonFileStore()
     trip_repository = TripRepository(store=persistence)
+    project_notification_config_repository = ProjectNotificationConfigRepository(store=persistence)
     template_service = TemplateService(store=persistence)
+    _seed_default_trips(trip_repository)
     _seed_concierge_templates(template_service, tenant_id="tenant-a")
     template_service.ensure_default_template(tenant_id="tenant-a")
     preference_service = UserPreferenceService(store=persistence)
     notification_attempt_repository = NotificationAttemptRepository(store=persistence)
     notification_rule_repository = NotificationRuleRepository(store=persistence)
-    _seed_default_trips(trip_repository)
     _seed_default_notification_rules(
         notification_rule_repository,
         template_id=template_service.ensure_default_template(tenant_id="tenant-a").id,
@@ -850,10 +980,12 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         trip_repository=trip_repository,
     )
     auth_service = AuthService()
+    weather_provider = WeatherProvider()
     return AppContext(
         store=persistence,
         auth_service=auth_service,
         trip_repository=trip_repository,
+        project_notification_config_repository=project_notification_config_repository,
         template_service=template_service,
         preference_service=preference_service,
         notification_attempt_repository=notification_attempt_repository,
@@ -862,13 +994,29 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         async_dispatch_service=async_dispatch_service,
         audit_service=audit_service,
         analytics_service=analytics_service,
+        weather_provider=weather_provider,
         notification_tasks={},
     )
 
 
 def create_app() -> FastAPI:
     _patch_starlette_router_compat()
-    fastapi_app = FastAPI(title="Travel Notification API", version="0.2.0")
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        ctx = app.state.ctx
+        scheduler = init_scheduler(ctx)
+        scheduler.start()
+        yield
+        scheduler.stop()
+
+    fastapi_app = FastAPI(
+        title="Travel Notification API",
+        version="0.2.0",
+        lifespan=lifespan,
+    )
     fastapi_app.state.ctx = _build_context()
 
     security = HTTPBearer(auto_error=False)
@@ -1084,6 +1232,12 @@ def create_app() -> FastAPI:
             channel=_parse_channel(payload.channel).value,
             notification_type=payload.notification_type,
             is_active=payload.is_active,
+            project_id=payload.project_id,
+            stage=payload.stage,
+            time_slot=payload.time_slot,
+            scene=payload.scene,
+            sms_sign_name=payload.sms_sign_name,
+            provider_template_code=payload.provider_template_code,
         )
         return _ok(_serialize_template(template))
 
@@ -1106,6 +1260,12 @@ def create_app() -> FastAPI:
             channel=None if payload.channel is None else _parse_channel(payload.channel).value,
             notification_type=payload.notification_type,
             is_active=payload.is_active,
+            project_id=payload.project_id,
+            stage=payload.stage,
+            time_slot=payload.time_slot,
+            scene=payload.scene,
+            sms_sign_name=payload.sms_sign_name,
+            provider_template_code=payload.provider_template_code,
         )
         if template is None:
             raise HTTPException(status_code=404, detail="Template not found")
@@ -1140,6 +1300,65 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         return list_templates(user, ctx)
+
+    @fastapi_app.get("/api/project-configs")
+    def list_project_configs(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        items = [
+            _serialize_project_notification_config(item)
+            for item in ctx.project_notification_config_repository.list(tenant_id=tenant_id)
+        ]
+        return _ok({"total": len(items), "items": items})
+
+    @fastapi_app.get("/api/project-configs/{project_id}")
+    def get_project_config(
+        project_id: str,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        config = ctx.project_notification_config_repository.get(
+            project_id,
+            tenant_id=_current_tenant_id(user),
+        )
+        if config is None:
+            raise HTTPException(status_code=404, detail="Project config not found")
+        return _ok(_serialize_project_notification_config(config))
+
+    @fastapi_app.put("/api/project-configs/{project_id}")
+    def upsert_project_config(
+        project_id: str,
+        payload: ProjectNotificationConfigUpsertRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        config = ctx.project_notification_config_repository.upsert(
+            {
+                "tenant_id": _current_tenant_id(user),
+                "project_id": project_id,
+                "project_name": payload.project_name,
+                "weather_enabled": payload.weather_enabled,
+                "qweather_credential_id": payload.qweather_credential_id,
+                "qweather_location_id": payload.qweather_location_id,
+                "qweather_lat": payload.qweather_lat,
+                "qweather_lon": payload.qweather_lon,
+                "weather_alert_thresholds": payload.weather_alert_thresholds,
+                "sms_provider": payload.sms_provider,
+                "sms_sign_name": payload.sms_sign_name,
+                "sms_template_code_normal": payload.sms_template_code_normal,
+                "sms_template_code_weather_alert": payload.sms_template_code_weather_alert,
+                "manual_takeover_target": payload.manual_takeover_target,
+            }
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="project_config_upserted",
+            target=project_id,
+            detail={"tenant_id": _current_tenant_id(user)},
+        )
+        return _ok(_serialize_project_notification_config(config))
 
     @fastapi_app.post("/api/notifications/templates", status_code=201)
     def create_templates_alias(
@@ -1816,17 +2035,29 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        weather_provider = WeatherProvider()
         active_trips = [t for t in ctx.trip_repository.list() if t.get("status") == "in_progress"]
         triggered_count = 0
 
         for trip in active_trips:
-            info = weather_provider.get_weather(trip.get("destination", ""))
+            project_id = str(
+                trip.get("project_id") or trip.get("team_id") or trip.get("team") or ""
+            )
+            project_config = ctx.project_notification_config_repository.get(
+                project_id,
+                tenant_id=_current_tenant_id(user),
+            )
+            weather_context = dict(project_config or {})
+            weather_context.update(trip)
+            info = ctx.weather_provider.get_weather(
+                str(trip.get("destination", "")),
+                location_context=weather_context,
+            )
             if info.warning_level:
                 # 命中恶劣天气，触发通知
                 rendered = f"【天气预警】您在 {info.destination} 的行程受 {info.condition} 影响，当前气温 {info.temperature}C，请注意安全。"
                 task = NotificationTask(
                     tenant_id=_current_tenant_id(user),
+                    project_id=project_id,
                     team_id=str(trip.get("team_id", "")),
                     trip_id=str(trip.get("id", "")),
                     customer_id="system",
@@ -1844,10 +2075,78 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/analytics/metrics")
     def analytics_metrics(
-        _: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        return _ok(ctx.analytics_service.build_metrics_snapshot())
+        snapshot = ctx.analytics_service.build_metrics_snapshot()
+        tenant_id = _current_tenant_id(user)
+        attempts = _query_notification_items(
+            repository=ctx.notification_attempt_repository,
+            limit=9999,
+            trip_id=None,
+            team_id=None,
+            customer_id=None,
+            tenant_id=tenant_id,
+        )
+        if not attempts:
+            facts = ctx.analytics_service.repository.list_notification_facts()
+            attempts = [
+                {
+                    "channel": str(item.get("channel") or "sms"),
+                    "ok": bool(item.get("success")),
+                    "attempt_no": 1,
+                    "status": "sent" if bool(item.get("success")) else "failed",
+                    "latency_ms": int(item.get("latency_ms") or 0),
+                    "trip_id": str(item.get("trip_id") or ""),
+                    "attempted_at": f"{item.get('event_date')}T00:00:00+00:00",
+                }
+                for item in facts
+            ]
+        total = len(attempts)
+        successful = sum(1 for item in attempts if item.get("ok") is True)
+        failed = total - successful
+        retried = sum(1 for item in attempts if int(item.get("attempt_no", 1)) > 1)
+        manual_takeover = sum(
+            1 for item in attempts if str(item.get("status") or "") == "manual_intervention"
+        )
+        avg_latency = (
+            round(
+                sum(int(item.get("latency_ms", 0)) for item in attempts) / total,
+                1,
+            )
+            if total
+            else 0.0
+        )
+
+        feedbacks = ctx.analytics_service.repository.list_feedbacks()
+        avg_satisfaction = (
+            sum(float(item.get("score", 0.0)) for item in feedbacks) / len(feedbacks)
+            if feedbacks
+            else 0.0
+        )
+
+        payload = {
+            "metrics": {
+                "notification_success_rate": f"{round((successful / total) * 100, 1) if total else 0.0}%",
+                "notification_retry_rate": f"{round((retried / total) * 100, 1) if total else 0.0}%",
+                "notification_manual_takeover_rate": (
+                    f"{round((manual_takeover / total) * 100, 1) if total else 0.0}%"
+                ),
+                "rule_publish_lead_time": "0h",
+                "cross_tenant_forbidden_count": 0,
+                "avg_response_time": f"{avg_latency}ms",
+                "user_satisfaction": f"{round(avg_satisfaction, 1) if feedbacks else 0.0}/5",
+                "total_notifications": total,
+                "successful_notifications": successful,
+                "failed_notifications": failed,
+                "wow_growth": snapshot.get("summary", {}).get("wow_growth", 0.0),
+            },
+            "channel_performance": _compute_channel_performance(attempts),
+            "top_trips": _compute_top_trips(attempts, ctx.trip_repository),
+            "summary": snapshot.get("summary", {}),
+            "charts": snapshot.get("charts", {}),
+        }
+        return _ok(payload)
 
     return fastapi_app
 
