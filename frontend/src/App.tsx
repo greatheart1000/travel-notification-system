@@ -1,12 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import { AUTH_STATE_CHANGED_EVENT, hasAccessToken } from './adapters/authAdapter'
 import { Button } from './components/Button'
 import { Sidebar } from './components/Sidebar'
-import { Analytics } from './pages/Analytics'
-import { Dashboard } from './pages/Dashboard'
-import { Notifications } from './pages/Notifications'
-import { Preferences } from './pages/Preferences'
-import { Trips } from './pages/Trips'
 import { authApi, getErrorMessage } from './services/api'
 
 type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics'
@@ -14,6 +9,22 @@ type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics
 interface AppRoute {
   page: Page
   tripId: string | null
+}
+
+
+const Analytics = lazy(() => import('./pages/Analytics').then((module) => ({ default: module.Analytics })))
+const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })))
+const Notifications = lazy(() => import('./pages/Notifications').then((module) => ({ default: module.Notifications })))
+const Preferences = lazy(() => import('./pages/Preferences').then((module) => ({ default: module.Preferences })))
+const Trips = lazy(() => import('./pages/Trips').then((module) => ({ default: module.Trips })))
+
+function PageLoadingFallback() {
+  return (
+    <div className="min-h-[240px] rounded-2xl border border-slate-200 bg-white p-6 text-center">
+      <p className="text-base font-semibold text-slate-900">页面加载中...</p>
+      <p className="mt-2 text-sm text-slate-500">正在按需加载当前模块</p>
+    </div>
+  )
 }
 
 function pickTripIdFromSearch(search: string): string | null {
@@ -270,7 +281,7 @@ export default function App() {
       <div className="print:hidden">
         <Sidebar currentPage={route.page} onPageChange={handlePageChange} />
       </div>
-      <main className="flex-1 overflow-auto print:overflow-visible print:w-full">{pageNode}</main>
+      <main className="flex-1 overflow-auto print:overflow-visible print:w-full"><Suspense fallback={<PageLoadingFallback />}>{pageNode}</Suspense></main>
     </div>
   )
 }
