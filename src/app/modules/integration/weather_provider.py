@@ -3,17 +3,25 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
 WeatherTransport = Callable[[str, dict[str, str], dict[str, str]], dict[str, Any]]
+
+
+class WeatherAlertProvider(Protocol):
+    def get_weather(
+        self,
+        destination: str,
+        location_context: dict[str, Any] | None = None,
+    ) -> WeatherInfo:
+        """Fetch weather info for destination."""
 
 
 @dataclass(slots=True)
@@ -89,16 +97,27 @@ def _load_local_env_file() -> None:
 
 @dataclass(slots=True)
 class MockWeatherProvider:
+    def _deterministic_profile(self, destination: str) -> tuple[str, float, str | None]:
+        # Keep mock output deterministic so risk analysis and copy generation are stable.
+        normalized = destination.strip() or "default"
+        score = sum(ord(ch) for ch in normalized)
+        index = score % 5
+        if index == 0:
+            return "晴", 26.0, None
+        if index == 1:
+            return "多云", 21.0, None
+        if index == 2:
+            return "小雨", 18.0, "yellow"
+        if index == 3:
+            return "中雨", 15.0, "orange"
+        return "雨夹雪", 2.0, "red"
+
     def get_weather(
         self,
         destination: str,
         location_context: dict[str, Any] | None = None,
     ) -> WeatherInfo:
-        conditions = ["Sunny", "Cloudy", "Rain", "Snow", "Windy"]
-        weights = [0.4, 0.3, 0.15, 0.1, 0.05]
-        condition = random.choices(conditions, weights=weights)[0]
-        temp = round(random.uniform(-5, 35), 1)
-        warning = "yellow" if condition in {"Rain", "Snow"} else None
+        condition, temp, warning = self._deterministic_profile(destination)
 
         logger.info("Fetched mock weather for %s: %s, %sC", destination, condition, temp)
         return WeatherInfo(
@@ -106,7 +125,7 @@ class MockWeatherProvider:
             condition=condition,
             temperature=temp,
             warning_level=warning,
-            alert_title="模拟天气提醒" if warning else "",
+            alert_title=f"模拟天气{warning}级提醒" if warning else "",
             location_id=str((location_context or {}).get("qweather_location_id", "")),
             lat=str((location_context or {}).get("qweather_lat", "")),
             lon=str((location_context or {}).get("qweather_lon", "")),
@@ -199,7 +218,7 @@ class WeatherProvider:
         api_key = os.getenv("QWEATHER_API_KEY", "").strip()
         host_configured = bool(host) and "__FILL_" not in host
         if host_configured and api_key:
-            self.provider: QWeatherProvider | MockWeatherProvider = QWeatherProvider(
+            self.provider: WeatherAlertProvider = QWeatherProvider(
                 api_host=host,
                 api_key=api_key,
             )

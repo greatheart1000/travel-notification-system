@@ -98,16 +98,47 @@ class WorkflowOrchestrator:
                 return
 
             # 2. 准备变量 (对接沙笛业务字段)
+            # 获取真实的游客信息，如果没有则降级为"贵宾"
+            guests = trip.get("guests", [])
+            customer_name = guests[0].get("name", "贵宾") if guests else "贵宾"
+
+            # 获取当日的行程亮点
+            itinerary = trip.get("itinerary", [])
+            # 简单匹配当日行程
+            today_str = str(date.today())
+            today_itinerary = next(
+                (item for item in itinerary if item.get("date") == today_str), None
+            )
+
+            highlight = today_itinerary.get("title", "精彩景点") if today_itinerary else "当地景点"
+            climate_tip = (
+                today_itinerary.get("climate", "注意查看当地天气预报")
+                if today_itinerary
+                else "注意查看当地天气预报"
+            )
+            dress_tip = (
+                today_itinerary.get("dress_code", "建议带好防风外套")
+                if today_itinerary
+                else "建议带好防风外套"
+            )
+            flight_tip = (
+                guests[0].get("flight_info", "请核对您的出行票务信息")
+                if guests
+                else "请核对您的出行票务信息"
+            )
+
             variables = {
-                "customer_name": "贵宾",  # 实际应从 Trip/Customer 关联中获取
-                "destination": trip.get("destination", "新疆"),
-                "flight_info": "请核对您的机票行程单",
-                "climate": "昼夜温差大",
-                "dress_code": "建议叠穿外套",
+                "customer_name": customer_name,
+                "destination": trip.get("destination", "目的地"),
+                "flight_info": flight_tip,
+                "climate": climate_tip,
+                "dress_code": dress_tip,
                 "trip_date": str(trip.get("start_date")),
+                "highlight": highlight,
             }
 
             # 3. 渲染
+            # 注意：此处应该改用更安全的渲染方式或者在模板层面加强容错
             content = self.tpl_service.render_notification(template, variables)
 
             # 4. 创建任务

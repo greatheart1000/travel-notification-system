@@ -5,25 +5,23 @@ import hashlib
 import hmac
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-UTC = timezone.utc
+UTC = UTC
 PBKDF2_ROUNDS = 240_000
 PBKDF2_SCHEME = "pbkdf2_sha256"
 
 
-@dataclass(slots=True)
+@dataclass
 class AuthService:
     users: dict[str, dict[str, str]] = field(default_factory=dict)
     access_tokens: dict[str, dict[str, str]] = field(default_factory=dict)
     refresh_tokens: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.users:
-            return
         default_password = os.getenv("TRAVEL_NOTIFICATION_DEFAULT_PASSWORD", "123456")
-        self.users = {
+        default_users = {
             "admin": {
                 "id": "user-001",
                 "username": "admin",
@@ -52,6 +50,12 @@ class AuthService:
                 "created_at": "2026-04-11T00:00:00Z",
             },
         }
+        if self.users:
+            merged = dict(default_users)
+            merged.update(self.users)
+            self.users = merged
+            return
+        self.users = default_users
 
     @staticmethod
     def _is_pbkdf2_hash(hash_value: str) -> bool:

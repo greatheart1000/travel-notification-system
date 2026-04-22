@@ -1,19 +1,61 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Sidebar } from './components/Sidebar'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AUTH_STATE_CHANGED_EVENT, hasAccessToken } from './adapters/authAdapter'
 import { Button } from './components/Button'
+import { Sidebar } from './components/Sidebar'
+import { Analytics } from './pages/Analytics'
 import { Dashboard } from './pages/Dashboard'
-import { Trips } from './pages/Trips'
 import { Notifications } from './pages/Notifications'
 import { Preferences } from './pages/Preferences'
-import { Analytics } from './pages/Analytics'
-import { Templates } from './pages/Templates'
-import { AUTH_STATE_CHANGED_EVENT, hasAccessToken } from './adapters/authAdapter'
+import { Trips } from './pages/Trips'
 import { authApi, getErrorMessage } from './services/api'
 
-type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics' | 'templates'
+type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics'
+
+interface AppRoute {
+  page: Page
+  tripId: string | null
+}
+
+function pickTripIdFromSearch(search: string): string | null {
+  const query = new URLSearchParams(search)
+  const value = query.get('trip_id')
+  if (!value) {
+    return null
+  }
+  return decodeURIComponent(value)
+}
+
+function parseRoute(pathname: string): AppRoute {
+  return parseRouteWithSearch(pathname, window.location.search)
+}
+
+function parseRouteWithSearch(pathname: string, search: string): AppRoute {
+  const parts = pathname.split('/').filter(Boolean)
+  if (parts[0] === 'trips' && parts[1]) {
+    return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
+  }
+  if (parts[0] === 'trips') {
+    return { page: 'trips', tripId: null }
+  }
+  if (parts[0] === 'notifications') {
+    return { page: 'notifications', tripId: pickTripIdFromSearch(search) }
+  }
+  if (parts[0] === 'notifications' || parts[0] === 'preferences' || parts[0] === 'analytics') {
+    return { page: parts[0], tripId: null }
+  }
+  return { page: 'dashboard', tripId: null }
+}
+
+function pagePath(page: Page, tripId?: string | null): string {
+  if (page === 'notifications' && tripId) {
+    return `/notifications?trip_id=${encodeURIComponent(tripId)}`
+  }
+  return page === 'dashboard' ? '/' : `/${page}`
+}
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('dashboard')
+  const [route, setRoute] = useState<AppRoute>(() => parseRoute(window.location.pathname))
+  const [pageKey, setPageKey] = useState(0)
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -57,13 +99,16 @@ export default function App() {
       const customEvent = event as CustomEvent<{ authenticated?: boolean }>
       const authenticated = Boolean(customEvent.detail?.authenticated)
       setIsAuthenticated(authenticated)
+      setAuthError(null)
       if (!authenticated) {
-        setCurrentPage('dashboard')
+        window.history.replaceState({}, '', '/')
+        setRoute({ page: 'dashboard', tripId: null })
+        setPageKey(0)
       }
     }
 
     window.addEventListener(AUTH_STATE_CHANGED_EVENT, handleAuthStateChanged)
-    verifyAuth()
+    void verifyAuth()
 
     return () => {
       active = false
@@ -84,7 +129,9 @@ export default function App() {
       await authApi.login(username.trim(), password)
       await authApi.me()
       setIsAuthenticated(true)
-      setCurrentPage('dashboard')
+      window.history.pushState({}, '', '/')
+      setRoute({ page: 'dashboard', tripId: null })
+      setPageKey((prev) => prev + 1)
     } catch (error) {
       setIsAuthenticated(false)
       setAuthError(getErrorMessage(error))
@@ -93,24 +140,75 @@ export default function App() {
     }
   }
 
+  const handlePageChange = useCallback(
+    (newPage: Page) => {
+      if (newPage === route.page && route.tripId === null) {
+        setPageKey((prev) => prev + 1)
+        return
+      }
+      window.history.pushState({}, '', pagePath(newPage, null))
+      setRoute({ page: newPage, tripId: null })
+    },
+    [route.page, route.tripId],
+  )
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(parseRouteWithSearch(window.location.pathname, window.location.search))
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  const openTripDetail = useCallback((tripId: string) => {
+    window.history.pushState({}, '', `/trips/${encodeURIComponent(tripId)}`)
+    setRoute({ page: 'trips', tripId })
+  }, [])
+
+  const backToTrips = useCallback(() => {
+    window.history.pushState({}, '', '/trips')
+    setRoute({ page: 'trips', tripId: null })
+    setPageKey((prev) => prev + 1)
+  }, [])
+
+  const openTripNotifications = useCallback((tripId: string) => {
+    window.history.pushState({}, '', pagePath('notifications', tripId))
+    setRoute({ page: 'notifications', tripId })
+  }, [])
+
+  const backToTripDetail = useCallback((tripId: string) => {
+    window.history.pushState({}, '', `/trips/${encodeURIComponent(tripId)}`)
+    setRoute({ page: 'trips', tripId })
+  }, [])
+
   const pageNode = useMemo(() => {
-    switch (currentPage) {
+    switch (route.page) {
       case 'dashboard':
-        return <Dashboard />
+        return <Dashboard key={`dashboard-${pageKey}`} />
       case 'trips':
-        return <Trips />
+        return (
+          <Trips
+            key={`trips-${pageKey}-${route.tripId ?? 'list'}`}
+            tripId={route.tripId}
+            onOpenTrip={openTripDetail}
+            onBackToList={backToTrips}
+            onOpenTripNotifications={openTripNotifications}
+          />
+        )
       case 'notifications':
-        return <Notifications />
+        return (
+          <Notifications
+            key={`notifications-${pageKey}-${route.tripId ?? 'global'}`}
+            tripId={route.tripId}
+            onBackToTrip={backToTripDetail}
+          />
+        )
       case 'preferences':
-        return <Preferences />
+        return <Preferences key={`preferences-${pageKey}`} />
       case 'analytics':
-        return <Analytics />
-      case 'templates':
-        return <Templates />
+        return <Analytics key={`analytics-${pageKey}`} />
       default:
-        return <Dashboard />
+        return <Dashboard key={`dashboard-${pageKey}`} />
     }
-  }, [currentPage])
+  }, [backToTripDetail, backToTrips, openTripDetail, openTripNotifications, pageKey, route.page, route.tripId])
 
   if (isCheckingAuth) {
     return (
@@ -168,9 +266,11 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar currentPage={currentPage} onPageChange={setCurrentPage} />
-      <main className="flex-1 overflow-auto">{pageNode}</main>
+    <div className="flex h-screen bg-gray-50 print:h-auto print:bg-white print:block">
+      <div className="print:hidden">
+        <Sidebar currentPage={route.page} onPageChange={handlePageChange} />
+      </div>
+      <main className="flex-1 overflow-auto print:overflow-visible print:w-full">{pageNode}</main>
     </div>
   )
 }

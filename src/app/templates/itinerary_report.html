@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <style>
+        @page {
+            size: A4 landscape; /* 默认横向打印，因为行程表通常较宽 */
+            margin: 1.5cm;
+            @top-right {
+                content: "客人名单表";
+                font-size: 9pt;
+                color: #666;
+            }
+            @top-left {
+                content: "{{ print_time }}";
+                font-size: 9pt;
+                color: #666;
+            }
+            @bottom-right {
+                content: counter(page) " / " counter(pages);
+                font-size: 9pt;
+                color: #666;
+            }
+        }
+
+        body {
+            font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
+            font-size: 11pt;
+            line-height: 1.5;
+            color: #333;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #2c3e50;
+            padding-bottom: 10px;
+        }
+
+        .header h1 {
+            font-size: 24pt;
+            margin: 0;
+            color: #2c3e50;
+            letter-spacing: 2px;
+        }
+
+        .header p {
+            margin: 5px 0 0;
+            color: #7f8c8d;
+            font-size: 10pt;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            page-break-inside: auto; /* 允许在表格内部断页 */
+        }
+
+        tr {
+            page-break-inside: avoid; /* 避免断开一行 */
+            page-break-after: auto;
+        }
+
+        th, td {
+            border: 1px solid #bdc3c7;
+            padding: 8px 12px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th {
+            background-color: #ecf0f1;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .section-title {
+            font-size: 14pt;
+            font-weight: bold;
+            margin: 20px 0 10px;
+            padding-left: 10px;
+            border-left: 4px solid #3498db;
+        }
+
+        .info-grid {
+            display: flex;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            border: 1px solid #bdc3c7;
+            border-bottom: none;
+        }
+
+        .info-item {
+            width: 50%;
+            box-sizing: border-box;
+            border-bottom: 1px solid #bdc3c7;
+            display: flex;
+        }
+
+        .info-label {
+            width: 120px;
+            background-color: #ecf0f1;
+            padding: 8px 12px;
+            font-weight: bold;
+            border-right: 1px solid #bdc3c7;
+        }
+
+        .info-value {
+            flex: 1;
+            padding: 8px 12px;
+        }
+
+        .footer {
+            margin-top: 30px;
+            font-size: 10pt;
+            color: #666;
+            display: flex;
+            justify-content: space-between;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>客人名单表</h1>
+        <p>沙笛旅行 (SHADI TRAVEL)</p>
+    </div>
+
+    <!-- 基础信息 -->
+    <div class="info-grid">
+        <div class="info-item">
+            <div class="info-label">团号</div>
+            <div class="info-value">{{ trip.team_id }}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">线路</div>
+            <div class="info-value">{{ trip.destination }}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">出团日期</div>
+            <div class="info-value">{{ trip.start_date }} 至 {{ trip.end_date }}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">人数</div>
+            <div class="info-value">{{ trip.participants }} 人</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">状态</div>
+            <div class="info-value">{{ trip.status_label }}</div>
+        </div>
+    </div>
+
+    <!-- 行程安排表 -->
+    <div class="section-title">行程安排</div>
+    <table>
+        <thead>
+            <tr>
+                <th width="12%">日期</th>
+                <th width="15%">交通/活动</th>
+                <th width="48%">行程路线</th>
+                <th width="25%">住宿酒店</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for day in itinerary %}
+            <tr>
+                <td>{{ day.date }}</td>
+                <td>{{ day.transport }}</td>
+                <td>{{ day.route }}</td>
+                <td>{{ day.hotel }}</td>
+            </tr>
+            {% endfor %}
+            {% if not itinerary %}
+            <tr>
+                <td colspan="4" style="text-align: center; color: #999;">暂无详细每日行程数据</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+
+    <!-- 客人名单表 -->
+    <div class="section-title">客人名单与接送信息</div>
+    <table>
+        <thead>
+            <tr>
+                <th width="20%">姓名</th>
+                <th width="30%">联系方式</th>
+                <th width="50%">接送说明</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for guest in guests %}
+            <tr>
+                <td>{{ guest.name }}</td>
+                <td>{{ guest.phone }}</td>
+                <td>{{ guest.notes }}</td>
+            </tr>
+            {% endfor %}
+            {% if not guests %}
+            <tr>
+                <td colspan="3" style="text-align: center; color: #999;">暂无客人信息数据</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+
+    <!-- 底部打印信息 -->
+    <div class="footer">
+        <div>打印人: ____________________</div>
+        <div>打印时间: {{ print_time }}</div>
+    </div>
+
+</body>
+</html>

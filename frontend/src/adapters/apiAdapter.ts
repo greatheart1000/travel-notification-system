@@ -3,6 +3,8 @@ import {
   type AnalyticsMetrics,
   type ChannelCode,
   type DashboardStats,
+  type EmergencyWeatherSummary,
+  type RawEmergencyWeatherSummary,
   type NotificationRule,
   type NotificationRuleStageCode,
   type NotificationRuleTimeSlotCode,
@@ -15,8 +17,12 @@ import {
   type RawNotificationTemplate,
   type RawRecentNotification,
   type RawTrip,
+  type RawTripSchedule,
   type RecentNotification,
   type Trip,
+  type TripContact,
+  type TripNotificationSummary,
+  type TripSchedule,
   type TripStatusCode,
   type TripWriteInput,
 } from '../types/api'
@@ -275,9 +281,13 @@ export function mapDashboardStats(raw: RawDashboardStats): DashboardStats {
   return {
     todayNotifications: asNumber(raw.today_notifications, 0),
     activeTrips: asNumber(raw.active_trips, 0),
+    totalTravelers: asNumber(raw.total_travelers, 0),
     totalUsers: asNumber(raw.total_users, 0),
+    pendingNotifications: asNumber(raw.pending_notifications, 0),
     pendingComplaints: asNumber(raw.pending_complaints, 0),
     notificationSuccessRate: asNumber(raw.notification_success_rate, 0),
+    avgResponseTimeMs: asNumber(raw.avg_response_time_ms, 0),
+    channelGrowthRate: asNumber(raw.channel_growth_rate, 0),
   }
 }
 
@@ -289,6 +299,19 @@ export function mapRawTrip(raw: RawTrip): Trip {
   const endDate = safeText(raw.end_date, '')
   const id = safeText(raw.id, fallbackId('trip', [teamId, destination, startDate, endDate]))
 
+  const itinerary = (raw.itinerary || []).map(item => ({
+    date: safeText(item.date),
+    transport: safeText(item.transport),
+    route: safeText(item.route),
+    hotel: safeText(item.hotel),
+  }))
+
+  const guests = (raw.guests || []).map(item => ({
+    name: safeText(item.name),
+    phone: safeText(item.phone),
+    notes: safeText(item.notes),
+  }))
+
   return {
     id,
     destination,
@@ -298,10 +321,116 @@ export function mapRawTrip(raw: RawTrip): Trip {
     participants: asNumber(raw.participants, 0),
     status,
     statusLabel: tripStatusLabel(status),
+    itinerary,
+    guests,
   }
 }
 
-export function toTripWritePayload(input: TripWriteInput): Record<string, string | number> {
+function normalizeRiskBadge(value: string | undefined): EmergencyWeatherSummary['riskLevelBadge'] {
+  const raw = normalizeAliasKey(value)
+  if (raw === 'critical' || raw === 'danger' || raw === 'high') {
+    return 'danger'
+  }
+  if (raw === 'warning' || raw === 'medium') {
+    return 'warning'
+  }
+  if (raw === 'success' || raw === 'low') {
+    return 'success'
+  }
+  if (raw === 'info') {
+    return 'info'
+  }
+  return 'default'
+}
+
+export function mapRawEmergencyWeatherSummary(raw: RawEmergencyWeatherSummary): EmergencyWeatherSummary {
+  const channel = normalizeChannel(safeText(raw.channel, 'sms'))
+  return {
+    alertId: safeText(raw.alert_id, fallbackId('weather-alert', [safeText(raw.title), safeText(raw.updated_at)])),
+    title: safeText(raw.title, '紧急天气通知'),
+    riskLevel: safeText(raw.risk_level, 'high'),
+    riskLevelLabel: safeText(raw.risk_level_label, '较高'),
+    riskLevelBadge: normalizeRiskBadge(safeText(raw.risk_level_badge ?? raw.risk_level, 'high')),
+    updatedAt: safeText(raw.updated_at),
+    weatherSummary: safeText(raw.weather_summary),
+    aiRiskSummary: safeText(raw.ai_risk_summary),
+    affectedTripCount: asNumber(raw.affected_trip_count, 0),
+    affectedTrips: (raw.affected_trips || []).map((trip) => ({
+      tripId: safeText(trip.trip_id),
+      teamId: safeText(trip.team_id),
+      destination: safeText(trip.destination),
+      status: safeText(trip.status),
+      statusLabel: safeText(trip.status_label, safeText(trip.status)),
+      travelerCount: asNumber(trip.traveler_count, 0),
+      summary: safeText(trip.summary),
+    })),
+    generatedNotification: safeText(raw.generated_notification),
+    channel,
+    channelLabel: channelLabel(channel),
+    requiresConfirmation: Boolean(raw.requires_confirmation),
+  }
+}
+
+function mapRawTripContact(raw: unknown): TripContact {
+  const item = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  return {
+    name: safeText(item.name),
+    phone: safeText(item.phone),
+    notes: safeText(item.notes),
+  }
+}
+
+function mapRawNotificationSummary(raw: unknown): TripNotificationSummary {
+  const item = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  const latest = typeof item.latest === 'object' && item.latest !== null
+    ? (item.latest as Record<string, unknown>)
+    : null
+  return {
+    recentCount: asNumber(item.recent_count, 0),
+    latest,
+    nextHint: safeText(item.next_hint),
+  }
+}
+
+export function mapRawTripSchedule(raw: RawTripSchedule): TripSchedule {
+  const status = normalizeTripStatus(raw.status?.code)
+  return {
+    tripId: safeText(raw.trip_id),
+    teamId: safeText(raw.team_id),
+    destination: safeText(raw.destination, '未命名行程'),
+    startDate: safeText(raw.start_date),
+    endDate: safeText(raw.end_date),
+    travelerCount: asNumber(raw.traveler_count, 0),
+    status: {
+      code: status,
+      label: safeText(raw.status?.label, tripStatusLabel(status)),
+    },
+    leader: mapRawTripContact(raw.leader),
+    contact: mapRawTripContact(raw.contact),
+    routeSummary: Array.isArray(raw.route_summary) ? raw.route_summary.map((item) => safeText(item)).filter(Boolean) : [],
+    days: (raw.days || []).map((day, index) => ({
+      day: asNumber(day.day, index + 1),
+      title: safeText(day.title, `Day ${index + 1}`),
+      date: safeText(day.date),
+      route: safeText(day.route),
+      hotel: safeText(day.hotel),
+      transport: safeText(day.transport),
+      segments: (day.segments || []).map((segment) => ({
+        departureTime: safeText(segment.departure_time),
+        arrivalTime: safeText(segment.arrival_time),
+        from: safeText(segment.from),
+        to: safeText(segment.to),
+        transport: safeText(segment.transport),
+        sightseeing: safeText(segment.sightseeing),
+        hotel: safeText(segment.hotel),
+        mealPlan: safeText(segment.meal_plan),
+      })),
+    })),
+    notificationSummary: mapRawNotificationSummary(raw.notification_summary),
+  }
+}
+
+export function toTripWritePayload(input: TripWriteInput): Record<string, any> {
   const normalizedStatus = input.status ?? 'planned'
   return {
     destination: input.destination,
@@ -312,6 +441,8 @@ export function toTripWritePayload(input: TripWriteInput): Record<string, string
     participants: input.participants ?? 0,
     status: tripStatusLabel(normalizedStatus),
     status_code: normalizedStatus,
+    itinerary: input.itinerary || [],
+    guests: input.guests || [],
   }
 }
 

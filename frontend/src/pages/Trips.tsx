@@ -1,28 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { Header } from '../components/Header'
 import { Card } from '../components/Card'
 import { Button } from '../components/Button'
 import { Badge } from '../components/Badge'
-import { Modal } from '../components/Modal'
 import { PageState } from '../components/PageState'
-import { Plus, Edit, Trash2, Calendar, Users, Upload, CheckCircle } from 'lucide-react'
+import { PageShell } from '../components/PageShell'
+import { ArrowRight, Calendar, CheckCircle, FileText, MoreVertical, Plus, Trash2, Upload, Users } from 'lucide-react'
 import { tripsApi, getErrorMessage } from '../services/api'
 import { type Trip, type TripStatusCode } from '../types/api'
+import { TripDetail } from './TripDetail'
 
 type LoadState = 'loading' | 'ready' | 'error' | 'empty'
 
-interface TripFormState {
-  destination: string
-  teamId: string
-  startDate: string
-  endDate: string
-}
-
-const EMPTY_FORM: TripFormState = {
-  destination: '',
-  teamId: '',
-  startDate: '',
-  endDate: '',
+interface TripsProps {
+  tripId?: string | null
+  onOpenTrip?: (tripId: string) => void
+  onBackToList?: () => void
+  onOpenTripNotifications?: (tripId: string) => void
 }
 
 function statusBadgeVariant(status: TripStatusCode): 'success' | 'info' | 'default' | 'warning' {
@@ -38,17 +31,21 @@ function statusBadgeVariant(status: TripStatusCode): 'success' | 'info' | 'defau
   return 'warning'
 }
 
-export function Trips() {
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [editingTripId, setEditingTripId] = useState<string | null>(null)
-  const [trips, setTrips] = useState<Trip[]>([])
-  const [form, setForm] = useState<TripFormState>(EMPTY_FORM)
+export function Trips({
+  tripId = null,
+  onOpenTrip,
+  onBackToList,
+  onOpenTripNotifications,
+}: TripsProps) {
+  // Navigation State
+  const [isCreating, setIsCreating] = useState(false)
 
+  // List State
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [trips, setTrips] = useState<Trip[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [errorMessage, setErrorMessage] = useState('')
   const [actionMessage, setActionMessage] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
 
   const loadTrips = async () => {
@@ -69,70 +66,8 @@ export function Trips() {
     void loadTrips()
   }, [])
 
-  const closeTripModal = () => {
-    setIsModalOpen(false)
-    setEditingTripId(null)
-    setForm(EMPTY_FORM)
-  }
-
-  const openCreateModal = () => {
-    setEditingTripId(null)
-    setForm(EMPTY_FORM)
-    setIsModalOpen(true)
-  }
-
-  const openEditModal = (trip: Trip) => {
-    setEditingTripId(trip.id)
-    setForm({
-      destination: trip.destination,
-      teamId: trip.teamId,
-      startDate: trip.startDate,
-      endDate: trip.endDate,
-    })
-    setIsModalOpen(true)
-  }
-
-
-
-  const submitTrip = async () => {
-    if (!form.destination || !form.teamId || !form.startDate || !form.endDate) {
-      setActionMessage('保存失败: 请完整填写目的地、团队和日期')
-      return
-    }
-
-    setIsSubmitting(true)
-    setActionMessage(null)
-
-    try {
-      if (editingTripId) {
-        await tripsApi.update(editingTripId, {
-          destination: form.destination,
-          teamId: form.teamId,
-          startDate: form.startDate,
-          endDate: form.endDate,
-        })
-        setActionMessage('行程修改成功')
-      } else {
-        await tripsApi.create({
-          destination: form.destination,
-          teamId: form.teamId,
-          startDate: form.startDate,
-          endDate: form.endDate,
-          participants: 0,
-          status: 'planned',
-        })
-        setActionMessage('行程创建成功')
-      }
-      closeTripModal()
-      await loadTrips()
-    } catch (error) {
-      setActionMessage(`保存失败: ${getErrorMessage(error)}`)
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
   const deleteTrip = async (id: string) => {
+    if (!window.confirm('确定要删除这个行程吗？')) return
     setActionMessage(null)
 
     try {
@@ -174,42 +109,74 @@ export function Trips() {
     }
   }
 
-  const pageHeader = (
-    <div className="flex items-center justify-between mb-8">
-      <h1 className="text-3xl font-bold text-gray-900">行程管理</h1>
-      <div className="flex items-center gap-3">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xlsx,.csv"
-          className="hidden"
-          onChange={(event) => {
-            const file = event.target.files?.[0]
-            if (file) {
-              void importTrips(file)
-            }
-          }}
-        />
-        <Button variant="secondary" onClick={() => fileInputRef.current?.click()} loading={isImporting}>
-          <Upload className="w-5 h-5 inline mr-2" />
-          Excel导入
-        </Button>
-        <Button onClick={openCreateModal}>
-          <Plus className="w-5 h-5 inline mr-2" />
-          新建行程
-        </Button>
-      </div>
-    </div>
+  const handleBackToList = () => {
+    setIsCreating(false)
+    onBackToList?.()
+    void loadTrips() // Refresh list
+  }
+
+  const handleOpenTrip = (id: string) => {
+    if (onOpenTrip) {
+      onOpenTrip(id)
+      return
+    }
+    window.history.pushState({}, '', `/trips/${encodeURIComponent(id)}`)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
+
+  const handleOpenTripNotifications = (id: string) => {
+    if (onOpenTripNotifications) {
+      onOpenTripNotifications(id)
+      return
+    }
+    window.history.pushState({}, '', '/notifications')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
+
+  if (tripId || isCreating) {
+    return (
+      <TripDetail
+        tripId={tripId}
+        onBack={handleBackToList}
+        onOpenTripNotifications={onOpenTripNotifications}
+      />
+    )
+  }
+
+  const pageActions = (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".xlsx,.csv"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) {
+            void importTrips(file)
+          }
+        }}
+      />
+      <Button variant="secondary" onClick={() => fileInputRef.current?.click()} loading={isImporting}>
+        <Upload className="mr-2 inline h-5 w-5" />
+        Excel导入
+      </Button>
+      <Button onClick={() => setIsCreating(true)}>
+        <Plus className="mr-2 inline h-5 w-5" />
+        新建行程
+      </Button>
+    </>
   )
 
   return (
-    <>
-      <Header />
-      <div className="p-8">
-        {pageHeader}
-
+    <PageShell
+      eyebrow="Trips"
+      title="行程管理"
+      description="按旅行团卡片化管理团期、客人规模和行程状态。"
+      actions={pageActions}
+    >
         {actionMessage ? (
-          <p className={`text-sm mb-4 ${actionMessage.includes('失败') ? 'text-red-600' : 'text-green-600'}`}>
+          <p className={`mb-6 rounded-xl p-3 text-sm ${actionMessage.includes('失败') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
             {actionMessage}
           </p>
         ) : null}
@@ -243,13 +210,13 @@ export function Trips() {
         {loadState === 'ready' ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {trips.map((trip) => (
-              <Card key={trip.id}>
+              <Card key={trip.id} className="cursor-pointer border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:shadow-xl" onClick={() => handleOpenTrip(trip.id)}>
                 <div className="mb-4">
                   <div className="flex items-start justify-between mb-2">
-                    <h3 className="text-lg font-semibold text-gray-900">{trip.destination}</h3>
+                    <h3 className="text-xl font-black tracking-tight text-slate-950">{trip.destination || '未命名'}</h3>
                     <Badge variant={statusBadgeVariant(trip.status)}>{trip.statusLabel}</Badge>
                   </div>
-                  <p className="text-sm text-gray-500">{trip.teamId}</p>
+                  <p className="font-mono text-sm uppercase tracking-wide text-slate-500">{trip.teamId}</p>
                 </div>
 
                 <div className="space-y-3 mb-6">
@@ -261,74 +228,46 @@ export function Trips() {
                   </div>
                   <div className="flex items-center gap-3 text-sm text-gray-600">
                     <Users className="w-4 h-4 text-blue-600" />
-                    <span>{trip.participants} 人参加</span>
+                    <span>{trip.guests?.length || trip.participants} 位客人</span>
                   </div>
                 </div>
 
-                <div className="flex gap-2 pt-4 border-t border-gray-200">
-                  <Button variant="secondary" size="sm" className="flex-1" onClick={() => openEditModal(trip)}>
-                    <Edit className="w-4 h-4 inline mr-1" />
-                    修改
+                <div className="flex items-center gap-2 pt-4 border-t border-gray-200" onClick={e => e.stopPropagation()}>
+                  <Button size="sm" className="flex-1 rounded-lg shadow-lg shadow-blue-200/60" onClick={() => handleOpenTrip(trip.id)}>
+                    详情 <ArrowRight className="ml-1 inline h-4 w-4" />
                   </Button>
-                  <Button variant="secondary" size="sm" className="flex-1" onClick={() => void markCompleted(trip.id)}>
-                    <Edit className="w-4 h-4 inline mr-1" />
-                    完成
+                  <Button size="sm" variant="secondary" onClick={() => handleOpenTripNotifications(trip.id)}>
+                    通知设置
                   </Button>
-                  <Button variant="danger" size="sm" className="flex-1" onClick={() => void deleteTrip(trip.id)}>
-                    <Trash2 className="w-4 h-4 inline mr-1" />
-                    删除
-                  </Button>
+                  <button
+                    className="rounded-lg bg-slate-100 p-2 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700"
+                    onClick={() => void tripsApi.exportPdf(trip.id, trip.destination)}
+                    aria-label="导出PDF"
+                  >
+                    <FileText className="h-4 w-4" />
+                  </button>
+                  <button
+                    className="rounded-lg bg-slate-100 p-2 text-slate-600 transition hover:bg-green-50 hover:text-green-700"
+                    onClick={() => void markCompleted(trip.id)}
+                    aria-label="标记完成"
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                  </button>
+                  <button
+                    className="rounded-lg bg-slate-100 p-2 text-slate-600 transition hover:bg-red-50 hover:text-red-700"
+                    onClick={() => void deleteTrip(trip.id)}
+                    aria-label="删除行程"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                  <button className="rounded-lg bg-slate-100 p-2 text-slate-500" aria-label="更多操作">
+                    <MoreVertical className="h-4 w-4" />
+                  </button>
                 </div>
               </Card>
             ))}
           </div>
         ) : null}
-
-        <Modal
-          isOpen={isModalOpen}
-          onClose={closeTripModal}
-          title={editingTripId ? '修改行程' : '新建行程'}
-          footer={
-            <div className="flex gap-2 justify-end">
-              <Button variant="secondary" onClick={closeTripModal}>
-                取消
-              </Button>
-              <Button onClick={() => void submitTrip()} loading={isSubmitting}>
-                {editingTripId ? '保存' : '创建'}
-              </Button>
-            </div>
-          }
-        >
-          <div className="space-y-4">
-            <input
-              type="text"
-              placeholder="目的地"
-              value={form.destination}
-              onChange={(event) => setForm((prev) => ({ ...prev, destination: event.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-            />
-            <input
-              type="date"
-              value={form.startDate}
-              onChange={(event) => setForm((prev) => ({ ...prev, startDate: event.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-            />
-            <input
-              type="date"
-              value={form.endDate}
-              onChange={(event) => setForm((prev) => ({ ...prev, endDate: event.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-            />
-            <input
-              type="text"
-              placeholder="团队ID"
-              value={form.teamId}
-              onChange={(event) => setForm((prev) => ({ ...prev, teamId: event.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-            />
-          </div>
-        </Modal>
-      </div>
-    </>
+    </PageShell>
   )
 }

@@ -39,4 +39,4 @@ def bootstrap_demo() -> dict:
 if __name__ == "__main__":
     from app.api.http import run_http_server
 
-    run_http_server()
+    run_http_server(port=8001)

@@ -2,11 +2,13 @@ import axios, { AxiosError, type AxiosResponse } from 'axios'
 import {
   channelCodeForSend,
   mapDashboardStats,
+  mapRawEmergencyWeatherSummary,
   mapRawAnalytics,
   mapRawNotificationRule,
   mapRawNotificationTemplate,
   mapRawRecentNotification,
   mapRawTrip,
+  mapRawTripSchedule,
   toNotificationRulePatchPayload,
   toNotificationRuleWritePayload,
   tripStatusLabel,
@@ -33,21 +35,29 @@ import {
   type CurrentUser,
   type DashboardStats,
   type ChannelCode,
+  type EmergencyWeatherSummary,
   type NotificationRule,
   type NotificationRuleWriteInput,
   type NotificationTemplate,
   type PreferencesViewModel,
+  type ProjectNotificationConfig,
   type RawAnalyticsResponse,
   type RawDashboardStats,
+  type RawEmergencyWeatherSummary,
   type RawNotificationRule,
   type RawNotificationTemplate,
   type RawPreferences,
+  type RawProjectNotificationConfig,
   type RawRecentNotification,
   type RawTrip,
+  type RawTripSchedule,
   type RecentNotification,
   type Trip,
   type TripImportResult,
+  type TripNotificationConfigContext,
+  type TripSchedule,
   type TripWriteInput,
+  type UpsertTripNotificationConfigInput,
   type UpdateTemplateInput,
 } from '../types/api'
 
@@ -60,6 +70,25 @@ const client = axios.create({
     'X-Client-Version': '0.1.0',
   },
 })
+
+export const api = {
+  async get<T>(url: string): Promise<T> {
+    const response = await client.get<ApiEnvelope<T>>(url)
+    return response.data.data
+  },
+  async post<T>(url: string, data?: any): Promise<T> {
+    const response = await client.post<ApiEnvelope<T>>(url, data)
+    return response.data.data
+  },
+  async put<T>(url: string, data?: any): Promise<T> {
+    const response = await client.put<ApiEnvelope<T>>(url, data)
+    return response.data.data
+  },
+  async delete<T>(url: string): Promise<T> {
+    const response = await client.delete<ApiEnvelope<T>>(url)
+    return response.data.data
+  },
+}
 
 export class ApiClientError extends Error {
   status: number
@@ -176,6 +205,45 @@ function extractRule(raw: unknown): RawNotificationRule {
   return raw as RawNotificationRule
 }
 
+function toProjectNotificationConfig(
+  raw: RawProjectNotificationConfig | undefined,
+  fallbackProjectId: string,
+): ProjectNotificationConfig {
+  return {
+    projectId: raw?.project_id || fallbackProjectId,
+    projectName: raw?.project_name || '',
+    weatherEnabled: Boolean(raw?.weather_enabled ?? true),
+    qweatherCredentialId: raw?.qweather_credential_id || '',
+    qweatherLocationId: raw?.qweather_location_id || '',
+    qweatherLat: raw?.qweather_lat || '',
+    qweatherLon: raw?.qweather_lon || '',
+    weatherAlertThresholds: raw?.weather_alert_thresholds ?? {},
+    smsProvider: raw?.sms_provider || 'aliyun',
+    smsSignName: raw?.sms_sign_name || '',
+    smsTemplateCodeNormal: raw?.sms_template_code_normal || '',
+    smsTemplateCodeWeatherAlert: raw?.sms_template_code_weather_alert || '',
+    manualTakeoverTarget: raw?.manual_takeover_target || '',
+    updatedAt: String(raw?.updated_at || ''),
+  }
+}
+
+function toProjectNotificationConfigUpsertPayload(input: UpsertTripNotificationConfigInput): Record<string, unknown> {
+  return {
+    project_name: input.projectName ?? '',
+    weather_enabled: input.weatherEnabled ?? true,
+    qweather_credential_id: input.qweatherCredentialId ?? '',
+    qweather_location_id: input.qweatherLocationId ?? '',
+    qweather_lat: input.qweatherLat ?? '',
+    qweather_lon: input.qweatherLon ?? '',
+    weather_alert_thresholds: input.weatherAlertThresholds ?? {},
+    sms_provider: input.smsProvider ?? 'aliyun',
+    sms_sign_name: input.smsSignName ?? '',
+    sms_template_code_normal: input.smsTemplateCodeNormal ?? '',
+    sms_template_code_weather_alert: input.smsTemplateCodeWeatherAlert ?? '',
+    manual_takeover_target: input.manualTakeoverTarget ?? '',
+  }
+}
+
 const RULE_COLLECTION_ENDPOINTS = [
   '/notifications/rules',
   '/notification-rules',
@@ -272,7 +340,24 @@ export const authApi = {
   },
 }
 
+export interface SmartSuggestion {
+  id: string
+  tripId: string
+  tripName: string
+  type: string
+  title: string
+  reason: string
+  suggestedContent: string
+  targetCount: number
+  channel: ChannelCode
+}
+
 export const dashboardApi = {
+  async getSmartSuggestions(): Promise<SmartSuggestion[]> {
+    const raw = await unwrapData<{ items: SmartSuggestion[] }>(client.get('/dashboard/smart-suggestions'))
+    return raw.items
+  },
+
   async getStats(): Promise<DashboardStats> {
     const raw = await unwrapData<RawDashboardStats>(client.get('/dashboard/stats'))
     return mapDashboardStats(raw)
@@ -292,6 +377,16 @@ export const tripsApi = {
     const raw = await unwrapData<{ total?: number; items?: RawTrip[] } | RawTrip[]>(client.get('/trips'))
     const items = Array.isArray(raw) ? raw : asArray<RawTrip>(raw.items)
     return items.map((item) => mapRawTrip(item))
+  },
+
+  async get(id: string): Promise<Trip> {
+    const raw = await unwrapData<RawTrip | { trip: RawTrip }>(client.get(`/trips/${id}`))
+    return mapRawTrip(extractTrip(raw))
+  },
+
+  async getSchedule(id: string): Promise<TripSchedule> {
+    const raw = await unwrapData<RawTripSchedule>(client.get(`/trips/${id}/schedule`))
+    return mapRawTripSchedule(raw)
   },
 
   async create(input: TripWriteInput): Promise<Trip> {
@@ -322,6 +417,12 @@ export const tripsApi = {
     if (input.status !== undefined) {
       payload.status = tripStatusLabel(input.status)
     }
+    if (input.itinerary !== undefined) {
+      payload.itinerary = input.itinerary
+    }
+    if (input.guests !== undefined) {
+      payload.guests = input.guests
+    }
 
     const raw = await unwrapData<RawTrip | { trip: RawTrip }>(client.put(`/trips/${id}`, payload))
     return mapRawTrip(extractTrip(raw))
@@ -329,6 +430,24 @@ export const tripsApi = {
 
   async remove(id: string): Promise<void> {
     await unwrapCode(client.delete(`/trips/${id}`))
+  },
+
+  async exportPdf(id: string, tripName: string): Promise<void> {
+    const response = await client.get(`/trips/${id}/export-pdf`, {
+      responseType: 'blob',
+      headers: {
+        Accept: 'application/pdf',
+      }
+    })
+
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', `行程名单_${tripName}.pdf`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
   },
 
   async importFile(file: File): Promise<TripImportResult> {
@@ -349,6 +468,93 @@ export const tripsApi = {
 }
 
 export const notificationsApi = {
+  async getTripConfigContextByTripId(tripId: string): Promise<TripNotificationConfigContext> {
+    const raw = await unwrapData<RawProjectNotificationConfig>(
+      client.get(`/trips/${encodeURIComponent(tripId)}/notification-config`),
+    )
+    const trip = await tripsApi.get(tripId)
+    const fallbackProjectId = trip.teamId || trip.id
+    return {
+      trip,
+      projectConfig: toProjectNotificationConfig(raw, fallbackProjectId),
+    }
+  },
+
+  async getTripConfigContext(tripId: string): Promise<TripNotificationConfigContext> {
+    const trip = await tripsApi.get(tripId)
+    const projectId = trip.teamId || trip.id
+
+    let projectConfigRaw: RawProjectNotificationConfig | null = null
+    try {
+      projectConfigRaw = await unwrapData<RawProjectNotificationConfig>(
+        client.get(`/project-configs/${encodeURIComponent(projectId)}`),
+      )
+    } catch (error) {
+      const normalized = toApiClientError(error)
+      if (normalized.status !== 404) {
+        throw normalized
+      }
+    }
+
+    return {
+      trip,
+      projectConfig: toProjectNotificationConfig(projectConfigRaw ?? undefined, projectId),
+    }
+  },
+
+  async upsertTripNotificationConfig(
+    projectId: string,
+    input: UpsertTripNotificationConfigInput,
+  ): Promise<ProjectNotificationConfig> {
+    const payload = toProjectNotificationConfigUpsertPayload(input)
+    const raw = await unwrapData<RawProjectNotificationConfig>(
+      client.put(`/project-configs/${encodeURIComponent(projectId)}`, payload),
+    )
+    return toProjectNotificationConfig(raw, projectId)
+  },
+
+  async upsertTripNotificationConfigByTripId(
+    tripId: string,
+    input: UpsertTripNotificationConfigInput,
+  ): Promise<ProjectNotificationConfig> {
+    const payload = toProjectNotificationConfigUpsertPayload(input)
+    const raw = await unwrapData<RawProjectNotificationConfig>(
+      client.put(`/trips/${encodeURIComponent(tripId)}/notification-config`, payload),
+    )
+    return toProjectNotificationConfig(raw, tripId)
+  },
+
+  async getEmergencyWeatherSummary(): Promise<EmergencyWeatherSummary> {
+    const raw = await unwrapData<RawEmergencyWeatherSummary>(client.get('/notifications/emergency-weather'))
+    return mapRawEmergencyWeatherSummary(raw)
+  },
+
+  async sendEmergencyWeather(payload: {
+    alertId: string
+    customContent?: string
+    channel: ChannelCode
+  }): Promise<{ ok: boolean; notificationId?: string; sentCount: number; status: string }> {
+    const raw = await unwrapData<{
+      ok?: boolean
+      notification_id?: string
+      sent_count?: number
+      status?: string
+    }>(
+      client.post('/notifications/emergency-weather/send', {
+        alert_id: payload.alertId,
+        custom_content: payload.customContent,
+        channel: channelCodeForSend(payload.channel),
+      }),
+    )
+
+    return {
+      ok: Boolean(raw.ok),
+      notificationId: raw.notification_id,
+      sentCount: Number(raw.sent_count ?? 0),
+      status: raw.status ?? 'unknown',
+    }
+  },
+
   async listTemplates(): Promise<NotificationTemplate[]> {
     const raw = await unwrapData<{ total?: number; items?: RawNotificationTemplate[] } | RawNotificationTemplate[]>(
       client.get('/notifications/templates'),
@@ -359,16 +565,20 @@ export const notificationsApi = {
 
   async send(payload: {
     templateId?: string
+    customContent?: string
     channel: ChannelCode
     customerName?: string
+    customerPhone?: string
     trip?: string
   }): Promise<{ ok: boolean; notificationId?: string }> {
     const raw = await unwrapData<{ ok?: boolean; notification_id?: string }>(
       client.post('/notifications/send', {
         template_id: payload.templateId,
+        custom_content: payload.customContent,
         channel: channelCodeForSend(payload.channel),
         channel_code: payload.channel,
         customer_name: payload.customerName,
+        customer_phone: payload.customerPhone,
         trip: payload.trip,
       }),
     )

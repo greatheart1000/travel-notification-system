@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Header } from '../components/Header'
-import { Card } from '../components/Card'
 import { Badge } from '../components/Badge'
+import { Button } from '../components/Button'
+import { Card } from '../components/Card'
+import { MetricTile } from '../components/MetricTile'
+import { Modal } from '../components/Modal'
+import { PageShell } from '../components/PageShell'
 import { PageState } from '../components/PageState'
-import { TrendingUp, Users, Send, AlertCircle } from 'lucide-react'
-import { dashboardApi, getErrorMessage } from '../services/api'
+import { Activity, Bell, CheckCircle2, Globe2, Sparkles, Users } from 'lucide-react'
+import { dashboardApi, getErrorMessage, notificationsApi, type SmartSuggestion } from '../services/api'
 import { type DashboardStats, type RecentNotification } from '../types/api'
 
 type LoadState = 'loading' | 'ready' | 'error' | 'empty'
@@ -12,48 +15,93 @@ type LoadState = 'loading' | 'ready' | 'error' | 'empty'
 const DEFAULT_STATS: DashboardStats = {
   todayNotifications: 0,
   activeTrips: 0,
+  totalTravelers: 0,
   totalUsers: 0,
+  pendingNotifications: 0,
   pendingComplaints: 0,
   notificationSuccessRate: 0,
+  avgResponseTimeMs: 0,
+  channelGrowthRate: 0,
 }
 
 function isStatsEmpty(stats: DashboardStats): boolean {
   return (
     stats.todayNotifications === 0 &&
     stats.activeTrips === 0 &&
+    stats.totalTravelers === 0 &&
     stats.totalUsers === 0 &&
+    stats.pendingNotifications === 0 &&
     stats.pendingComplaints === 0 &&
     stats.notificationSuccessRate === 0
   )
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
 export function Dashboard() {
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [stats, setStats] = useState<DashboardStats>(DEFAULT_STATS)
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([])
+  const [suggestions, setSuggestions] = useState<SmartSuggestion[]>([])
   const [errorMessage, setErrorMessage] = useState('')
+  const [sendModalOpen, setSendModalOpen] = useState(false)
+  const [activeSuggestion, setActiveSuggestion] = useState<SmartSuggestion | null>(null)
+  const [sendingMsg, setSendingMsg] = useState(false)
+  const [sendResultMsg, setSendResultMsg] = useState('')
 
   const loadData = async () => {
     setLoadState('loading')
     setErrorMessage('')
 
     try {
-      const [statsData, recentData] = await Promise.all([
+      const [statsData, recentData, suggData] = await Promise.all([
         dashboardApi.getStats(),
         dashboardApi.getRecentNotifications(10),
+        dashboardApi.getSmartSuggestions(),
       ])
 
       setStats(statsData)
       setRecentNotifications(recentData)
-
-      if (isStatsEmpty(statsData) && recentData.length === 0) {
-        setLoadState('empty')
-      } else {
-        setLoadState('ready')
-      }
+      setSuggestions(suggData)
+      setLoadState(isStatsEmpty(statsData) && recentData.length === 0 && suggData.length === 0 ? 'empty' : 'ready')
     } catch (error) {
       setLoadState('error')
       setErrorMessage(getErrorMessage(error))
+    }
+  }
+
+  const handleOpenSmartSend = (suggestion: SmartSuggestion) => {
+    setActiveSuggestion(suggestion)
+    setSendResultMsg('')
+    setSendModalOpen(true)
+  }
+
+  const executeSmartSend = async () => {
+    if (!activeSuggestion) return
+    setSendingMsg(true)
+    setSendResultMsg('')
+    try {
+      const textarea = document.getElementById('ai-msg-textarea') as HTMLTextAreaElement
+      const finalContent = textarea ? textarea.value : activeSuggestion.suggestedContent
+
+      await notificationsApi.send({
+        channel: activeSuggestion.channel,
+        customerName: '全团游客',
+        trip: activeSuggestion.tripId,
+        customContent: finalContent,
+      })
+      setSendResultMsg('智能提示已成功下发至全团')
+      setTimeout(() => {
+        setSendModalOpen(false)
+        setSuggestions((items) => items.filter((item) => item.id !== activeSuggestion.id))
+      }, 1600)
+    } catch (err) {
+      setSendResultMsg(`下发失败: ${getErrorMessage(err)}`)
+    } finally {
+      setSendingMsg(false)
     }
   }
 
@@ -63,148 +111,177 @@ export function Dashboard() {
 
   if (loadState === 'loading') {
     return (
-      <>
-        <Header />
-        <div className="p-8">
-          <PageState kind="loading" title="正在加载仪表盘" />
-        </div>
-      </>
+      <PageShell title="Travel Hub Main Dashboard Overview" description="正在同步行程与通知运营数据">
+        <PageState kind="loading" title="正在加载仪表盘" />
+      </PageShell>
     )
   }
 
   if (loadState === 'error') {
     return (
-      <>
-        <Header />
-        <div className="p-8">
-          <PageState
-            kind="error"
-            title="仪表盘加载失败"
-            description={errorMessage}
-            onRetry={() => {
-              void loadData()
-            }}
-          />
-        </div>
-      </>
+      <PageShell title="Travel Hub Main Dashboard Overview">
+        <PageState kind="error" title="仪表盘加载失败" description={errorMessage} onRetry={() => void loadData()} />
+      </PageShell>
     )
   }
 
   if (loadState === 'empty') {
     return (
-      <>
-        <Header />
-        <div className="p-8">
-          <PageState
-            kind="empty"
-            title="仪表盘暂无数据"
-            description="暂时没有统计与通知记录"
-            onRetry={() => {
-              void loadData()
-            }}
-          />
-        </div>
-      </>
+      <PageShell title="Travel Hub Main Dashboard Overview">
+        <PageState kind="empty" title="仪表盘暂无数据" description="暂时没有统计与通知记录" onRetry={() => void loadData()} />
+      </PageShell>
     )
   }
 
-  const cards = [
-    {
-      title: '今日发送通知',
-      value: String(stats.todayNotifications),
-      icon: Send,
-      color: 'bg-blue-50 text-blue-600',
-      trend: `${stats.notificationSuccessRate}% 成功率`,
-    },
-    {
-      title: '活跃行程',
-      value: String(stats.activeTrips),
-      icon: TrendingUp,
-      color: 'bg-green-50 text-green-600',
-      trend: '实时',
-    },
-    {
-      title: '用户总数',
-      value: String(stats.totalUsers),
-      icon: Users,
-      color: 'bg-purple-50 text-purple-600',
-      trend: '实时',
-    },
-    {
-      title: '投诉待处理',
-      value: String(stats.pendingComplaints),
-      icon: AlertCircle,
-      color: 'bg-red-50 text-red-600',
-      trend: '实时',
-    },
-  ]
-
   return (
-    <>
-      <Header />
-      <div className="p-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {cards.map((stat) => {
-            const Icon = stat.icon
-            return (
-              <Card key={stat.title}>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600 mb-1">{stat.title}</p>
-                    <p className="text-3xl font-bold text-gray-900">{stat.value}</p>
-                    <p className="text-xs text-green-600 mt-2">{stat.trend}</p>
-                  </div>
-                  <div className={`p-3 rounded-lg ${stat.color}`}>
-                    <Icon className="w-6 h-6" />
-                  </div>
-                </div>
-              </Card>
-            )
-          })}
-        </div>
-
-        {recentNotifications.length === 0 ? (
-          <PageState
-            kind="empty"
-            title="暂无最近通知"
-            description="可稍后重试刷新"
-            onRetry={() => {
-              void loadData()
-            }}
-          />
-        ) : (
-          <Card title="最近的通知">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">客户</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">行程</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">渠道</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">状态</th>
-                    <th className="text-left py-3 px-4 font-semibold text-gray-700">时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentNotifications.map((notif) => (
-                    <tr key={notif.id} className="border-b border-gray-100 hover:bg-gray-50 transition">
-                      <td className="py-3 px-4 font-medium text-gray-900">{notif.customerName}</td>
-                      <td className="py-3 px-4 text-gray-600">{notif.trip}</td>
-                      <td className="py-3 px-4">{notif.channelLabel}</td>
-                      <td className="py-3 px-4">
-                        <Badge variant={notif.status === 'sent' ? 'success' : 'warning'}>
-                          {notif.statusLabel}
-                        </Badge>
-                      </td>
-                      <td className="py-3 px-4 text-gray-500">{new Date(notif.createdAt).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
+    <PageShell
+      eyebrow="Operations"
+      title="Travel Hub Main Dashboard Overview"
+      description="Welcome back, Zhang San. 这里是行程、旅客和通知触达的实时运营摘要。"
+      actions={<Button onClick={() => void loadData()}>刷新数据</Button>}
+    >
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <MetricTile
+          title="Active Trips"
+          value={String(stats.activeTrips)}
+          detail="当前未完成团期"
+          trend="实时同步"
+          trendTone="good"
+          icon={Globe2}
+        />
+        <MetricTile
+          title="Total Travelers"
+          value={String(stats.totalTravelers || stats.totalUsers)}
+          detail="已纳入服务的客人"
+          trend={`${stats.notificationSuccessRate}% 通知成功率`}
+          trendTone="good"
+          icon={Users}
+        />
+        <MetricTile
+          title="Pending Notifications"
+          value={String(stats.pendingNotifications || stats.pendingComplaints)}
+          detail="等待重试或人工确认"
+          trend={stats.pendingNotifications > 0 ? '需关注' : '无积压'}
+          trendTone={stats.pendingNotifications > 0 ? 'warn' : 'neutral'}
+          icon={Bell}
+        />
       </div>
-    </>
+
+      {suggestions.length > 0 ? (
+        <section className="mt-8 rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-900 to-blue-700 p-6 text-white shadow-2xl shadow-blue-950/20">
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <div>
+              <h2 className="flex items-center gap-2 text-2xl font-black">
+                <Sparkles className="h-6 w-6 text-blue-100" />
+                AI 智能管家提醒
+              </h2>
+              <p className="mt-1 text-sm text-blue-100">根据天气、行程节点和模板规则生成的运营建议。</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {suggestions.map((sugg) => (
+              <div key={sugg.id} className="rounded-2xl bg-white/12 p-5 ring-1 ring-white/15 backdrop-blur">
+                <div className="mb-3 flex items-start justify-between gap-4">
+                  <h3 className="text-lg font-bold">{sugg.title}</h3>
+                  <Badge variant={sugg.type === 'weather_alert' ? 'warning' : 'info'}>
+                    {sugg.tripName} / {sugg.targetCount}人
+                  </Badge>
+                </div>
+                <p className="mb-4 rounded-xl bg-white/10 p-3 text-sm leading-6 text-blue-50">{sugg.reason}</p>
+                <Button onClick={() => handleOpenSmartSend(sugg)} className="w-full bg-white text-blue-800 hover:bg-blue-50">
+                  一键预览并发送
+                </Button>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <Card title="Recent Activities" className="mt-8 overflow-hidden border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+        {recentNotifications.length === 0 ? (
+          <PageState kind="empty" title="暂无最近通知" description="可稍后重试刷新" onRetry={() => void loadData()} />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-blue-50/80 text-left text-xs font-black uppercase tracking-[0.18em] text-slate-500">
+                  <th className="px-4 py-4">Activity</th>
+                  <th className="px-4 py-4">Date</th>
+                  <th className="px-4 py-4">Channel</th>
+                  <th className="px-4 py-4">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentNotifications.map((notif) => (
+                  <tr key={notif.id} className="border-b border-slate-100 transition hover:bg-blue-50/40">
+                    <td className="px-4 py-4">
+                      <div className="font-bold text-slate-900">Notification Sent: {notif.trip}</div>
+                      <div className="text-xs text-slate-500">{notif.customerName}</div>
+                    </td>
+                    <td className="px-4 py-4 text-slate-600">{formatTime(notif.createdAt)}</td>
+                    <td className="px-4 py-4 text-slate-600">{notif.channelLabel}</td>
+                    <td className="px-4 py-4">
+                      <div className="inline-flex items-center gap-2">
+                        {notif.status === 'sent' ? (
+                          <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                        ) : (
+                          <Activity className="h-5 w-5 text-amber-600" />
+                        )}
+                        <Badge variant={notif.status === 'sent' ? 'success' : 'warning'}>{notif.statusLabel}</Badge>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        isOpen={sendModalOpen}
+        onClose={() => setSendModalOpen(false)}
+        title={activeSuggestion?.title || '发送智能提示'}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setSendModalOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={executeSmartSend} loading={sendingMsg}>
+              确认下发全团
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          {sendResultMsg ? (
+            <div className={`rounded-lg p-3 text-sm ${sendResultMsg.includes('失败') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+              {sendResultMsg}
+            </div>
+          ) : null}
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700">发送范围</label>
+            <input
+              type="text"
+              readOnly
+              value={`${activeSuggestion?.tripName || ''} (共 ${activeSuggestion?.targetCount || 0} 人)`}
+              className="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-gray-500"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700">建议通知内容</label>
+            <textarea
+              key={activeSuggestion?.id}
+              id="ai-msg-textarea"
+              className="min-h-[120px] w-full rounded-lg border border-blue-200 bg-blue-50/30 px-3 py-2 leading-relaxed text-gray-800 outline-none focus:ring-2 focus:ring-blue-500"
+              defaultValue={activeSuggestion?.suggestedContent}
+            />
+            <p className="mt-1 flex items-center gap-1 text-xs text-gray-400">
+              <Sparkles size={12} /> 可在发送前修改上方内容。
+            </p>
+          </div>
+        </div>
+      </Modal>
+    </PageShell>
   )
 }

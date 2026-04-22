@@ -35,7 +35,11 @@ from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
 from app.modules.notification.rule_service import NotificationRuleRepository, RuleValidationError
 from app.modules.notification.service import NotificationAttemptRepository, NotificationService
+from app.modules.trigger.risk_alert_service import RiskAlertService
+from app.services.analytics_view_service import AnalyticsViewService
 from app.services.async_dispatch import AsyncDispatchService
+from app.services.dashboard_service import DashboardService
+from app.services.emergency_weather_service import EmergencyWeatherService
 from app.services.preference_service import UserPreferenceService
 from app.services.scheduler_service import init_scheduler
 from app.services.template_service import TemplateService
@@ -191,6 +195,8 @@ class TripUpdateRequest(BaseModel):
     end_date: str | None = None
     participants: int | None = None
     status: str | None = None
+    itinerary: list[dict[str, Any]] | None = None
+    guests: list[dict[str, Any]] | None = None
 
     @field_validator("team", "team_id")
     @classmethod
@@ -207,9 +213,17 @@ class NotificationSendRequest(BaseModel):
     team: str | None = None
     team_id: str | None = None
     customer_name: str | None = None
+    customer_phone: str | None = None
+    custom_content: str | None = None
     destination: str | None = None
     channel: str = "sms"
     async_delivery: bool = False
+
+
+class EmergencyWeatherSendRequest(BaseModel):
+    alert_id: str
+    custom_content: str | None = None
+    channel: str = "sms"
 
 
 class ProjectNotificationConfigUpsertRequest(BaseModel):
@@ -436,6 +450,11 @@ def _normalize_excel_serial_date(value: str) -> str:
 
 def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
     resolved_team_id = str(trip.get("team_id") or trip.get("team") or "")
+    itinerary = trip.get("itinerary") if isinstance(trip.get("itinerary"), list) else []
+    guests = trip.get("guests") if isinstance(trip.get("guests"), list) else []
+    participants = int(trip.get("participants", 0) or 0)
+    if guests:
+        participants = len(guests)
     return {
         "id": trip.get("id", ""),
         "destination": trip.get("destination", ""),
@@ -443,12 +462,123 @@ def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
         "team": resolved_team_id,
         "start_date": trip.get("start_date", ""),
         "end_date": trip.get("end_date", ""),
-        "participants": int(trip.get("participants", 0)),
+        "participants": participants,
         "status": _normalize_trip_status(str(trip.get("status", "planned"))),
+        "itinerary": itinerary,
+        "guests": guests,
         "user_id": trip.get("user_id", ""),
         "tenant_id": trip.get("tenant_id", ""),
         "created_at": trip.get("created_at"),
         "updated_at": trip.get("updated_at"),
+    }
+
+
+def _split_route_stops(route: str) -> list[str]:
+    normalized = route.replace("→", "->").replace("—", "->").replace("－", "->").replace("至", "->")
+    parts = [segment.strip() for segment in normalized.split("->")]
+    return [segment for segment in parts if segment]
+
+
+def _derive_route_summary(itinerary: list[dict[str, Any]]) -> list[str]:
+    ordered: list[str] = []
+    for item in itinerary:
+        for stop in _split_route_stops(str(item.get("route") or "")):
+            if stop not in ordered:
+                ordered.append(stop)
+    return ordered
+
+
+def _derive_trip_leader(guests: list[dict[str, Any]]) -> dict[str, str]:
+    for guest in guests:
+        notes = str(guest.get("notes") or "")
+        if "领队" in notes:
+            return {
+                "name": str(guest.get("name") or ""),
+                "phone": str(guest.get("phone") or ""),
+                "notes": notes,
+            }
+    if guests:
+        first = guests[0]
+        return {
+            "name": str(first.get("name") or ""),
+            "phone": str(first.get("phone") or ""),
+            "notes": str(first.get("notes") or ""),
+        }
+    return {"name": "", "phone": "", "notes": ""}
+
+
+def _derive_trip_day_segments(itinerary: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    days: list[dict[str, Any]] = []
+    for index, item in enumerate(itinerary, start=1):
+        route = str(item.get("route") or "")
+        hotel = str(item.get("hotel") or "")
+        transport = str(item.get("transport") or "")
+        days.append(
+            {
+                "day": index,
+                "title": f"Day {index}",
+                "date": str(item.get("date") or ""),
+                "route": route,
+                "segments": [
+                    {
+                        "departure_time": "",
+                        "arrival_time": "",
+                        "from": _split_route_stops(route)[0] if _split_route_stops(route) else "",
+                        "to": _split_route_stops(route)[-1] if _split_route_stops(route) else "",
+                        "transport": transport,
+                        "sightseeing": route,
+                        "hotel": hotel,
+                        "meal_plan": "",
+                    }
+                ],
+                "hotel": hotel,
+                "transport": transport,
+            }
+        )
+    return days
+
+
+def _serialize_trip_schedule(
+    trip: dict[str, Any], notification_items: list[dict[str, Any]]
+) -> dict[str, Any]:
+    serialized_trip = _serialize_trip(trip)
+    itinerary = serialized_trip.get("itinerary", [])
+    guests = serialized_trip.get("guests", [])
+    leader = _derive_trip_leader(guests)
+    route_summary = _derive_route_summary(itinerary)
+    next_notification_hint = ""
+    status_code = str(serialized_trip.get("status") or "planned")
+    if status_code == "planned":
+        next_notification_hint = "建议发送行前通知"
+    elif status_code == "in_progress":
+        next_notification_hint = "建议发送下一条行中提醒"
+    elif status_code == "completed":
+        next_notification_hint = "可发送行后回访问卷"
+
+    latest_notification = notification_items[0] if notification_items else None
+    return {
+        "trip_id": serialized_trip["id"],
+        "team_id": serialized_trip["team_id"],
+        "destination": serialized_trip["destination"],
+        "start_date": serialized_trip["start_date"],
+        "end_date": serialized_trip["end_date"],
+        "traveler_count": int(serialized_trip.get("participants", 0) or 0),
+        "status": {
+            "code": status_code,
+            "label": str(serialized_trip.get("status") or ""),
+        },
+        "leader": leader,
+        "contact": {
+            "name": leader["name"],
+            "phone": leader["phone"],
+        },
+        "route_summary": route_summary,
+        "days": _derive_trip_day_segments(itinerary),
+        "notification_summary": {
+            "recent_count": len(notification_items),
+            "latest": latest_notification,
+            "next_hint": next_notification_hint,
+        },
     }
 
 
@@ -482,8 +612,8 @@ def _to_recent_item(item: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_history_item(item)
     return {
         "id": normalized["id"],
-        "customer_name": normalized["customer_id"],
-        "trip": normalized["trip_id"],
+        "customer_name": str(item.get("customer_name") or normalized["customer_id"]),
+        "trip": str(item.get("trip_label") or normalized["trip_id"]),
         "team_id": normalized["team_id"],
         "team": normalized["team_id"],
         "channel": normalized["channel"],
@@ -1046,6 +1176,16 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="Tenant context missing")
         return tenant_id
 
+    def _build_emergency_weather_service(ctx: AppContext) -> EmergencyWeatherService:
+        return EmergencyWeatherService(
+            trip_repository=ctx.trip_repository,
+            project_notification_config_repository=ctx.project_notification_config_repository,
+            weather_provider=ctx.weather_provider,
+            risk_alert_service=RiskAlertService(),
+            template_service=ctx.template_service,
+            notification_service=ctx.notification_service,
+        )
+
     def _require_permission_or_403(user: dict[str, str], permission: str) -> None:
         try:
             require_permission(user, permission)
@@ -1327,6 +1467,40 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Project config not found")
         return _ok(_serialize_project_notification_config(config))
 
+    @fastapi_app.get("/api/trips/{trip_id}/notification-config")
+    def get_trip_notification_config(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        project_id = str(trip.get("team_id") or trip.get("team") or trip_id)
+        config = ctx.project_notification_config_repository.get(
+            project_id,
+            tenant_id=_current_tenant_id(user),
+        )
+        if config is None:
+            config = {
+                "tenant_id": _current_tenant_id(user),
+                "project_id": project_id,
+                "project_name": "",
+                "weather_enabled": True,
+                "qweather_credential_id": "",
+                "qweather_location_id": "",
+                "qweather_lat": "",
+                "qweather_lon": "",
+                "weather_alert_thresholds": {},
+                "sms_provider": "aliyun",
+                "sms_sign_name": "",
+                "sms_template_code_normal": "",
+                "sms_template_code_weather_alert": "",
+                "manual_takeover_target": "",
+            }
+        return _ok(_serialize_project_notification_config(config))
+
     @fastapi_app.put("/api/project-configs/{project_id}")
     def upsert_project_config(
         project_id: str,
@@ -1357,6 +1531,45 @@ def create_app() -> FastAPI:
             action="project_config_upserted",
             target=project_id,
             detail={"tenant_id": _current_tenant_id(user)},
+        )
+        return _ok(_serialize_project_notification_config(config))
+
+    @fastapi_app.put("/api/trips/{trip_id}/notification-config")
+    def upsert_trip_notification_config(
+        trip_id: str,
+        payload: ProjectNotificationConfigUpsertRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        _require_permission_or_403(user, "rule:write")
+        project_id = str(trip.get("team_id") or trip.get("team") or trip_id)
+        config = ctx.project_notification_config_repository.upsert(
+            {
+                "tenant_id": _current_tenant_id(user),
+                "project_id": project_id,
+                "project_name": payload.project_name,
+                "weather_enabled": payload.weather_enabled,
+                "qweather_credential_id": payload.qweather_credential_id,
+                "qweather_location_id": payload.qweather_location_id,
+                "qweather_lat": payload.qweather_lat,
+                "qweather_lon": payload.qweather_lon,
+                "weather_alert_thresholds": payload.weather_alert_thresholds,
+                "sms_provider": payload.sms_provider,
+                "sms_sign_name": payload.sms_sign_name,
+                "sms_template_code_normal": payload.sms_template_code_normal,
+                "sms_template_code_weather_alert": payload.sms_template_code_weather_alert,
+                "manual_takeover_target": payload.manual_takeover_target,
+            }
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="trip_notification_config_upserted",
+            target=trip_id,
+            detail={"project_id": project_id, "tenant_id": _current_tenant_id(user)},
         )
         return _ok(_serialize_project_notification_config(config))
 
@@ -1758,6 +1971,28 @@ def create_app() -> FastAPI:
         assert_trip_access(user, trip)
         return _ok(_serialize_trip(trip))
 
+    @fastapi_app.get("/api/trips/{trip_id}/schedule")
+    def get_trip_schedule(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        tenant_id = _current_tenant_id(user)
+        team_id = str(trip.get("team_id") or trip.get("team") or "")
+        notification_items = _query_notification_items(
+            repository=ctx.notification_attempt_repository,
+            limit=5,
+            trip_id=trip_id,
+            team_id=team_id or None,
+            customer_id=None,
+            tenant_id=tenant_id,
+        )
+        return _ok(_serialize_trip_schedule(trip, notification_items))
+
     @fastapi_app.put("/api/trips/{trip_id}")
     def update_trip(
         trip_id: str,
@@ -1782,6 +2017,12 @@ def create_app() -> FastAPI:
             patch["team"] = normalized_team_id
         if "status" in patch and isinstance(patch["status"], str):
             patch["status"] = _normalize_trip_status(patch["status"])
+        if "itinerary" in patch and patch["itinerary"] is None:
+            patch["itinerary"] = []
+        if "guests" in patch and patch["guests"] is None:
+            patch["guests"] = []
+        if "guests" in patch and isinstance(patch["guests"], list):
+            patch["participants"] = len(patch["guests"])
         updated = ctx.trip_repository.update(trip_id, patch)
         if updated is None:
             raise HTTPException(status_code=404, detail="Trip not found")
@@ -1836,29 +2077,38 @@ def create_app() -> FastAPI:
 
         destination = payload.destination or "未指定行程"
         team_id = _resolve_team_id(payload.team, payload.team_id)
+        trip_label = payload.trip or payload.trip_id or ""
         if payload.trip_id:
             trip = ctx.trip_repository.get(payload.trip_id)
             if trip is not None:
                 assert_trip_access(user, trip)
                 destination = trip.get("destination", destination)
                 team_id = str(trip.get("team_id") or trip.get("team") or team_id)
+                trip_label = str(trip.get("destination") or trip_label or payload.trip_id)
 
-        rendered = ctx.template_service.render_notification(
-            template,
-            {
-                "customer_name": payload.customer_name or user.get("username", user["id"]),
-                "destination": destination,
-            },
-        )
+        if payload.custom_content:
+            rendered = payload.custom_content
+        else:
+            rendered = ctx.template_service.render_notification(
+                template,
+                {
+                    "customer_name": payload.customer_name or user.get("username", user["id"]),
+                    "destination": destination,
+                },
+            )
         task = NotificationTask(
             tenant_id=tenant_id,
             team_id=team_id,
-            trip_id=payload.trip_id or "",
-            customer_id=user["id"],
+            trip_id=trip_label,
+            customer_id=payload.customer_phone or user["id"],
             rendered_content=rendered,
             idempotency_key=f"manual:{uuid4().hex}",
             primary_channel=_parse_channel(payload.channel),
             fallback_channel=Channel.WECHAT_WORK_GROUP,
+            provider_context={
+                "customer_name": payload.customer_name or user.get("username", user["id"]),
+                "trip_label": trip_label,
+            },
         )
         ctx.notification_tasks[task.id] = task
         if payload.async_delivery:
@@ -1884,6 +2134,41 @@ def create_app() -> FastAPI:
         if "job_id" in dispatch_result:
             response["job_id"] = dispatch_result["job_id"]
         return _ok(response)
+
+    @fastapi_app.get("/api/notifications/emergency-weather")
+    def get_emergency_weather_summary(
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:read")
+        service = _build_emergency_weather_service(ctx)
+        return _ok(service.get_summary(_current_tenant_id(user)))
+
+    @fastapi_app.post("/api/notifications/emergency-weather/send")
+    def send_emergency_weather_notification(
+        payload: EmergencyWeatherSendRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        service = _build_emergency_weather_service(ctx)
+        result = service.send_summary(
+            tenant_id=_current_tenant_id(user),
+            operator_id=user["id"],
+            custom_content=payload.custom_content,
+            channel=payload.channel,
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="emergency_weather_notification_sent",
+            target=payload.alert_id,
+            detail={
+                "channel": payload.channel,
+                "content_length": len((payload.custom_content or "").strip()),
+                "status": result["status"],
+            },
+        )
+        return _ok(result)
 
     @fastapi_app.get("/api/notifications/history")
     def notification_history(
@@ -1956,17 +2241,25 @@ def create_app() -> FastAPI:
         customer_id = None if user.get("role") == "admin" else user["id"]
         tenant_id = _current_tenant_id(user)
         resolved_team_id = _resolve_team_id(team, team_id)
-        items = _query_notification_items(
-            repository=ctx.notification_attempt_repository,
-            limit=limit,
-            trip_id=trip_id,
-            team_id=resolved_team_id or None,
-            customer_id=customer_id,
-            tenant_id=tenant_id,
-            channel=channel,
-            status=status,
+        dashboard_service = DashboardService(
+            trip_repository=ctx.trip_repository,
+            notification_attempt_repository=ctx.notification_attempt_repository,
+            template_service=ctx.template_service,
         )
-        recent = [_to_recent_item(item) for item in items]
+        if trip_id or resolved_team_id or customer_id or channel or status:
+            items = _query_notification_items(
+                repository=ctx.notification_attempt_repository,
+                limit=limit,
+                trip_id=trip_id,
+                team_id=resolved_team_id or None,
+                customer_id=customer_id,
+                tenant_id=tenant_id,
+                channel=channel,
+                status=status,
+            )
+            recent = [_to_recent_item(item) for item in items]
+        else:
+            recent = dashboard_service.get_recent_items(tenant_id=tenant_id, limit=limit)
         return _ok({"total": len(recent), "items": recent})
 
     @fastapi_app.get("/api/trips/{trip_id}/timeline")
@@ -1999,23 +2292,28 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         tenant_id = _current_tenant_id(user)
-        attempts = [
-            item
-            for item in ctx.notification_attempt_repository.list_history(limit=9999)
-            if item.get("tenant_id") == tenant_id
-        ]
-        sent = sum(1 for item in attempts if item.get("ok") is True)
-        total = len(attempts)
-        scoped_trips = [t for t in ctx.trip_repository.list() if t.get("tenant_id") == tenant_id]
-        return _ok(
-            {
-                "today_notifications": total,
-                "active_trips": len([t for t in scoped_trips if t.get("status") != "已完成"]),
-                "total_users": len(ctx.auth_service.users),
-                "pending_complaints": 0,
-                "notification_success_rate": round((sent / total) * 100, 1) if total else 0.0,
-            }
+        dashboard_service = DashboardService(
+            trip_repository=ctx.trip_repository,
+            notification_attempt_repository=ctx.notification_attempt_repository,
+            template_service=ctx.template_service,
         )
+        return _ok(
+            dashboard_service.get_stats(
+                tenant_id=tenant_id, total_users=len(ctx.auth_service.users)
+            )
+        )
+
+    @fastapi_app.get("/api/dashboard/smart-suggestions")
+    def dashboard_smart_suggestions(
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        dashboard_service = DashboardService(
+            trip_repository=ctx.trip_repository,
+            notification_attempt_repository=ctx.notification_attempt_repository,
+            template_service=ctx.template_service,
+        )
+        return _ok(dashboard_service.get_smart_suggestions(tenant_id=_current_tenant_id(user)))
 
     @fastapi_app.post("/api/admin/run-automation-scan")
     def run_automation_scan(
@@ -2146,7 +2444,16 @@ def create_app() -> FastAPI:
             "summary": snapshot.get("summary", {}),
             "charts": snapshot.get("charts", {}),
         }
-        return _ok(payload)
+        analytics_view_service = AnalyticsViewService(
+            analytics_service=ctx.analytics_service,
+            trip_repository=ctx.trip_repository,
+        )
+        return _ok(
+            analytics_view_service.build_metrics_payload(
+                payload,
+                tenant_id=tenant_id,
+            )
+        )
 
     return fastapi_app
 

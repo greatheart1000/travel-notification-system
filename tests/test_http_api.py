@@ -178,6 +178,63 @@ def test_notification_template_alias_supports_update_and_delete() -> None:
     assert deleted.status_code == 200
 
 
+def test_emergency_weather_summary_returns_ai_risk_and_trip_preview() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    response = client.get("/api/notifications/emergency-weather", headers=headers)
+    assert response.status_code == 200
+
+    data = response.json()["data"]
+    assert data["title"]
+    assert data["risk_level"] in {"high", "critical"}
+    assert data["weather_summary"]
+    assert data["ai_risk_summary"]
+    assert data["affected_trip_count"] >= 1
+    assert len(data["affected_trips"]) >= 1
+    assert data["generated_notification"]
+    assert "受影响" in data["generated_notification"] or "请" in data["generated_notification"]
+
+    first_trip = data["affected_trips"][0]
+    assert set(first_trip.keys()) >= {
+        "trip_id",
+        "team_id",
+        "destination",
+        "status",
+        "traveler_count",
+        "summary",
+    }
+
+
+def test_emergency_weather_send_supports_custom_content() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    summary = client.get("/api/notifications/emergency-weather", headers=headers)
+    assert summary.status_code == 200
+    data = summary.json()["data"]
+
+    response = client.post(
+        "/api/notifications/emergency-weather/send",
+        headers=headers,
+        json={
+            "alert_id": data["alert_id"],
+            "custom_content": "【紧急提醒】九寨沟沿线降雨增强，请全体游客按领队指引调整集合时间。",
+            "channel": "sms",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["ok"] is True
+    assert payload["sent_count"] >= 1
+    assert payload["notification_id"]
+    assert payload["status"] in {"sent", "manual_intervention"}
+
+
 def test_project_notification_config_crud() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
@@ -257,6 +314,309 @@ def test_trip_creation_triggers_notification_history_and_audit() -> None:
     actions = {item["action"] for item in timeline.json()["data"]["audit_logs"]}
     assert "trip_created" in actions
     assert "notification_dispatched" in actions
+
+
+def test_dashboard_core_contract_returns_stats_suggestions_and_recent_items() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    created = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "阿勒泰禾木轻奢团",
+            "team": "TEAM-DASH-001",
+            "start_date": "2026-05-01",
+            "end_date": "2026-05-06",
+            "participants": 12,
+        },
+    )
+    assert created.status_code == 201
+    trip_id = created.json()["data"]["trip"]["id"]
+
+    stats_response = client.get("/api/dashboard/stats", headers=headers)
+    assert stats_response.status_code == 200
+    stats = stats_response.json()["data"]
+    assert set(stats.keys()) == {
+        "today_notifications",
+        "active_trips",
+        "total_travelers",
+        "total_users",
+        "pending_notifications",
+        "pending_complaints",
+        "notification_success_rate",
+        "avg_response_time_ms",
+        "channel_growth_rate",
+    }
+
+    suggestions_response = client.get("/api/dashboard/smart-suggestions", headers=headers)
+    assert suggestions_response.status_code == 200
+    suggestions = suggestions_response.json()["data"]["items"]
+    assert len(suggestions) >= 1
+    first = suggestions[0]
+    assert set(first.keys()) == {
+        "id",
+        "trip_id",
+        "trip_name",
+        "type",
+        "title",
+        "reason",
+        "suggested_content",
+        "target_count",
+        "channel",
+    }
+    assert first["trip_id"] == trip_id
+
+    recent_response = client.get("/api/notifications/recent?limit=5", headers=headers)
+    assert recent_response.status_code == 200
+    recent_items = recent_response.json()["data"]["items"]
+    assert len(recent_items) >= 1
+    assert set(recent_items[0].keys()) == {
+        "id",
+        "customer_name",
+        "trip",
+        "channel",
+        "status",
+        "created_at",
+    }
+
+
+def test_trip_detail_update_persists_itinerary_and_guests() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    user_token = _login(client, "user", "123456")
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    created = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "北疆深度环线",
+            "team": "TEAM-DETAIL-001",
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-05",
+            "participants": 0,
+        },
+    )
+    assert created.status_code == 201
+    trip_id = created.json()["data"]["trip"]["id"]
+
+    update_response = client.put(
+        f"/api/trips/{trip_id}",
+        headers=headers,
+        json={
+            "itinerary": [
+                {
+                    "date": "2026-06-01",
+                    "transport": "Flight CZ1234",
+                    "route": "上海 -> 乌鲁木齐",
+                    "hotel": "乌鲁木齐康莱德",
+                },
+                {
+                    "date": "2026-06-02",
+                    "transport": "Private Van",
+                    "route": "乌鲁木齐 -> 布尔津",
+                    "hotel": "布尔津假日酒店",
+                },
+            ],
+            "guests": [
+                {"name": "张三", "phone": "13800138000", "notes": "忌辛辣"},
+                {"name": "李四", "phone": "13900139000", "notes": "靠窗房"},
+            ],
+        },
+    )
+    assert update_response.status_code == 200
+    updated_trip = update_response.json()["data"]
+    assert len(updated_trip["itinerary"]) == 2
+    assert len(updated_trip["guests"]) == 2
+    assert updated_trip["participants"] == 2
+
+    detail_response = client.get(f"/api/trips/{trip_id}", headers=headers)
+    assert detail_response.status_code == 200
+    detail = detail_response.json()["data"]
+    assert detail["itinerary"][0]["route"] == "上海 -> 乌鲁木齐"
+    assert detail["guests"][1]["name"] == "李四"
+    assert detail["participants"] == 2
+
+
+def test_trip_schedule_returns_route_days_and_notification_summary() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    user_token = _login(client, "user", "123456")
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    created = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "新疆环线精华团",
+            "team": "TEAM-SCHEDULE-001",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-04",
+            "participants": 0,
+        },
+    )
+    assert created.status_code == 201
+    trip_id = created.json()["data"]["trip"]["id"]
+
+    updated = client.put(
+        f"/api/trips/{trip_id}",
+        headers=headers,
+        json={
+            "status": "进行中",
+            "itinerary": [
+                {
+                    "date": "2026-08-01",
+                    "transport": "Flight CZ6881",
+                    "route": "乌鲁木齐 -> 吐鲁番",
+                    "hotel": "吐鲁番万达美华",
+                },
+                {
+                    "date": "2026-08-02",
+                    "transport": "Tour Bus",
+                    "route": "吐鲁番 -> 喀纳斯",
+                    "hotel": "喀纳斯山庄",
+                },
+            ],
+            "guests": [
+                {"name": "王导", "phone": "13800138000", "notes": "领队"},
+                {"name": "张三", "phone": "13900139000", "notes": "普通游客"},
+            ],
+        },
+    )
+    assert updated.status_code == 200
+
+    response = client.get(f"/api/trips/{trip_id}/schedule", headers=headers)
+    assert response.status_code == 200
+
+    payload = response.json()["data"]
+    assert payload["trip_id"] == trip_id
+    assert payload["route_summary"] == ["乌鲁木齐", "吐鲁番", "喀纳斯"]
+    assert payload["status"]["code"] == "in_progress"
+    assert payload["traveler_count"] == 2
+    assert payload["leader"]["name"] == "王导"
+    assert payload["leader"]["phone"] == "13800138000"
+    assert payload["days"][0]["title"] == "Day 1"
+    assert payload["days"][0]["segments"][0]["transport"] == "Flight CZ6881"
+    assert payload["days"][1]["segments"][0]["hotel"] == "喀纳斯山庄"
+    assert payload["notification_summary"]["recent_count"] >= 1
+
+
+def test_notifications_send_supports_custom_content_and_template_send() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    template_response = client.post(
+        "/api/notifications/templates",
+        headers=headers,
+        json={
+            "name": "发送测试模板",
+            "content": "尊敬的{{customer_name}}，欢迎参加{{destination}}行程",
+            "channel": "sms",
+            "notification_type": "daily_reminder",
+            "is_active": True,
+        },
+    )
+    assert template_response.status_code == 201
+    template_id = template_response.json()["data"]["id"]
+
+    custom_send = client.post(
+        "/api/notifications/send",
+        headers=headers,
+        json={
+            "custom_content": "这是一条人工编辑短信",
+            "channel": "sms",
+            "customer_name": "王五",
+            "customer_phone": "13700137000",
+            "trip": "MANUAL-TRIP-001",
+        },
+    )
+    assert custom_send.status_code == 200
+    custom_payload = custom_send.json()["data"]
+    assert custom_payload["ok"] is True
+    assert custom_payload["notification_id"]
+
+    template_send = client.post(
+        "/api/notifications/send",
+        headers=headers,
+        json={
+            "template_id": template_id,
+            "channel": "sms",
+            "customer_name": "赵六",
+            "customer_phone": "13600136000",
+            "destination": "伊犁草原",
+            "trip": "MANUAL-TRIP-002",
+        },
+    )
+    assert template_send.status_code == 200
+    template_payload = template_send.json()["data"]
+    assert template_payload["ok"] is True
+    assert template_payload["notification_id"]
+
+    recent_response = client.get("/api/notifications/recent?limit=10", headers=headers)
+    assert recent_response.status_code == 200
+    recent_items = recent_response.json()["data"]["items"]
+    assert len(recent_items) >= 2
+    assert any(item["trip"] == "MANUAL-TRIP-001" for item in recent_items)
+    assert any(item["trip"] == "MANUAL-TRIP-002" for item in recent_items)
+
+
+def test_analytics_metrics_returns_itinerary_rows_from_backend() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    created = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "喀纳斯湖景团",
+            "team": "TEAM-ANA-001",
+            "start_date": "2026-07-10",
+            "end_date": "2026-07-13",
+            "participants": 2,
+        },
+    )
+    assert created.status_code == 201
+    trip_id = created.json()["data"]["trip"]["id"]
+
+    updated = client.put(
+        f"/api/trips/{trip_id}",
+        headers=headers,
+        json={
+            "status": "进行中",
+            "itinerary": [
+                {
+                    "date": "2026-07-10",
+                    "transport": "SUV",
+                    "route": "乌鲁木齐 -> 布尔津",
+                    "hotel": "布尔津美居",
+                }
+            ],
+            "guests": [
+                {"name": "A", "phone": "13500135000", "notes": ""},
+                {"name": "B", "phone": "13400134000", "notes": ""},
+            ],
+        },
+    )
+    assert updated.status_code == 200
+
+    metrics_response = client.get("/api/analytics/metrics", headers=headers)
+    assert metrics_response.status_code == 200
+    payload = metrics_response.json()["data"]
+    assert "summary" in payload
+    assert "metrics" in payload
+    assert "charts" in payload
+    assert "notification_trend" in payload["charts"]
+    assert "channel_distribution" in payload["charts"]
+    assert "itinerary_rows" in payload
+    assert len(payload["itinerary_rows"]) >= 1
+    assert payload["itinerary_rows"][0]["route"] == "乌鲁木齐 -> 布尔津"
 
 
 def test_health_check_detail() -> None:
