@@ -41,12 +41,16 @@ def _to_iso_date(value: Any) -> str:
     return str(value or "")
 
 
+def _utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 def _to_mysql_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value.replace(tzinfo=None)
     raw = str(value or "").strip()
     if not raw:
-        return datetime.utcnow()
+        return _utc_now_naive()
     raw = raw.replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(raw)
@@ -58,7 +62,7 @@ def _to_mysql_datetime(value: Any) -> datetime:
             return datetime.strptime(raw, fmt)
         except ValueError:
             continue
-    return datetime.utcnow()
+    return _utc_now_naive()
 
 
 def _to_mysql_date(value: Any) -> date:
@@ -66,11 +70,11 @@ def _to_mysql_date(value: Any) -> date:
         return value
     raw = str(value or "").strip()
     if not raw:
-        return datetime.utcnow().date()
+        return _utc_now_naive().date()
     try:
         return date.fromisoformat(raw[:10])
     except ValueError:
-        return datetime.utcnow().date()
+        return _utc_now_naive().date()
 
 
 def _normalize_trip_status(raw: Any) -> str:
