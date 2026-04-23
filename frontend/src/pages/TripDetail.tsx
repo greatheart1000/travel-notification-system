@@ -275,8 +275,11 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <div className="space-y-6 lg:col-span-2">
-              <Card title="每日安排 CRUD">
-                <div className="mb-4 flex justify-end">
+              <Card title="每日行程编排">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm text-slate-500">
+                    在此维护每日路线、交通和酒店信息，保存后将用于通知编排与数据分析。
+                  </p>
                   <Button
                     variant="secondary"
                     onClick={() => setDays((current) => [...current, buildDayDraft(current)])}
@@ -294,7 +297,11 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
                       onDelete={(dayId) => setDays((current) => removeDay(current, dayId))}
                     />
                   ))}
-                  {days.length === 0 ? <p className="text-sm text-slate-500">暂无行程日，请先新增。</p> : null}
+                  {days.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-blue-200 bg-blue-50/50 p-4 text-sm text-slate-600">
+                      暂无行程日，请点击右上角“新增行程日”开始编辑。
+                    </div>
+                  ) : null}
                 </div>
                 <div className="mt-4">
                   <Button onClick={handleSaveDays} loading={savingDays}>
@@ -313,7 +320,7 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
               </Card>
             </div>
 
-            <div className="space-y-6">
+            <div className="space-y-6 lg:sticky lg:top-24 lg:self-start">
               <Card title="团信息">
                 <div className="space-y-4">
                   <label className="block text-xs font-bold uppercase text-gray-400">
@@ -373,6 +380,9 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
                   <div>
                     <p className="text-sm text-blue-100">游客人数</p>
                     <p className="text-3xl font-bold">{form.guests.length || form.participants} 人</p>
+                    <p className="mt-1 text-xs text-blue-100">
+                      行程天数：{days.length} 天 · {form.startDate || '未设置'} ~ {form.endDate || '未设置'}
+                    </p>
                   </div>
                   <Users className="h-10 w-10 text-blue-300" />
                 </div>
