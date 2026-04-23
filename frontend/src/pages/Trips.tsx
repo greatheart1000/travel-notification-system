@@ -47,6 +47,7 @@ export function Trips({
   const [errorMessage, setErrorMessage] = useState('')
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [isImporting, setIsImporting] = useState(false)
+  const [openMenuTripId, setOpenMenuTripId] = useState<string | null>(null)
 
   const loadTrips = async () => {
     setLoadState('loading')
@@ -65,6 +66,15 @@ export function Trips({
   useEffect(() => {
     void loadTrips()
   }, [])
+
+  useEffect(() => {
+    if (!openMenuTripId) {
+      return
+    }
+    const handleWindowClick = () => setOpenMenuTripId(null)
+    window.addEventListener('click', handleWindowClick)
+    return () => window.removeEventListener('click', handleWindowClick)
+  }, [openMenuTripId])
 
   const deleteTrip = async (id: string) => {
     if (!window.confirm('确定要删除这个行程吗？')) return
@@ -239,30 +249,31 @@ export function Trips({
                   <Button size="sm" variant="secondary" onClick={() => handleOpenTripNotifications(trip.id)}>
                     通知设置
                   </Button>
+                  <div className="relative">
                   <button
-                    className="rounded-lg bg-slate-100 p-2 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700"
-                    onClick={() => void tripsApi.exportPdf(trip.id, trip.destination)}
-                    aria-label="导出PDF"
+                    className="rounded-lg bg-slate-100 p-2 text-slate-500 transition hover:bg-blue-50 hover:text-blue-700"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setOpenMenuTripId((current) => current === trip.id ? null : trip.id)
+                    }}
+                    aria-label="更多操作"
                   >
-                    <FileText className="h-4 w-4" />
-                  </button>
-                  <button
-                    className="rounded-lg bg-slate-100 p-2 text-slate-600 transition hover:bg-green-50 hover:text-green-700"
-                    onClick={() => void markCompleted(trip.id)}
-                    aria-label="标记完成"
-                  >
-                    <CheckCircle className="h-4 w-4" />
-                  </button>
-                  <button
-                    className="rounded-lg bg-slate-100 p-2 text-slate-600 transition hover:bg-red-50 hover:text-red-700"
-                    onClick={() => void deleteTrip(trip.id)}
-                    aria-label="删除行程"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                  <button className="rounded-lg bg-slate-100 p-2 text-slate-500" aria-label="更多操作">
                     <MoreVertical className="h-4 w-4" />
                   </button>
+                    {openMenuTripId === trip.id ? (
+                      <div className="absolute right-0 top-11 z-20 w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                        <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => void tripsApi.exportPdf(trip.id, trip.destination)}>
+                          <FileText className="h-4 w-4" />导出 PDF
+                        </button>
+                        <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-green-50" onClick={() => void markCompleted(trip.id)}>
+                          <CheckCircle className="h-4 w-4 text-green-700" />标记完成
+                        </button>
+                        <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-600 hover:bg-red-50" onClick={() => void deleteTrip(trip.id)}>
+                          <Trash2 className="h-4 w-4" />删除行程
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </Card>
             ))}

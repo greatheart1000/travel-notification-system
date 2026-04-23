@@ -195,10 +195,12 @@ class TripUpdateRequest(BaseModel):
     end_date: str | None = None
     participants: int | None = None
     status: str | None = None
+    leader_name: str | None = None
+    contact_phone: str | None = None
     itinerary: list[dict[str, Any]] | None = None
     guests: list[dict[str, Any]] | None = None
 
-    @field_validator("team", "team_id")
+    @field_validator("team", "team_id", "leader_name", "contact_phone")
     @classmethod
     def validate_team_fields(cls, value: str | None) -> str | None:
         if value is None:
@@ -464,6 +466,8 @@ def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
         "end_date": trip.get("end_date", ""),
         "participants": participants,
         "status": _normalize_trip_status(str(trip.get("status", "planned"))),
+        "leader_name": str(trip.get("leader_name") or ""),
+        "contact_phone": str(trip.get("contact_phone") or ""),
         "itinerary": itinerary,
         "guests": guests,
         "user_id": trip.get("user_id", ""),
@@ -544,7 +548,14 @@ def _serialize_trip_schedule(
     serialized_trip = _serialize_trip(trip)
     itinerary = serialized_trip.get("itinerary", [])
     guests = serialized_trip.get("guests", [])
-    leader = _derive_trip_leader(guests)
+    derived_leader = _derive_trip_leader(guests)
+    leader_name = str(serialized_trip.get("leader_name") or "").strip()
+    contact_phone = str(serialized_trip.get("contact_phone") or "").strip()
+    leader = {
+        "name": leader_name or derived_leader.get("name", ""),
+        "phone": contact_phone or derived_leader.get("phone", ""),
+        "notes": derived_leader.get("notes", ""),
+    }
     route_summary = _derive_route_summary(itinerary)
     next_notification_hint = ""
     status_code = str(serialized_trip.get("status") or "planned")

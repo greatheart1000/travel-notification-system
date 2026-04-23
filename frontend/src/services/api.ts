@@ -396,7 +396,7 @@ export const tripsApi = {
   },
 
   async update(id: string, input: Partial<TripWriteInput>): Promise<Trip> {
-    const payload: Record<string, string | number> = {}
+    const payload: Record<string, unknown> = {}
 
     if (input.destination !== undefined) {
       payload.destination = input.destination
@@ -416,6 +416,12 @@ export const tripsApi = {
     }
     if (input.status !== undefined) {
       payload.status = tripStatusLabel(input.status)
+    }
+    if (input.leaderName !== undefined) {
+      payload.leader_name = input.leaderName
+    }
+    if (input.contactPhone !== undefined) {
+      payload.contact_phone = input.contactPhone
     }
     if (input.itinerary !== undefined) {
       payload.itinerary = input.itinerary

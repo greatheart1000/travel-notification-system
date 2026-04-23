@@ -78,6 +78,8 @@ export interface RawTrip {
   end_date?: string
   participants?: number | string
   status?: string
+  leader_name?: string
+  contact_phone?: string
   itinerary?: RawItineraryItem[]
   guests?: RawGuest[]
 }
@@ -155,6 +157,8 @@ export interface Trip {
   participants: number
   status: TripStatusCode
   statusLabel: string
+  leaderName?: string
+  contactPhone?: string
   itinerary: ItineraryItem[]
   guests: Guest[]
 }
@@ -230,6 +234,8 @@ export interface TripWriteInput {
   endDate: string
   participants?: number
   status?: TripStatusCode
+  leaderName?: string
+  contactPhone?: string
   itinerary?: ItineraryItem[]
   guests?: Guest[]
 }
