@@ -168,14 +168,14 @@ export function Dashboard() {
       </div>
 
       {suggestions.length > 0 ? (
-        <section className="mt-8 rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-900 to-blue-700 p-6 text-white shadow-2xl shadow-blue-950/20">
+        <section className="mt-8 rounded-2xl border border-sky-100 bg-gradient-to-r from-sky-500 to-blue-500 p-6 text-white shadow-2xl shadow-sky-900/20">
           <div className="mb-5 flex items-center justify-between gap-4">
             <div>
               <h2 className="flex items-center gap-2 text-2xl font-black">
-                <Sparkles className="h-6 w-6 text-blue-100" />
+                <Sparkles className="h-6 w-6 text-sky-100" />
                 AI 智能管家提醒
               </h2>
-              <p className="mt-1 text-sm text-blue-100">根据天气、行程节点和模板规则生成的运营建议。</p>
+              <p className="mt-1 text-sm text-sky-100">根据天气、行程节点和模板规则生成的运营建议。</p>
             </div>
           </div>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -187,8 +187,8 @@ export function Dashboard() {
                     {sugg.tripName} / {sugg.targetCount}人
                   </Badge>
                 </div>
-                <p className="mb-4 rounded-xl bg-white/10 p-3 text-sm leading-6 text-blue-50">{sugg.reason}</p>
-                <Button onClick={() => handleOpenSmartSend(sugg)} className="w-full bg-white text-blue-800 hover:bg-blue-50">
+                <p className="mb-4 rounded-xl bg-white/10 p-3 text-sm leading-6 text-sky-50">{sugg.reason}</p>
+                <Button onClick={() => handleOpenSmartSend(sugg)} className="w-full bg-white text-sky-700 hover:bg-sky-50">
                   一键预览并发送
                 </Button>
               </div>

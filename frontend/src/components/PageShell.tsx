@@ -13,12 +13,12 @@ export function PageShell({ title, eyebrow, description, actions, children }: Pa
   return (
     <>
       <Header />
-      <div className="min-h-full bg-[radial-gradient(circle_at_top_left,#dbeafe_0,#f8fafc_32%,#f8fafc_100%)]">
+      <div className="min-h-full bg-[radial-gradient(circle_at_top_left,#e0f2fe_0,#f8fafc_35%,#f8fafc_100%)]">
         <div className="mx-auto max-w-[1500px] px-6 py-8 lg:px-10">
           <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               {eyebrow ? (
-                <p className="mb-3 text-xs font-black uppercase tracking-[0.28em] text-blue-700">
+                <p className="mb-3 text-xs font-black uppercase tracking-[0.28em] text-sky-700">
                   {eyebrow}
                 </p>
               ) : null}
