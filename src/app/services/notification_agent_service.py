@@ -26,10 +26,10 @@ class AlgorithmAgent:
 
         if today < start:
             return "行程前"
-        if start <= today <= end:
-            return "行程中"
         if today == end:
             return "下团即付"
+        if start <= today <= end:
+            return "行程中"
         return "下团后短期"
 
     def select_time_node(self, stage: str) -> str:
