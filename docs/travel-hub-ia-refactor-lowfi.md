@@ -51,3 +51,25 @@
 - 不调整后端数据库结构。
 - 导入识别、接送安排与字段分组先走前端 adapter/mock。
 - 当前以信息架构和任务流为主，不做视觉精修。
+
+## 当前实现状态（已完成前后端联调）
+- 前端：
+  - `Trips` 保留 Excel/PDF/空白团入口，支持真实 Excel 导入。
+  - `TripDetail` 的「导入校验」已改为调用后端接口，不再只依赖前端 mock。
+  - 导入校验页的「一键确认导入 / 手动补全」会回写后端并实时刷新快照。
+- 后端：
+  - 新增 `GET /api/trips/{trip_id}/import-snapshot`：返回识别成功、待确认、缺失字段、完整度、行程/客人/接送摘要。
+  - 新增 `PUT /api/trips/{trip_id}/import-validation`：接收手工修正字段并更新行程数据，返回最新校验快照。
+  - 保持现有数据库结构不变。
+
+## Excel 验证样例（已落库到仓库）
+- 功能验证用（开发侧）：`docs/import-samples/trip-import-validation-internal.csv`
+- 交付验证用（你可直接导入验证）：`docs/import-samples/trip-import-validation-client.csv`
+
+> 说明：使用 CSV 是为了避免代码托管平台对二进制 diff 的限制；CSV 可直接用 Excel 打开和编辑。
+
+> 推荐验证步骤：
+> 1. 在 Trips 页使用 `Excel导入` 上传 client 文件。
+> 2. 进入任一团详情，打开「导入校验」页。
+> 3. 确认缺失字段展示（如领队电话），手工补全后点击保存。
+> 4. 验证缺失字段数量、完整度、今日待办摘要是否刷新。

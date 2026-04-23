@@ -209,6 +209,10 @@ class TripUpdateRequest(BaseModel):
         return value.strip()
 
 
+class TripImportValidationApplyRequest(BaseModel):
+    fields: dict[str, str] = Field(default_factory=dict)
+
+
 class NotificationSendRequest(BaseModel):
     template_id: str | None = None
     trip_id: str | None = None
@@ -525,85 +529,110 @@ def _normalize_excel_serial_date(value: str) -> str:
     return normalized[:10]
 
 
-def _find_sheet_rows(
-    workbook_rows: dict[str, list[dict[str, str]]],
-    aliases: list[str],
-) -> list[dict[str, str]]:
-    normalized_aliases = {_normalize_import_header(alias) for alias in aliases}
-    for name, rows in workbook_rows.items():
-        if _normalize_import_header(name) in normalized_aliases:
-            return rows
-    return []
+def _build_trip_import_snapshot(
+    trip: dict[str, Any], execution_row: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    serialized = _serialize_trip(trip)
+    itinerary = serialized.get("itinerary", [])
+    guests = serialized.get("guests", [])
+    has_itinerary = len(itinerary) > 0
+    has_guests = len(guests) > 0
+    has_guest_phone = any(str(item.get("phone") or "").strip() for item in guests)
+    has_leader_contact = bool(str(serialized.get("contact_phone") or "").strip())
 
+    recognized_fields = [
+        {"key": "team_id", "label": "团号", "value": serialized.get("team_id", "") or "未识别"},
+        {"key": "destination", "label": "线路", "value": serialized.get("destination", "") or "未识别"},
+        {"key": "start_date", "label": "出团日期", "value": serialized.get("start_date", "") or "未识别"},
+        {"key": "end_date", "label": "回程日期", "value": serialized.get("end_date", "") or "未识别"},
+        {
+            "key": "participants",
+            "label": "人数",
+            "value": str(serialized.get("participants") or 0),
+        },
+        {
+            "key": "itinerary",
+            "label": "每日行程",
+            "value": f"{len(itinerary)} 天" if has_itinerary else "未识别",
+        },
+        {
+            "key": "guests",
+            "label": "客人名单",
+            "value": f"{len(guests)} 人" if has_guests else "未识别",
+        },
+    ]
+    pending_fields = [
+        {"key": "transport_mapping", "label": "交通工具映射", "value": "待确认"},
+        {"key": "meal_symbols", "label": "早午晚符号解析", "value": "待确认"},
+    ]
+    missing_fields: list[dict[str, str]] = []
+    if not has_guest_phone:
+        missing_fields.append({"key": "guest_phone", "label": "游客联系方式"})
+    if not has_leader_contact:
+        missing_fields.append({"key": "leader_phone", "label": "领队电话"})
 
-def _build_structured_trip_import(
-    workbook_rows: dict[str, list[dict[str, str]]],
-) -> dict[str, Any] | None:
-    itinerary_rows = _find_sheet_rows(workbook_rows, ["itinerary", "行程表", "行程", "trip"])
-    guest_rows = _find_sheet_rows(workbook_rows, ["guests", "客人表", "游客表", "guest"])
-    if not itinerary_rows and not guest_rows:
-        return None
+    import_ready_count = len([item for item in recognized_fields if item["value"] != "未识别"])
+    import_total = len(recognized_fields) + len(pending_fields) + len(missing_fields)
+    completeness = round((import_ready_count / max(import_total, 1)) * 100)
 
-    destination = ""
-    team_id = ""
-    start_date = ""
-    end_date = ""
-    itinerary: list[dict[str, str]] = []
-    for row in itinerary_rows:
-        destination = destination or _extract_import_field(row, ["destination", "目的地", "行程名称"])
-        team_id = team_id or _extract_import_field(row, ["team_id", "team", "teamid", "团队ID", "团队"])
-        start_date = start_date or _extract_import_field(row, ["start_date", "startdate", "开始日期", "开始时间"])
-        end_date = end_date or _extract_import_field(row, ["end_date", "enddate", "结束日期", "结束时间"])
-        day_date = _extract_import_field(row, ["date", "日期", "行程日期"])
-        route = _extract_import_field(row, ["route", "路线", "行程", "行程路线"])
-        transport = _extract_import_field(row, ["transport", "交通", "交通方式"])
-        hotel = _extract_import_field(row, ["hotel", "酒店", "住宿"])
-        if not any([day_date, route, transport, hotel]):
-            continue
-        itinerary.append(
+    itinerary_digest = [
+        {
+            "date": str(item.get("date") or ""),
+            "transport": str(item.get("transport") or "待补全"),
+            "route": str(item.get("route") or "待补全"),
+            "hotel": str(item.get("hotel") or "待补全"),
+            "meal": "早:待确认 午:待确认 晚:待确认",
+        }
+        for item in itinerary
+    ]
+    guest_digest = [
+        {
+            "name": str(item.get("name") or "未命名游客"),
+            "phone": str(item.get("phone") or "待补录电话"),
+            "status": "可通知" if str(item.get("phone") or "").strip() else "待补全",
+        }
+        for item in guests
+    ]
+    pickup_digest: list[dict[str, str]] = []
+    for index, item in enumerate(itinerary[:2]):
+        route = str(item.get("route") or "")
+        route_stops = _split_route_stops(route)
+        from_stop = route_stops[0] if route_stops else "机场"
+        to_stop = route_stops[-1] if route_stops else "酒店"
+        trip_date = str(item.get("date") or "")
+        pickup_digest.append(
             {
-                "date": _normalize_excel_serial_date(day_date) if day_date else "",
-                "route": route,
-                "transport": transport,
-                "hotel": hotel,
+                "type": "接",
+                "date": trip_date,
+                "location": f"{from_stop}接站口",
+                "shift": f"航班待补录-{index + 1}",
+                "note": "来源于导入行程，需人工确认班次",
             }
         )
-
-    guests: list[dict[str, str]] = []
-    for row in guest_rows:
-        name = _extract_import_field(row, ["name", "姓名", "客人姓名", "游客姓名"])
-        phone = _extract_import_field(row, ["phone", "手机号", "电话", "联系方式"])
-        notes = _extract_import_field(row, ["notes", "备注", "特殊要求", "偏好"])
-        if not any([name, phone, notes]):
-            continue
-        guests.append({"name": name, "phone": phone, "notes": notes})
-
-    if itinerary and (not start_date or not end_date):
-        dates = [item.get("date", "") for item in itinerary if item.get("date")]
-        if dates:
-            sorted_dates = sorted(dates)
-            start_date = start_date or sorted_dates[0]
-            end_date = end_date or sorted_dates[-1]
-
-    participants = len(guests)
-    if not participants and itinerary_rows:
-        participants_text = _extract_import_field(itinerary_rows[0], ["participants", "人数", "参与人数"])
-        if participants_text:
-            try:
-                participants = max(int(float(participants_text)), 0)
-            except ValueError:
-                participants = 0
-
-    if not destination or not team_id or not start_date or not end_date:
-        return None
+        pickup_digest.append(
+            {
+                "type": "送",
+                "date": trip_date,
+                "location": f"{to_stop}送站点",
+                "shift": f"返程待补录-{index + 1}",
+                "note": "来源于导入行程，需人工确认班次",
+            }
+        )
     return {
-        "destination": destination,
-        "team_id": team_id,
-        "start_date": _normalize_excel_serial_date(start_date),
-        "end_date": _normalize_excel_serial_date(end_date),
-        "participants": participants,
-        "itinerary": itinerary,
-        "guests": guests,
+        "trip_id": serialized.get("id", ""),
+        "completeness": completeness,
+        "has_itinerary": has_itinerary,
+        "has_guests": has_guests,
+        "today_todo": int((execution_row or {}).get("todo_count", 0)),
+        "next_node": (execution_row or {}).get("next_node_due_at")
+        or (execution_row or {}).get("dispatch_status")
+        or "待生成通知节点",
+        "recognized_fields": recognized_fields,
+        "pending_fields": pending_fields,
+        "missing_fields": missing_fields,
+        "itinerary_digest": itinerary_digest,
+        "guest_digest": guest_digest,
+        "pickup_digest": pickup_digest,
     }
 
 
@@ -2603,6 +2632,47 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
         return _ok(_serialize_trip(trip))
+
+    @fastapi_app.get("/api/trips/{trip_id}/import-snapshot")
+    def get_trip_import_snapshot(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        return _ok(_build_trip_import_snapshot(trip))
+
+    @fastapi_app.put("/api/trips/{trip_id}/import-validation")
+    def apply_trip_import_validation(
+        trip_id: str,
+        payload: TripImportValidationApplyRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:write")
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        fields = payload.fields
+        patched: dict[str, Any] = dict(trip)
+        leader_phone = str(fields.get("leader_phone", "")).strip()
+        leader_name = str(fields.get("leader_name", "")).strip()
+        if leader_phone:
+            patched["contact_phone"] = leader_phone
+        if leader_name:
+            patched["leader_name"] = leader_name
+        patched["updated_at"] = datetime.now(UTC).isoformat()
+        saved = ctx.trip_repository.update(trip_id, patched)
+        return _ok(
+            {
+                "trip": _serialize_trip(saved),
+                "snapshot": _build_trip_import_snapshot(saved),
+            }
+        )
 
     @fastapi_app.get("/api/trips/{trip_id}/schedule")
     def get_trip_schedule(

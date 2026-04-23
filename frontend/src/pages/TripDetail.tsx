@@ -5,9 +5,8 @@ import { Button } from '../components/Button'
 import { Card } from '../components/Card'
 import { PageState } from '../components/PageState'
 import { notificationsApi, tripsApi, getErrorMessage } from '../services/api'
-import { type Trip, type TripExecutionDetail, type TripExecutionRow } from '../types/api'
+import { type Trip, type TripExecutionDetail, type TripExecutionRow, type TripImportSnapshot } from '../types/api'
 import { loadTripDetail } from '../features/trip-management/tripDetailApi'
-import { buildImportFlowSnapshot } from '../features/trip-management/tripImportAdapter'
 
 type TripSubPage = 'overview' | 'import-validation' | 'itinerary' | 'guests' | 'transfers' | 'notifications'
 
@@ -42,6 +41,7 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
   const [activeTab, setActiveTab] = useState<TripSubPage>('overview')
   const [executionDetail, setExecutionDetail] = useState<TripExecutionDetail | null>(null)
   const [executionRow, setExecutionRow] = useState<TripExecutionRow | undefined>()
+  const [importSnapshot, setImportSnapshot] = useState<TripImportSnapshot | null>(null)
   const [correctedValues, setCorrectedValues] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
 
@@ -57,14 +57,16 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
       setError('')
       try {
         const payload = await loadTripDetail(tripId)
-        const [rows, detail] = await Promise.all([
+        const [rows, detail, snapshot] = await Promise.all([
           tripsApi.listExecutionRows({ ownerScope: 'mine' }).catch(() => []),
           tripsApi.getExecutionDetail(tripId).catch(() => null),
+          tripsApi.getImportSnapshot(tripId).catch(() => null),
         ])
         if (!active) return
         setTrip(payload.trip)
         setExecutionDetail(detail)
         setExecutionRow(rows.find((row) => row.tripId === tripId))
+        setImportSnapshot(snapshot)
       } catch (err) {
         if (!active) return
         setError(getErrorMessage(err))
@@ -78,7 +80,34 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
     }
   }, [tripId])
 
-  const flow = useMemo(() => (trip ? buildImportFlowSnapshot(trip, executionRow) : null), [trip, executionRow])
+  const flow = useMemo(() => {
+    if (!trip) return null
+    if (importSnapshot) return importSnapshot
+    return {
+      tripId: trip.id,
+      completeness: 0,
+      hasItinerary: trip.itinerary.length > 0,
+      hasGuests: trip.guests.length > 0,
+      todayTodo: executionRow?.todoCount ?? 0,
+      nextNode: executionRow?.nextNodeDueAt || '待生成通知节点',
+      recognizedFields: [],
+      pendingFields: [],
+      missingFields: [],
+      itineraryDigest: trip.itinerary.map((item) => ({
+        date: item.date,
+        transport: item.transport,
+        route: item.route,
+        hotel: item.hotel,
+        meal: '待确认',
+      })),
+      guestDigest: trip.guests.map((guest) => ({
+        name: guest.name,
+        phone: guest.phone,
+        status: guest.phone ? '可通知' : '待补全',
+      })),
+      pickupDigest: [],
+    }
+  }, [trip, executionRow, importSnapshot])
 
   const notifyNow = async () => {
     if (!tripId || !executionDetail) return
@@ -206,8 +235,35 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
           {flow.missingFields.length === 0 ? <p>无缺失字段</p> : flow.missingFields.map((field) => <p key={field.key}>- {field.label}</p>)}
         </div>
         <div className="mt-4 flex gap-2">
-          <Button onClick={() => setMessage('已确认导入（Mock）')}>一键确认导入</Button>
-          <Button variant="secondary" onClick={() => setMessage('已保存手动修正（Mock）')}>手动补全</Button>
+          <Button
+            onClick={() => {
+              if (!tripId) return
+              void tripsApi
+                .applyImportValidation(tripId, correctedValues)
+                .then((snapshot) => {
+                  setImportSnapshot(snapshot)
+                  setMessage('已确认导入并同步后端')
+                })
+                .catch((err) => setMessage(`确认失败: ${getErrorMessage(err)}`))
+            }}
+          >
+            一键确认导入
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (!tripId) return
+              void tripsApi
+                .applyImportValidation(tripId, correctedValues)
+                .then((snapshot) => {
+                  setImportSnapshot(snapshot)
+                  setMessage('手动补全已保存')
+                })
+                .catch((err) => setMessage(`保存失败: ${getErrorMessage(err)}`))
+            }}
+          >
+            手动补全
+          </Button>
         </div>
       </Card>
     </div>

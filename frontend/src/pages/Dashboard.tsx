@@ -24,6 +24,13 @@ const DEFAULT_STATS: DashboardStats = {
   channelGrowthRate: 0,
 }
 
+const ACTION_ITEM_STATUS_LABELS: Record<string, string> = {
+  todo: '待处理',
+  overdue: '已逾期',
+  in_progress: '处理中',
+  done: '已完成',
+}
+
 function isStatsEmpty(stats: DashboardStats): boolean {
   return (
     stats.todayNotifications === 0 &&
@@ -39,6 +46,10 @@ function isStatsEmpty(stats: DashboardStats): boolean {
 function formatTime(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function formatActionItemStatus(status: string): string {
+  return ACTION_ITEM_STATUS_LABELS[status] ?? status
 }
 
 export function Dashboard() {
@@ -139,7 +150,7 @@ export function Dashboard() {
 
   if (loadState === 'loading') {
     return (
-      <PageShell title="Travel Hub Main Dashboard Overview" description="正在同步行程与通知运营数据">
+      <PageShell title="Travel Hub 运营总览" description="正在同步行程与通知运营数据">
         <PageState kind="loading" title="正在加载仪表盘" />
       </PageShell>
     )
@@ -147,7 +158,7 @@ export function Dashboard() {
 
   if (loadState === 'error') {
     return (
-      <PageShell title="Travel Hub Main Dashboard Overview">
+      <PageShell title="Travel Hub 运营总览">
         <PageState kind="error" title="仪表盘加载失败" description={errorMessage} onRetry={() => void loadData()} />
       </PageShell>
     )
@@ -155,7 +166,7 @@ export function Dashboard() {
 
   if (loadState === 'empty') {
     return (
-      <PageShell title="Travel Hub Main Dashboard Overview">
+      <PageShell title="Travel Hub 运营总览">
         <PageState kind="empty" title="仪表盘暂无数据" description="暂时没有统计与通知记录" onRetry={() => void loadData()} />
       </PageShell>
     )
@@ -163,14 +174,14 @@ export function Dashboard() {
 
   return (
     <PageShell
-      eyebrow="Operations"
-      title="Travel Hub Main Dashboard Overview"
-      description="Welcome back, Zhang San. 这里是行程、旅客和通知触达的实时运营摘要。"
+      eyebrow="运营总览"
+      title="Travel Hub 运营总览"
+      description="欢迎回来，张三。这里是行程、旅客和通知触达的实时运营摘要。"
       actions={<Button onClick={() => void loadData()}>刷新数据</Button>}
     >
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <MetricTile
-          title="Active Trips"
+          title="进行中团期"
           value={String(stats.activeTrips)}
           detail="当前未完成团期"
           trend="实时同步"
@@ -178,7 +189,7 @@ export function Dashboard() {
           icon={Globe2}
         />
         <MetricTile
-          title="Total Travelers"
+          title="累计服务旅客"
           value={String(stats.totalTravelers || stats.totalUsers)}
           detail="已纳入服务的客人"
           trend={`${stats.notificationSuccessRate}% 通知成功率`}
@@ -186,7 +197,7 @@ export function Dashboard() {
           icon={Users}
         />
         <MetricTile
-          title="Pending Notifications"
+          title="待处理通知"
           value={String(stats.pendingNotifications || stats.pendingComplaints)}
           detail="等待重试或人工确认"
           trend={stats.pendingNotifications > 0 ? '需关注' : '无积压'}
@@ -226,7 +237,7 @@ export function Dashboard() {
                     <p className="text-sm font-semibold text-slate-900">{item.title}</p>
                     <p className="text-xs text-slate-500">{item.tripName} · 截止 {formatTime(item.dueAt)}</p>
                   </div>
-                  <Badge variant={item.status === 'overdue' ? 'warning' : 'info'}>{item.status}</Badge>
+                  <Badge variant={item.status === 'overdue' ? 'warning' : 'info'}>{formatActionItemStatus(item.status)}</Badge>
                 </div>
               ))}
             </div>
@@ -264,7 +275,7 @@ export function Dashboard() {
         </section>
       ) : null}
 
-      <Card title="Recent Activities" className="mt-8 overflow-hidden border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+      <Card title="最近动态" className="mt-8 overflow-hidden border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
         {recentNotifications.length === 0 ? (
           <PageState kind="empty" title="暂无最近通知" description="可稍后重试刷新" onRetry={() => void loadData()} />
         ) : (
@@ -272,17 +283,17 @@ export function Dashboard() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-blue-50/80 text-left text-xs font-black uppercase tracking-[0.18em] text-slate-500">
-                  <th className="px-4 py-4">Activity</th>
-                  <th className="px-4 py-4">Date</th>
-                  <th className="px-4 py-4">Channel</th>
-                  <th className="px-4 py-4">Status</th>
+                  <th className="px-4 py-4">动态</th>
+                  <th className="px-4 py-4">时间</th>
+                  <th className="px-4 py-4">渠道</th>
+                  <th className="px-4 py-4">状态</th>
                 </tr>
               </thead>
               <tbody>
                 {recentNotifications.map((notif) => (
                   <tr key={notif.id} className="border-b border-slate-100 transition hover:bg-blue-50/40">
                     <td className="px-4 py-4">
-                      <div className="font-bold text-slate-900">Notification Sent: {notif.trip}</div>
+                      <div className="font-bold text-slate-900">已发送通知：{notif.trip}</div>
                       <div className="text-xs text-slate-500">{notif.customerName}</div>
                     </td>
                     <td className="px-4 py-4 text-slate-600">{formatTime(notif.createdAt)}</td>
