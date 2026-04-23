@@ -123,13 +123,13 @@ export function Trips({ tripId = null, onOpenTrip, onBackToList, onOpenTripNotif
     <PageShell
       eyebrow="Trips"
       title="行程管理"
-      description="主流程：导入行程单 → 校验导入 → 自动生成团详情 → 执行通知。"
+      description="主流程：导入行程单 → 校验导入 → 自动生成团详情 → 执行通知（Excel建议含“行程表+客人表”双sheet）。"
       actions={
         <>
           <input
             ref={excelInputRef}
             type="file"
-            accept=".xlsx,.xls,.csv"
+            accept=".xlsx,.csv"
             className="hidden"
             onChange={(event) => {
               const file = event.target.files?.[0]
@@ -159,6 +159,10 @@ export function Trips({ tripId = null, onOpenTrip, onBackToList, onOpenTripNotif
       }
     >
       {actionMessage ? <p className="mb-4 rounded-lg bg-slate-100 p-3 text-sm text-slate-700">{actionMessage}</p> : null}
+      <p className="mb-4 text-xs text-slate-500">
+        Excel 模板建议：Sheet1=行程表（team_id,destination,start_date,end_date,date,route,transport,hotel）；
+        Sheet2=客人表（name,phone,notes）。
+      </p>
 
       {loadState === 'loading' ? <PageState kind="loading" title="正在加载行程" /> : null}
       {loadState === 'error' ? <PageState kind="error" title="行程加载失败" description={errorMessage} onRetry={() => void loadTrips()} /> : null}
