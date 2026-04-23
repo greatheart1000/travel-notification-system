@@ -293,6 +293,117 @@ def test_generate_daily_notifications_uses_multi_agent_pipeline(monkeypatch) -> 
     assert "debug" in payload
 
 
+def test_generate_daily_notifications_marks_end_date_as_checkout(monkeypatch) -> None:
+    async def _fake_llm(
+        trip_destination: str, scene: str, prompt_override: str | None = None
+    ) -> str:
+        return f"【AI生成】{scene}：{trip_destination}"
+
+    monkeypatch.setattr("app.services.notification_agent_service.generate_smart_message", _fake_llm)
+
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    created_trip = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "乌鲁木齐",
+            "team": "TEAM-END-STAGE",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-22",
+            "participants": 12,
+        },
+    )
+    assert created_trip.status_code == 201
+
+    generated = client.post(
+        "/api/notifications/generate-daily",
+        headers=headers,
+        json={
+            "group_id": "TEAM-END-STAGE",
+            "date": "2026-04-22",
+            "weather": "晴 18°C",
+            "core_work": "返程提醒",
+        },
+    )
+    assert generated.status_code == 200
+    payload = generated.json()["data"]
+    assert payload["stage"] == "下团即付"
+    assert payload["time_node"] == "下团即付"
+
+
+def test_generate_daily_notifications_resolves_trip_by_requested_date(monkeypatch) -> None:
+    async def _fake_llm(
+        trip_destination: str, scene: str, prompt_override: str | None = None
+    ) -> str:
+        return f"【AI生成】{scene}：{trip_destination}"
+
+    monkeypatch.setattr("app.services.notification_agent_service.generate_smart_message", _fake_llm)
+
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    old_trip = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "阿勒泰",
+            "team": "TEAM-REUSED",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-05",
+            "participants": 20,
+        },
+    )
+    assert old_trip.status_code == 201
+    old_trip_id = old_trip.json()["data"]["trip"]["id"]
+    old_patch = client.put(
+        f"/api/trips/{old_trip_id}",
+        headers=headers,
+        json={"itinerary": [{"date": "2026-04-03", "route": "旧行程路线"}]},
+    )
+    assert old_patch.status_code == 200
+
+    new_trip = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "伊犁",
+            "team": "TEAM-REUSED",
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-05",
+            "participants": 25,
+        },
+    )
+    assert new_trip.status_code == 201
+    new_trip_id = new_trip.json()["data"]["trip"]["id"]
+    new_patch = client.put(
+        f"/api/trips/{new_trip_id}",
+        headers=headers,
+        json={"itinerary": [{"date": "2026-06-03", "route": "新行程路线"}]},
+    )
+    assert new_patch.status_code == 200
+
+    generated = client.post(
+        "/api/notifications/generate-daily",
+        headers=headers,
+        json={
+            "group_id": "TEAM-REUSED",
+            "date": "2026-04-03",
+            "weather": "晴",
+            "core_work": "提醒",
+        },
+    )
+    assert generated.status_code == 200
+    payload = generated.json()["data"]
+    assert payload["debug"]["route_text"] == "旧行程路线"
+    assert all("旧行程路线" in item["message"] for item in payload["messages"])
+
+
 def test_emergency_weather_summary_returns_ai_risk_and_trip_preview() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)

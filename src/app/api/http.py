@@ -5,7 +5,7 @@ import io
 import re
 import zipfile
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from xml.etree import ElementTree
@@ -1224,8 +1224,17 @@ def create_app() -> FastAPI:
     def _build_notification_agent_service() -> NotificationAgentService:
         return NotificationAgentService()
 
+    def _to_iso_date(value: Any) -> date | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw).date()
+        except ValueError:
+            return None
+
     def _resolve_trip_for_group(
-        ctx: AppContext, *, tenant_id: str, group_id: str
+        ctx: AppContext, *, tenant_id: str, group_id: str, target_date: str
     ) -> dict[str, Any] | None:
         matched = [
             trip
@@ -1235,9 +1244,18 @@ def create_app() -> FastAPI:
         ]
         if not matched:
             return None
+
+        target = _to_iso_date(target_date)
+        if target is not None:
+            for trip in matched:
+                start = _to_iso_date(trip.get("start_date"))
+                end = _to_iso_date(trip.get("end_date"))
+                if start is not None and end is not None and start <= target <= end:
+                    return trip
+
         matched_sorted = sorted(
             matched,
-            key=lambda item: str(item.get("start_date") or ""),
+            key=lambda item: _to_iso_date(item.get("start_date")) or date.min,
             reverse=True,
         )
         return matched_sorted[0]
@@ -2193,7 +2211,12 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         _require_permission_or_403(user, "notification:write")
         tenant_id = _current_tenant_id(user)
-        trip = _resolve_trip_for_group(ctx, tenant_id=tenant_id, group_id=payload.group_id)
+        trip = _resolve_trip_for_group(
+            ctx,
+            tenant_id=tenant_id,
+            group_id=payload.group_id,
+            target_date=payload.date,
+        )
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip group not found")
         itinerary_ctx = _resolve_daily_itinerary_context(trip, payload.date)
