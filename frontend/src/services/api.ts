@@ -35,30 +35,48 @@ import {
   type CurrentUser,
   type DashboardStats,
   type ChannelCode,
+  type CompleteTaskInput,
+  type DispatchNowInput,
+  type DispatchPreview,
+  type DispatchPreviewInput,
   type EmergencyWeatherSummary,
   type NotificationRule,
   type NotificationRuleWriteInput,
   type NotificationTemplate,
   type PreferencesViewModel,
   type ProjectNotificationConfig,
+  type RawActionResult,
   type RawAnalyticsResponse,
   type RawDashboardStats,
+  type RawDispatchPreview,
   type RawEmergencyWeatherSummary,
   type RawNotificationRule,
   type RawNotificationTemplate,
+  type RawTripExecutionDetail,
+  type RawTripExecutionRow,
+  type RawWorkbenchOverview,
+  type RawWorkbenchTask,
   type RawPreferences,
   type RawProjectNotificationConfig,
   type RawRecentNotification,
   type RawTrip,
   type RawTripSchedule,
   type RecentNotification,
+  type ActionResult,
+  type AssignTakeoverInput,
   type Trip,
+  type TripExecutionDetail,
+  type TripExecutionRow,
   type TripImportResult,
   type TripNotificationConfigContext,
   type TripSchedule,
   type TripWriteInput,
+  type NudgeTaskInput,
+  type RetryDispatchInput,
   type UpsertTripNotificationConfigInput,
   type UpdateTemplateInput,
+  type WorkbenchOverview,
+  type WorkbenchTask,
 } from '../types/api'
 
 const client = axios.create({
@@ -182,6 +200,106 @@ async function unwrapCode(request: Promise<AxiosResponse<{ code: number }>>): Pr
 
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
+}
+
+function toNumber(value: number | string | undefined, fallback = 0): number {
+  const normalized = Number(value)
+  return Number.isFinite(normalized) ? normalized : fallback
+}
+
+function toActionResult(raw: RawActionResult): ActionResult {
+  return {
+    ok: Boolean(raw?.ok),
+    status: String(raw?.status || 'unknown'),
+    message: String(raw?.message || ''),
+    taskId: String(raw?.task_id || ''),
+    dispatchId: String(raw?.dispatch_id || ''),
+  }
+}
+
+function mapRawWorkbenchOverview(raw: RawWorkbenchOverview): WorkbenchOverview {
+  const now = new Date().toISOString().slice(0, 10)
+  return {
+    date: String(raw?.date || now),
+    timezone: String(raw?.timezone || 'UTC'),
+    pendingTasks: toNumber(raw?.pending_tasks),
+    overdueTasks: toNumber(raw?.overdue_tasks),
+    riskyTrips: toNumber(raw?.risky_trips),
+    pendingTakeovers: toNumber(raw?.pending_takeovers),
+  }
+}
+
+function mapRawWorkbenchTask(raw: RawWorkbenchTask): WorkbenchTask {
+  return {
+    id: String(raw?.id || ''),
+    tripId: String(raw?.trip_id || ''),
+    tripName: String(raw?.trip_name || '未命名团'),
+    teamId: String(raw?.team_id || ''),
+    stage: String(raw?.stage || 'unknown'),
+    nodeKey: String(raw?.node_key || ''),
+    title: String(raw?.title || '未命名任务'),
+    dueAt: String(raw?.due_at || ''),
+    ownerRole: String(raw?.owner_role || ''),
+    ownerName: String(raw?.owner_name || ''),
+    priority: (raw?.priority || 'unknown') as WorkbenchTask['priority'],
+    riskLevel: (raw?.risk_level || 'unknown') as WorkbenchTask['riskLevel'],
+    status: (raw?.status || 'unknown') as WorkbenchTask['status'],
+  }
+}
+
+function mapRawTripExecutionRow(raw: RawTripExecutionRow): TripExecutionRow {
+  return {
+    tripId: String(raw?.trip_id || ''),
+    teamId: String(raw?.team_id || ''),
+    tripName: String(raw?.trip_name || '未命名团'),
+    currentStage: String(raw?.current_stage || 'unknown'),
+    todoCount: toNumber(raw?.todo_count),
+    totalCount: toNumber(raw?.total_count),
+    nextNodeDueAt: String(raw?.next_node_due_at || ''),
+    riskLevel: (raw?.risk_level || 'unknown') as TripExecutionRow['riskLevel'],
+    dispatchStatus: String(raw?.dispatch_status || 'unknown'),
+    ownerName: String(raw?.owner_name || ''),
+    overdueMinutes: toNumber(raw?.overdue_minutes),
+  }
+}
+
+function mapRawTripExecutionDetail(raw: RawTripExecutionDetail): TripExecutionDetail {
+  return {
+    tripId: String(raw?.trip_id || ''),
+    teamId: String(raw?.team_id || ''),
+    tripName: String(raw?.trip_name || '未命名团'),
+    currentStage: String(raw?.current_stage || 'unknown'),
+    todayTotal: toNumber(raw?.today_total),
+    todayDone: toNumber(raw?.today_done),
+    riskLevel: (raw?.risk_level || 'unknown') as TripExecutionDetail['riskLevel'],
+    nextDispatchAt: String(raw?.next_dispatch_at || ''),
+    tasks: asArray(raw?.tasks).map((task) => ({
+      taskId: String(task?.task_id || ''),
+      title: String(task?.title || '未命名任务'),
+      stage: String(task?.stage || 'unknown'),
+      nodeKey: String(task?.node_key || ''),
+      dueAt: String(task?.due_at || ''),
+      status: (task?.status || 'unknown') as TripExecutionDetail['tasks'][number]['status'],
+      ownerRole: String(task?.owner_role || ''),
+      ownerName: String(task?.owner_name || ''),
+      evidenceRequired: Boolean(task?.evidence_required),
+      dispatchId: String(task?.dispatch_id || ''),
+    })),
+  }
+}
+
+function mapRawDispatchPreview(raw: RawDispatchPreview): DispatchPreview {
+  return {
+    tripId: String(raw?.trip_id || ''),
+    nodeKey: String(raw?.node_key || ''),
+    channel: (raw?.channel || 'sms') as ChannelCode,
+    templateId: String(raw?.template_id || ''),
+    content: String(raw?.content || ''),
+    variableCheck: {
+      ok: Boolean(raw?.variable_check?.ok),
+      missingFields: asArray<string>(raw?.variable_check?.missing_fields),
+    },
+  }
 }
 
 function extractTrip(raw: unknown): RawTrip {
@@ -353,6 +471,31 @@ export interface SmartSuggestion {
 }
 
 export const dashboardApi = {
+  async getWorkbenchOverview(params?: { date?: string; ownerScope?: 'mine' | 'all' }): Promise<WorkbenchOverview> {
+    const raw = await unwrapData<RawWorkbenchOverview>(
+      client.get('/workbench/today/overview', {
+        params: {
+          date: params?.date,
+          owner_scope: params?.ownerScope,
+        },
+      }),
+    )
+    return mapRawWorkbenchOverview(raw)
+  },
+
+  async getWorkbenchActionItems(params?: { limit?: number; ownerScope?: 'mine' | 'all' }): Promise<WorkbenchTask[]> {
+    const raw = await unwrapData<{ items?: RawWorkbenchTask[] } | RawWorkbenchTask[]>(
+      client.get('/workbench/today/action-items', {
+        params: {
+          limit: params?.limit,
+          owner_scope: params?.ownerScope,
+        },
+      }),
+    )
+    const items = Array.isArray(raw) ? raw : asArray<RawWorkbenchTask>(raw.items)
+    return items.map((item) => mapRawWorkbenchTask(item))
+  },
+
   async getSmartSuggestions(): Promise<SmartSuggestion[]> {
     const raw = await unwrapData<{ items: SmartSuggestion[] }>(client.get('/dashboard/smart-suggestions'))
     return raw.items
@@ -373,6 +516,31 @@ export const dashboardApi = {
 }
 
 export const tripsApi = {
+  async listExecutionRows(params?: {
+    ownerScope?: 'mine' | 'all'
+    stage?: string
+    riskLevel?: string
+    date?: string
+  }): Promise<TripExecutionRow[]> {
+    const raw = await unwrapData<{ items?: RawTripExecutionRow[] } | RawTripExecutionRow[]>(
+      client.get('/trips/execution', {
+        params: {
+          owner_scope: params?.ownerScope,
+          stage: params?.stage,
+          risk_level: params?.riskLevel,
+          date: params?.date,
+        },
+      }),
+    )
+    const items = Array.isArray(raw) ? raw : asArray<RawTripExecutionRow>(raw.items)
+    return items.map((item) => mapRawTripExecutionRow(item))
+  },
+
+  async getExecutionDetail(id: string): Promise<TripExecutionDetail> {
+    const raw = await unwrapData<RawTripExecutionDetail>(client.get(`/trips/${id}/execution`))
+    return mapRawTripExecutionDetail(raw)
+  },
+
   async list(): Promise<Trip[]> {
     const raw = await unwrapData<{ total?: number; items?: RawTrip[] } | RawTrip[]>(client.get('/trips'))
     const items = Array.isArray(raw) ? raw : asArray<RawTrip>(raw.items)
@@ -474,6 +642,76 @@ export const tripsApi = {
 }
 
 export const notificationsApi = {
+  async previewDispatch(input: DispatchPreviewInput): Promise<DispatchPreview> {
+    const raw = await unwrapData<RawDispatchPreview>(
+      client.post('/notifications/dispatch/preview', {
+        trip_id: input.tripId,
+        node_key: input.nodeKey,
+        channel: channelCodeForSend(input.channel),
+        channel_code: input.channel,
+        template_id: input.templateId,
+      }),
+    )
+    return mapRawDispatchPreview(raw)
+  },
+
+  async dispatchNow(input: DispatchNowInput): Promise<ActionResult> {
+    const raw = await unwrapData<RawActionResult>(
+      client.post('/notifications/dispatch', {
+        trip_id: input.tripId,
+        node_key: input.nodeKey,
+        channel: channelCodeForSend(input.channel),
+        channel_code: input.channel,
+        content: input.content,
+        template_id: input.templateId,
+      }),
+    )
+    return toActionResult(raw)
+  },
+
+  async retryDispatch(input: RetryDispatchInput): Promise<ActionResult> {
+    const raw = await unwrapData<RawActionResult>(
+      client.post(`/notifications/dispatch/${encodeURIComponent(input.dispatchId)}/retry`, {
+        reason: input.reason,
+      }),
+    )
+    return toActionResult(raw)
+  },
+
+  async assignTakeover(input: AssignTakeoverInput): Promise<ActionResult> {
+    const raw = await unwrapData<RawActionResult>(
+      client.post('/workbench/takeovers', {
+        task_id: input.taskId,
+        assignee_user_id: input.assigneeUserId,
+        assignee_name: input.assigneeName,
+        deadline_at: input.deadlineAt,
+        note: input.note,
+      }),
+    )
+    return toActionResult(raw)
+  },
+
+  async completeTask(input: CompleteTaskInput): Promise<ActionResult> {
+    const raw = await unwrapData<RawActionResult>(
+      client.post(`/workbench/tasks/${encodeURIComponent(input.taskId)}/complete`, {
+        result_note: input.resultNote,
+        evidence_type: input.evidenceType,
+        evidence_ref: input.evidenceRef,
+      }),
+    )
+    return toActionResult(raw)
+  },
+
+  async nudgeTask(input: NudgeTaskInput): Promise<ActionResult> {
+    const raw = await unwrapData<RawActionResult>(
+      client.post(`/workbench/tasks/${encodeURIComponent(input.taskId)}/nudge`, {
+        target_role: input.targetRole,
+        message: input.message,
+      }),
+    )
+    return toActionResult(raw)
+  },
+
   async getTripConfigContextByTripId(tripId: string): Promise<TripNotificationConfigContext> {
     const raw = await unwrapData<RawProjectNotificationConfig>(
       client.get(`/trips/${encodeURIComponent(tripId)}/notification-config`),
