@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import re
 import zipfile
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from xml.etree import ElementTree
 import uvicorn
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
@@ -474,22 +476,28 @@ def _read_xlsx_sheet_rows(
     worksheet = ElementTree.fromstring(archive.read(worksheet_path))
     parsed_rows: list[list[str]] = []
     for row_node in worksheet.findall(
-            ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"
+        ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"
     ):
         cells: dict[int, str] = {}
-        for cell in row_node.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
+        for cell in row_node.findall(
+            "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"
+        ):
             ref = cell.attrib.get("r", "")
             cell_type = cell.attrib.get("t", "")
             index = _extract_column_index(ref)
             if cell_type == "inlineStr":
-                text_node = cell.find(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
+                text_node = cell.find(
+                    ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t"
+                )
                 cells[index] = (text_node.text or "").strip() if text_node is not None else ""
                 continue
             value_node = cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
             value = (value_node.text or "").strip() if value_node is not None else ""
             if cell_type == "s" and value.isdigit():
                 shared_index = int(value)
-                cells[index] = shared_strings[shared_index] if 0 <= shared_index < len(shared_strings) else ""
+                cells[index] = (
+                    shared_strings[shared_index] if 0 <= shared_index < len(shared_strings) else ""
+                )
             else:
                 cells[index] = value
         if not cells:
@@ -529,6 +537,67 @@ def _normalize_excel_serial_date(value: str) -> str:
     return normalized[:10]
 
 
+def _find_workbook_sheet(
+    workbook_rows: dict[str, list[dict[str, str]]], names: set[str]
+) -> list[dict[str, str]]:
+    for sheet_name, rows in workbook_rows.items():
+        normalized = _normalize_import_header(sheet_name)
+        if normalized in names:
+            return rows
+    return []
+
+
+def _build_structured_trip_import(
+    workbook_rows: dict[str, list[dict[str, str]]],
+) -> dict[str, Any] | None:
+    itinerary_rows = _find_workbook_sheet(workbook_rows, {"行程表", "itinerary"})
+    guest_rows = _find_workbook_sheet(workbook_rows, {"客人表", "guests"})
+    if not itinerary_rows:
+        return None
+
+    first_row = itinerary_rows[0]
+    team_id = _extract_import_field(first_row, ["team_id", "team", "团号"])
+    destination = _extract_import_field(first_row, ["destination", "目的地", "行程名称", "线路"])
+    start_date = _normalize_excel_serial_date(
+        _extract_import_field(first_row, ["start_date", "出发日期", "出团日期"])
+    )
+    end_date = _normalize_excel_serial_date(
+        _extract_import_field(first_row, ["end_date", "结束日期", "回程日期"])
+    )
+    if not team_id or not destination or not start_date or not end_date:
+        return None
+
+    itinerary: list[dict[str, str]] = []
+    for row in itinerary_rows:
+        itinerary.append(
+            {
+                "date": _normalize_excel_serial_date(_extract_import_field(row, ["date", "日期"])),
+                "route": _extract_import_field(row, ["route", "路线", "行程"]),
+                "transport": _extract_import_field(row, ["transport", "交通"]),
+                "hotel": _extract_import_field(row, ["hotel", "酒店"]),
+            }
+        )
+
+    guests: list[dict[str, str]] = []
+    for row in guest_rows:
+        name = _extract_import_field(row, ["name", "姓名", "客人姓名"])
+        phone = _extract_import_field(row, ["phone", "手机号", "电话"])
+        notes = _extract_import_field(row, ["notes", "备注", "特殊要求"])
+        if not any((name, phone, notes)):
+            continue
+        guests.append({"name": name, "phone": phone, "notes": notes})
+
+    return {
+        "team_id": team_id,
+        "destination": destination,
+        "start_date": start_date,
+        "end_date": end_date,
+        "participants": len(guests),
+        "itinerary": itinerary,
+        "guests": guests,
+    }
+
+
 def _build_trip_import_snapshot(
     trip: dict[str, Any], execution_row: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -542,9 +611,21 @@ def _build_trip_import_snapshot(
 
     recognized_fields = [
         {"key": "team_id", "label": "团号", "value": serialized.get("team_id", "") or "未识别"},
-        {"key": "destination", "label": "线路", "value": serialized.get("destination", "") or "未识别"},
-        {"key": "start_date", "label": "出团日期", "value": serialized.get("start_date", "") or "未识别"},
-        {"key": "end_date", "label": "回程日期", "value": serialized.get("end_date", "") or "未识别"},
+        {
+            "key": "destination",
+            "label": "线路",
+            "value": serialized.get("destination", "") or "未识别",
+        },
+        {
+            "key": "start_date",
+            "label": "出团日期",
+            "value": serialized.get("start_date", "") or "未识别",
+        },
+        {
+            "key": "end_date",
+            "label": "回程日期",
+            "value": serialized.get("end_date", "") or "未识别",
+        },
         {
             "key": "participants",
             "label": "人数",
@@ -1079,6 +1160,7 @@ def _task_status_for_due(task: dict[str, Any]) -> str:
         return status
     return "overdue" if due < datetime.now(tz=UTC) else status
 
+
 def _seed_default_trips(trip_repository: TripRepository) -> None:
     if trip_repository.list():
         return
@@ -1468,6 +1550,19 @@ def create_app() -> FastAPI:
         version="0.2.0",
         lifespan=lifespan,
     )
+    cors_origins = [
+        origin.strip()
+        for origin in os.getenv("TRAVEL_NOTIFICATION_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    if cors_origins:
+        fastapi_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     fastapi_app.state.ctx = _build_context()
 
     security = HTTPBearer(auto_error=False)
@@ -2342,9 +2437,7 @@ def create_app() -> FastAPI:
                         due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
                     except ValueError:
                         continue
-                    overdue_minutes = max(
-                        overdue_minutes, int((now - due).total_seconds() // 60)
-                    )
+                    overdue_minutes = max(overdue_minutes, int((now - due).total_seconds() // 60))
             dispatch_status = "pending"
             if any(status == "handover_in_progress" for status in statuses):
                 dispatch_status = "manual_intervention"
@@ -2412,11 +2505,13 @@ def create_app() -> FastAPI:
                 "today_total": today_total,
                 "today_done": today_done,
                 "risk_level": risk,
-                "next_dispatch_at": min(
-                    [str(item.get("due_at") or "") for item in normalized if item.get("due_at")]
-                )
-                if normalized
-                else "",
+                "next_dispatch_at": (
+                    min(
+                        [str(item.get("due_at") or "") for item in normalized if item.get("due_at")]
+                    )
+                    if normalized
+                    else ""
+                ),
                 "tasks": [
                     {
                         "task_id": item.get("id"),
@@ -2569,7 +2664,9 @@ def create_app() -> FastAPI:
             patch: dict[str, Any] = {
                 "itinerary": structured_trip["itinerary"],
                 "guests": structured_trip["guests"],
-                "participants": max(structured_trip["participants"], len(structured_trip["guests"])),
+                "participants": max(
+                    structured_trip["participants"], len(structured_trip["guests"])
+                ),
             }
             if structured_trip["guests"]:
                 patch["leader_name"] = structured_trip["guests"][0].get("name", "")
@@ -2826,7 +2923,9 @@ def create_app() -> FastAPI:
         tenant_id = _current_tenant_id(user)
         template = None
         if payload.template_id:
-            template = ctx.template_service.get_notification_template(payload.template_id, tenant_id)
+            template = ctx.template_service.get_notification_template(
+                payload.template_id, tenant_id
+            )
         if template is None:
             template = ctx.template_service.ensure_default_template(tenant_id=tenant_id)
         variables = {
@@ -2866,7 +2965,9 @@ def create_app() -> FastAPI:
         template = None
         if not content:
             if payload.template_id:
-                template = ctx.template_service.get_notification_template(payload.template_id, tenant_id)
+                template = ctx.template_service.get_notification_template(
+                    payload.template_id, tenant_id
+                )
             if template is None:
                 template = ctx.template_service.ensure_default_template(tenant_id=tenant_id)
             content = ctx.template_service.render_notification(
@@ -2896,7 +2997,10 @@ def create_app() -> FastAPI:
 
         tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id)
         for item in tasks:
-            if str(item.get("trip_id")) == payload.trip_id and str(item.get("node_key")) == payload.node_key:
+            if (
+                str(item.get("trip_id")) == payload.trip_id
+                and str(item.get("node_key")) == payload.node_key
+            ):
                 item["dispatch_id"] = dispatch_id
                 item["updated_at"] = _now_iso()
                 item["status"] = "done" if result.get("ok") else "handover_in_progress"

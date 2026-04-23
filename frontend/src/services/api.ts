@@ -18,6 +18,7 @@ import {
   clearAuthStorage,
   dispatchAuthStateChanged,
   getAccessToken,
+  getRefreshToken,
   setAuthTokens,
 } from '../adapters/authAdapter'
 import {
@@ -110,6 +111,8 @@ export const api = {
   },
 }
 
+let refreshRequest: Promise<string | null> | null = null
+
 export class ApiClientError extends Error {
   status: number
   code: number
@@ -180,7 +183,47 @@ client.interceptors.request.use((config) => {
 
 client.interceptors.response.use(
   (response) => response,
-  (error: unknown) => {
+  async (error: unknown) => {
+    if (error instanceof AxiosError) {
+      const status = error.response?.status ?? 0
+      const url = error.config?.url ?? ''
+      const originalRequest = error.config
+
+      if (status === 401 && originalRequest && !url.includes('/auth/refresh')) {
+        const refreshToken = getRefreshToken()
+        if (refreshToken) {
+          refreshRequest =
+            refreshRequest ??
+            client
+              .post<ApiEnvelope<AuthLoginResponse>>('/auth/refresh', {
+                refresh_token: refreshToken,
+              })
+              .then((response) => {
+                const payload = response.data.data
+                setAuthTokens(payload)
+                dispatchAuthStateChanged(true)
+                return payload.access_token
+              })
+              .catch(() => {
+                clearAuthStorage()
+                dispatchAuthStateChanged(false)
+                return null
+              })
+              .finally(() => {
+                refreshRequest = null
+              })
+
+          const nextAccessToken = await refreshRequest
+          if (nextAccessToken) {
+            originalRequest.headers = originalRequest.headers ?? {}
+            ;(originalRequest.headers as Record<string, string>).Authorization =
+              `Bearer ${nextAccessToken}`
+            return client.request(originalRequest)
+          }
+        }
+      }
+    }
+
     const normalized = toApiClientError(error)
     if (normalized.status === 401) {
       clearAuthStorage()

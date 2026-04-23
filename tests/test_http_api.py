@@ -5,7 +5,7 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
-from app.api.http import app, reset_state
+from app.api.http import app, create_app, reset_state
 
 
 def _login(client: TestClient, username: str, password: str) -> str:
@@ -218,7 +218,12 @@ def test_trip_import_snapshot_and_apply_validation() -> None:
         headers=headers,
         json={
             "itinerary": [
-                {"date": "2026-08-01", "transport": "大巴", "route": "伊宁->赛里木湖", "hotel": "赛里木湖酒店"}
+                {
+                    "date": "2026-08-01",
+                    "transport": "大巴",
+                    "route": "伊宁->赛里木湖",
+                    "hotel": "赛里木湖酒店",
+                }
             ],
             "guests": [{"name": "张三", "phone": "", "notes": "成人"}],
         },
@@ -237,7 +242,9 @@ def test_trip_import_snapshot_and_apply_validation() -> None:
         json={"fields": {"leader_phone": "13800138000"}},
     )
     assert applied.status_code == 200
-    new_missing_labels = [item["label"] for item in applied.json()["data"]["snapshot"]["missing_fields"]]
+    new_missing_labels = [
+        item["label"] for item in applied.json()["data"]["snapshot"]["missing_fields"]
+    ]
     assert "领队电话" not in new_missing_labels
 
 
@@ -1037,6 +1044,23 @@ def test_health_check_detail() -> None:
     assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "ok"
     assert "components" in detail.json()["data"]
+
+
+def test_cors_preflight_is_enabled_when_origins_configured(monkeypatch) -> None:
+    monkeypatch.setenv("TRAVEL_NOTIFICATION_CORS_ORIGINS", "http://localhost:5173")
+    scoped_app = create_app()
+    client = TestClient(scoped_app)
+
+    response = client.options(
+        "/api/health",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
 
 
 def test_analytics_metrics_returns_seeded_structured_data() -> None:

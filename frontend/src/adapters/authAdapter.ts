@@ -20,6 +20,13 @@ export function hasAccessToken(): boolean {
   return Boolean(getAccessToken())
 }
 
+export function getRefreshToken(): string | null {
+  if (!isBrowser()) {
+    return null
+  }
+  return window.localStorage.getItem(REFRESH_TOKEN_KEY)
+}
+
 export function setAuthTokens(payload: AuthLoginResponse): void {
   if (!isBrowser()) {
     return
