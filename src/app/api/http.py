@@ -415,28 +415,21 @@ def _extract_column_index(ref: str) -> int:
 
 
 def _read_xlsx_rows(raw: bytes) -> list[dict[str, str]]:
+    workbook_rows = _read_xlsx_workbook_rows(raw)
+    if not workbook_rows:
+        return []
+    _, first_sheet_rows = next(iter(workbook_rows.items()))
+    return first_sheet_rows
+
+
+def _read_xlsx_workbook_rows(raw: bytes) -> dict[str, list[dict[str, str]]]:
+    workbook_rows: dict[str, list[dict[str, str]]] = {}
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         workbook_xml = archive.read("xl/workbook.xml")
         workbook = ElementTree.fromstring(workbook_xml)
         namespaces = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-        first_sheet = workbook.find("main:sheets/main:sheet", namespaces)
-        if first_sheet is None:
-            return []
-        relation_id = first_sheet.attrib.get(
-            "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
-        )
-        if relation_id is None:
-            return []
-
         workbook_rels = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
         rel_namespaces = {"rel": "http://schemas.openxmlformats.org/package/2006/relationships"}
-        rel = workbook_rels.find(f"rel:Relationship[@Id='{relation_id}']", rel_namespaces)
-        if rel is None:
-            return []
-        target = rel.attrib.get("Target", "")
-        worksheet_path = f"xl/{target}" if not target.startswith("xl/") else target
-        worksheet = ElementTree.fromstring(archive.read(worksheet_path))
-
         shared_strings: list[str] = []
         if "xl/sharedStrings.xml" in archive.namelist():
             shared_root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
@@ -451,53 +444,71 @@ def _read_xlsx_rows(raw: bytes) -> list[dict[str, str]]:
                 )
                 shared_strings.append(text)
 
-        parsed_rows: list[list[str]] = []
-        for row_node in worksheet.findall(
-            ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"
-        ):
-            cells: dict[int, str] = {}
-            for cell in row_node.findall(
-                "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"
-            ):
-                ref = cell.attrib.get("r", "")
-                cell_type = cell.attrib.get("t", "")
-                index = _extract_column_index(ref)
-                if cell_type == "inlineStr":
-                    text_node = cell.find(
-                        ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t"
-                    )
-                    cells[index] = (text_node.text or "").strip() if text_node is not None else ""
-                    continue
-                value_node = cell.find(
-                    "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v"
-                )
-                value = (value_node.text or "").strip() if value_node is not None else ""
-                if cell_type == "s" and value.isdigit():
-                    shared_index = int(value)
-                    cells[index] = (
-                        shared_strings[shared_index]
-                        if 0 <= shared_index < len(shared_strings)
-                        else ""
-                    )
-                else:
-                    cells[index] = value
-            if not cells:
+        for sheet in workbook.findall("main:sheets/main:sheet", namespaces):
+            name = str(sheet.attrib.get("name") or "").strip()
+            relation_id = sheet.attrib.get(
+                "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+            )
+            if not name or relation_id is None:
                 continue
-            width = max(cells) + 1
-            parsed_rows.append([cells.get(idx, "").strip() for idx in range(width)])
+            rel = workbook_rels.find(f"rel:Relationship[@Id='{relation_id}']", rel_namespaces)
+            if rel is None:
+                continue
+            target = rel.attrib.get("Target", "")
+            worksheet_path = f"xl/{target}" if not target.startswith("xl/") else target
+            rows = _read_xlsx_sheet_rows(
+                archive=archive,
+                worksheet_path=worksheet_path,
+                shared_strings=shared_strings,
+            )
+            workbook_rows[name] = rows
+    return workbook_rows
 
-        if not parsed_rows:
-            return []
-        headers = [cell for cell in parsed_rows[0]]
-        rows: list[dict[str, str]] = []
-        for row in parsed_rows[1:]:
-            item: dict[str, str] = {}
-            for index, header in enumerate(headers):
-                if not header:
-                    continue
-                item[header] = row[index] if index < len(row) else ""
-            rows.append(item)
-        return rows
+
+def _read_xlsx_sheet_rows(
+    *,
+    archive: zipfile.ZipFile,
+    worksheet_path: str,
+    shared_strings: list[str],
+) -> list[dict[str, str]]:
+    worksheet = ElementTree.fromstring(archive.read(worksheet_path))
+    parsed_rows: list[list[str]] = []
+    for row_node in worksheet.findall(
+            ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"
+    ):
+        cells: dict[int, str] = {}
+        for cell in row_node.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
+            ref = cell.attrib.get("r", "")
+            cell_type = cell.attrib.get("t", "")
+            index = _extract_column_index(ref)
+            if cell_type == "inlineStr":
+                text_node = cell.find(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
+                cells[index] = (text_node.text or "").strip() if text_node is not None else ""
+                continue
+            value_node = cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
+            value = (value_node.text or "").strip() if value_node is not None else ""
+            if cell_type == "s" and value.isdigit():
+                shared_index = int(value)
+                cells[index] = shared_strings[shared_index] if 0 <= shared_index < len(shared_strings) else ""
+            else:
+                cells[index] = value
+        if not cells:
+            continue
+        width = max(cells) + 1
+        parsed_rows.append([cells.get(idx, "").strip() for idx in range(width)])
+
+    if not parsed_rows:
+        return []
+    headers = [cell for cell in parsed_rows[0]]
+    rows: list[dict[str, str]] = []
+    for row in parsed_rows[1:]:
+        item: dict[str, str] = {}
+        for index, header in enumerate(headers):
+            if not header:
+                continue
+            item[header] = row[index] if index < len(row) else ""
+        rows.append(item)
+    return rows
 
 
 def _extract_import_field(row: dict[str, str], aliases: list[str]) -> str:
@@ -2536,10 +2547,41 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Uploaded file is empty")
         if filename.endswith(".csv"):
             parsed_rows = _read_csv_rows(raw)
+            workbook_rows: dict[str, list[dict[str, str]]] = {}
         elif filename.endswith(".xlsx"):
+            workbook_rows = _read_xlsx_workbook_rows(raw)
             parsed_rows = _read_xlsx_rows(raw)
         else:
             raise HTTPException(status_code=400, detail="Only .csv and .xlsx files are supported")
+
+        structured_trip = _build_structured_trip_import(workbook_rows) if workbook_rows else None
+        if structured_trip is not None:
+            trip_payload = TripCreateRequest(
+                destination=structured_trip["destination"],
+                team_id=structured_trip["team_id"],
+                start_date=structured_trip["start_date"],
+                end_date=structured_trip["end_date"],
+                participants=structured_trip["participants"],
+                status="计划中",
+            )
+            created = create_trip_record(payload=trip_payload, user=user, ctx=ctx)
+            trip = created["trip"]
+            patch: dict[str, Any] = {
+                "itinerary": structured_trip["itinerary"],
+                "guests": structured_trip["guests"],
+                "participants": max(structured_trip["participants"], len(structured_trip["guests"])),
+            }
+            if structured_trip["guests"]:
+                patch["leader_name"] = structured_trip["guests"][0].get("name", "")
+                patch["contact_phone"] = structured_trip["guests"][0].get("phone", "")
+            updated_trip = ctx.trip_repository.update(trip["id"], patch)
+            return _ok(
+                {
+                    "created_count": 1,
+                    "skipped_count": 0,
+                    "items": [_serialize_trip(updated_trip or trip)],
+                }
+            )
 
         created_items: list[dict[str, Any]] = []
         skipped = 0

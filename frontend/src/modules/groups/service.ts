@@ -17,6 +17,6 @@ export class GroupService {
   }
 }
 
-const repositoryMode = (import.meta.env.VITE_WORKBENCH_DATA_MODE as 'mock' | 'real' | 'auto' | undefined) ?? 'auto'
+const repositoryMode = (import.meta.env.VITE_WORKBENCH_DATA_MODE as 'mock' | 'real' | undefined) ?? 'mock'
 
 export const groupService = new GroupService(createGroupRepository(repositoryMode))
