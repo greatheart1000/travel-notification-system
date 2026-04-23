@@ -239,7 +239,7 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
                       onOpenTripNotifications(tripId)
                       return
                     }
-                    window.history.pushState({}, '', '/notifications')
+                    window.history.pushState({}, '', `/notifications?trip_id=${encodeURIComponent(tripId)}`)
                     window.dispatchEvent(new PopStateEvent('popstate'))
                   }}
                 >

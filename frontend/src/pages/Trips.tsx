@@ -139,7 +139,7 @@ export function Trips({
       onOpenTripNotifications(id)
       return
     }
-    window.history.pushState({}, '', '/notifications')
+    window.history.pushState({}, '', `/notifications?trip_id=${encodeURIComponent(id)}`)
     window.dispatchEvent(new PopStateEvent('popstate'))
   }
 
