@@ -60,11 +60,13 @@ import {
   type RawProjectNotificationConfig,
   type RawRecentNotification,
   type RawTrip,
+  type RawTripImportSnapshot,
   type RawTripSchedule,
   type RecentNotification,
   type ActionResult,
   type AssignTakeoverInput,
   type Trip,
+  type TripImportSnapshot,
   type TripExecutionDetail,
   type TripExecutionRow,
   type TripImportResult,
@@ -299,6 +301,23 @@ function mapRawDispatchPreview(raw: RawDispatchPreview): DispatchPreview {
       ok: Boolean(raw?.variable_check?.ok),
       missingFields: asArray<string>(raw?.variable_check?.missing_fields),
     },
+  }
+}
+
+function mapRawTripImportSnapshot(raw: RawTripImportSnapshot): TripImportSnapshot {
+  return {
+    tripId: String(raw?.trip_id || ''),
+    completeness: toNumber(raw?.completeness),
+    hasItinerary: Boolean(raw?.has_itinerary),
+    hasGuests: Boolean(raw?.has_guests),
+    todayTodo: toNumber(raw?.today_todo),
+    nextNode: String(raw?.next_node || '待生成通知节点'),
+    recognizedFields: asArray(raw?.recognized_fields),
+    pendingFields: asArray(raw?.pending_fields),
+    missingFields: asArray(raw?.missing_fields),
+    itineraryDigest: asArray(raw?.itinerary_digest),
+    guestDigest: asArray(raw?.guest_digest),
+    pickupDigest: asArray(raw?.pickup_digest),
   }
 }
 
@@ -638,6 +657,18 @@ export const tripsApi = {
       createdCount: response.data.data.created_count ?? 0,
       skippedCount: response.data.data.skipped_count ?? 0,
     }
+  },
+
+  async getImportSnapshot(id: string): Promise<TripImportSnapshot> {
+    const raw = await unwrapData<RawTripImportSnapshot>(client.get(`/trips/${id}/import-snapshot`))
+    return mapRawTripImportSnapshot(raw)
+  },
+
+  async applyImportValidation(id: string, fields: Record<string, string>): Promise<TripImportSnapshot> {
+    const raw = await unwrapData<{ snapshot?: RawTripImportSnapshot }>(
+      client.put(`/trips/${id}/import-validation`, { fields }),
+    )
+    return mapRawTripImportSnapshot(raw.snapshot || {})
   },
 }
 

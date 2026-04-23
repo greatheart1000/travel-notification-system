@@ -245,6 +245,69 @@ export interface TripImportResult {
   skippedCount: number
 }
 
+export interface TripImportSnapshotField {
+  key: string
+  label: string
+  value: string
+}
+
+export interface TripImportMissingField {
+  key: string
+  label: string
+}
+
+export interface TripImportItineraryDigest {
+  date: string
+  transport: string
+  route: string
+  hotel: string
+  meal: string
+}
+
+export interface TripImportGuestDigest {
+  name: string
+  phone: string
+  status: string
+}
+
+export interface TripImportPickupDigest {
+  type: '接' | '送'
+  date: string
+  location: string
+  shift: string
+  note: string
+}
+
+export interface RawTripImportSnapshot {
+  trip_id?: string
+  completeness?: number | string
+  has_itinerary?: boolean
+  has_guests?: boolean
+  today_todo?: number | string
+  next_node?: string
+  recognized_fields?: TripImportSnapshotField[]
+  pending_fields?: TripImportSnapshotField[]
+  missing_fields?: TripImportMissingField[]
+  itinerary_digest?: TripImportItineraryDigest[]
+  guest_digest?: TripImportGuestDigest[]
+  pickup_digest?: TripImportPickupDigest[]
+}
+
+export interface TripImportSnapshot {
+  tripId: string
+  completeness: number
+  hasItinerary: boolean
+  hasGuests: boolean
+  todayTodo: number
+  nextNode: string
+  recognizedFields: TripImportSnapshotField[]
+  pendingFields: TripImportSnapshotField[]
+  missingFields: TripImportMissingField[]
+  itineraryDigest: TripImportItineraryDigest[]
+  guestDigest: TripImportGuestDigest[]
+  pickupDigest: TripImportPickupDigest[]
+}
+
 export interface RawNotificationTemplate {
   id?: string
   name?: string
