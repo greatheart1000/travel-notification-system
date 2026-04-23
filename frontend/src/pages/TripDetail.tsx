@@ -28,6 +28,12 @@ interface TripDetailProps {
 }
 
 export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDetailProps) {
+  const statusOptions: Array<{ value: Trip['status']; label: string }> = [
+    { value: 'planned', label: '计划中' },
+    { value: 'in_progress', label: '进行中' },
+    { value: 'completed', label: '已完成' },
+    { value: 'cancelled', label: '已取消' },
+  ]
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savingDays, setSavingDays] = useState(false)
@@ -328,6 +334,18 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
                       className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2 font-mono"
                     />
                   </label>
+                  <label className="block text-xs font-bold uppercase text-gray-400">
+                    状态
+                    <select
+                      value={form.status}
+                      onChange={(e) => setForm({ ...form, status: e.target.value as Trip['status'] })}
+                      className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2"
+                    >
+                      {statusOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
                   <div className="grid grid-cols-2 gap-3">
                     <label className="block text-xs font-bold uppercase text-gray-400">
                       出发日期
@@ -360,15 +378,32 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
                 </div>
               </Card>
               <Card>
-                <div className="space-y-2 text-sm text-slate-600">
-                  <p className="flex items-center gap-2">
+                <div className="space-y-3 text-sm text-slate-600">
+                  <p className="flex items-center gap-2 text-xs font-bold uppercase text-gray-400">
                     <MapPin className="h-4 w-4 text-blue-600" />
-                    领队：{detail?.leaderName || '未配置'}
+                    领队信息
                   </p>
-                  <p className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={form.leaderName || ''}
+                    onChange={(e) => setForm({ ...form, leaderName: e.target.value })}
+                    placeholder="领队姓名"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2"
+                  />
+                  <p className="flex items-center gap-2 text-xs font-bold uppercase text-gray-400">
                     <Phone className="h-4 w-4 text-blue-600" />
-                    联系方式：{detail?.contactPhone || '暂无'}
+                    联系方式
                   </p>
+                  <input
+                    type="text"
+                    value={form.contactPhone || ''}
+                    onChange={(e) => setForm({ ...form, contactPhone: e.target.value })}
+                    placeholder="领队手机号"
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2"
+                  />
+                  <Button size="sm" onClick={handleSaveBase} loading={saving}>
+                    保存领队信息
+                  </Button>
                 </div>
               </Card>
             </div>

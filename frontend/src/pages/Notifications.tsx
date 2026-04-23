@@ -80,14 +80,7 @@ const RULE_TIME_SLOT_OPTIONS: Array<{ value: NotificationRuleTimeSlotCode; label
 
 function SmsCell({ label }: { label: string }) {
   return (
-    <div>
-      <p className="mb-2 max-w-[220px] text-sm leading-5 text-slate-700">{label}</p>
-      <div className="flex gap-2">
-        <button className="rounded bg-blue-600 px-2.5 py-1 font-bold text-white">+</button>
-        <button className="rounded bg-slate-100 px-2.5 py-1 text-slate-600">✎</button>
-        <button className="rounded bg-slate-100 px-2.5 py-1 text-slate-600">🗑</button>
-      </div>
-    </div>
+    <p className="max-w-[220px] text-sm leading-6 text-slate-700">{label}</p>
   )
 }
 
@@ -427,6 +420,14 @@ export function Notifications({ tripId = null, onBackToTrip }: NotificationsProp
   }
 
   const timelineRules = rules.slice(0, 5)
+  const templateById = new Map(templates.map((template) => [template.id, template.template]))
+  const buildSlotMessage = (rule: NotificationRule, slot: NotificationRuleTimeSlotCode): string => {
+    if (rule.timeSlot !== slot) {
+      return '—'
+    }
+    const content = (templateById.get(rule.templateId) || rule.scene || rule.templateLabel).trim()
+    return content ? content.slice(0, 36) : '未配置内容'
+  }
 
   return (
     <PageShell
@@ -531,9 +532,9 @@ export function Notifications({ tripId = null, onBackToTrip }: NotificationsProp
                       </td>
                       <td className="px-4 py-4">{rule.stageLabel}</td>
                       <td className="px-4 py-4">{rule.timeSlotLabel}</td>
-                      <td className="px-4 py-4"><SmsCell label={`08:00 ${rule.templateLabel}`} /></td>
-                      <td className="px-4 py-4"><SmsCell label={`12:30 ${rule.scene}`} /></td>
-                      <td className="px-4 py-4"><SmsCell label="18:00 晚餐与晚间安排提醒" /></td>
+                      <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'morning')} /></td>
+                      <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'afternoon')} /></td>
+                      <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'evening')} /></td>
                       <td className="px-4 py-4">
                         <div className="flex flex-wrap gap-2">
                           <Button variant="secondary" size="sm" onClick={() => openEditRuleModal(rule)}>

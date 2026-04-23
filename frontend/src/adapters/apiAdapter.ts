@@ -321,6 +321,8 @@ export function mapRawTrip(raw: RawTrip): Trip {
     participants: asNumber(raw.participants, 0),
     status,
     statusLabel: tripStatusLabel(status),
+    leaderName: safeText(raw.leader_name),
+    contactPhone: safeText(raw.contact_phone),
     itinerary,
     guests,
   }
@@ -441,6 +443,8 @@ export function toTripWritePayload(input: TripWriteInput): Record<string, any> {
     participants: input.participants ?? 0,
     status: tripStatusLabel(normalizedStatus),
     status_code: normalizedStatus,
+    leader_name: input.leaderName ?? '',
+    contact_phone: input.contactPhone ?? '',
     itinerary: input.itinerary || [],
     guests: input.guests || [],
   }
