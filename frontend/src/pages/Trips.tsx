@@ -6,7 +6,7 @@ import { PageState } from '../components/PageState'
 import { PageShell } from '../components/PageShell'
 import { ArrowRight, Calendar, CheckCircle, FileText, MoreVertical, Plus, Trash2, Upload, Users } from 'lucide-react'
 import { tripsApi, getErrorMessage } from '../services/api'
-import { type Trip, type TripStatusCode } from '../types/api'
+import { type Trip, type TripExecutionRow, type TripStatusCode } from '../types/api'
 import { TripDetail } from './TripDetail'
 
 type LoadState = 'loading' | 'ready' | 'error' | 'empty'
@@ -45,6 +45,7 @@ export function Trips({
   const [trips, setTrips] = useState<Trip[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [errorMessage, setErrorMessage] = useState('')
+  const [executionMap, setExecutionMap] = useState<Record<string, TripExecutionRow>>({})
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [isImporting, setIsImporting] = useState(false)
   const [openMenuTripId, setOpenMenuTripId] = useState<string | null>(null)
@@ -54,7 +55,15 @@ export function Trips({
     setErrorMessage('')
 
     try {
-      const list = await tripsApi.list()
+      const [list, executionRows] = await Promise.all([
+        tripsApi.list(),
+        tripsApi.listExecutionRows({ ownerScope: 'mine' }).catch(() => [] as TripExecutionRow[]),
+      ])
+      const executionByTripId: Record<string, TripExecutionRow> = {}
+      executionRows.forEach((row) => {
+        executionByTripId[row.tripId] = row
+      })
+      setExecutionMap(executionByTripId)
       setTrips(list)
       setLoadState(list.length === 0 ? 'empty' : 'ready')
     } catch (error) {
@@ -229,7 +238,7 @@ export function Trips({
                   <p className="font-mono text-sm uppercase tracking-wide text-slate-500">{trip.teamId}</p>
                 </div>
 
-                <div className="space-y-3 mb-6">
+                  <div className="space-y-3 mb-6">
                   <div className="flex items-center gap-3 text-sm text-gray-600">
                     <Calendar className="w-4 h-4 text-blue-600" />
                     <span>
@@ -240,7 +249,16 @@ export function Trips({
                     <Users className="w-4 h-4 text-blue-600" />
                     <span>{trip.guests?.length || trip.participants} 位客人</span>
                   </div>
-                </div>
+                  </div>
+                  {executionMap[trip.id] ? (
+                    <div className="mb-4 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                      <p>执行阶段：{executionMap[trip.id].currentStage}</p>
+                      <p>
+                        今日待办：{executionMap[trip.id].todoCount}/{executionMap[trip.id].totalCount} ·
+                        风险：{executionMap[trip.id].riskLevel}
+                      </p>
+                    </div>
+                  ) : null}
 
                 <div className="flex items-center gap-2 pt-4 border-t border-gray-200" onClick={e => e.stopPropagation()}>
                   <Button size="sm" className="flex-1 rounded-lg shadow-lg shadow-blue-200/60" onClick={() => handleOpenTrip(trip.id)}>

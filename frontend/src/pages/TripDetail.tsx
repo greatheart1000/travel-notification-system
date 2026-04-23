@@ -45,6 +45,7 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
   const [detail, setDetail] = useState<TripDetailViewModel | null>(null)
   const [days, setDays] = useState<TripDayPlan[]>([])
   const [nextHint, setNextHint] = useState('')
+  const [executionNodeKey, setExecutionNodeKey] = useState('')
 
   const [sendModalOpen, setSendModalOpen] = useState(false)
   const [targetGuest, setTargetGuest] = useState<Guest | null>(null)
@@ -88,6 +89,13 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
         setDetail(vm)
         setDays(vm.days)
         setNextHint(payload.schedule.notificationSummary.nextHint)
+        try {
+          const execution = await tripsApi.getExecutionDetail(tripId)
+          const firstPending = execution.tasks.find((task) => task.status !== 'done')
+          setExecutionNodeKey(firstPending?.nodeKey || '')
+        } catch {
+          setExecutionNodeKey('')
+        }
       } catch (err) {
         if (!active) return
         setError(getErrorMessage(err))
@@ -183,6 +191,28 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
     }
   }
 
+  const handleDispatchCurrentNode = async () => {
+    if (!tripId || !executionNodeKey) return
+    setSaveMessage('')
+    try {
+      const preview = await notificationsApi.previewDispatch({
+        tripId,
+        nodeKey: executionNodeKey,
+        channel: 'sms',
+      })
+      const sent = await notificationsApi.dispatchNow({
+        tripId,
+        nodeKey: executionNodeKey,
+        channel: 'sms',
+        content: preview.content,
+        templateId: preview.templateId,
+      })
+      setSaveMessage(sent.ok ? '当前节点通知已发送' : '当前节点发送失败，已转人工处理')
+    } catch (err) {
+      setSaveMessage(`发送失败: ${getErrorMessage(err)}`)
+    }
+  }
+
   if (loading) {
     return (
       <>
@@ -231,6 +261,11 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {tripId ? (
+                <Button onClick={handleDispatchCurrentNode} disabled={!executionNodeKey}>
+                  发送当前节点
+                </Button>
+              ) : null}
               {tripId ? (
                 <Button
                   variant="secondary"

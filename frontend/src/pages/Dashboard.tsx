@@ -46,6 +46,15 @@ export function Dashboard() {
   const [stats, setStats] = useState<DashboardStats>(DEFAULT_STATS)
   const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([])
   const [suggestions, setSuggestions] = useState<SmartSuggestion[]>([])
+  const [workbenchOverview, setWorkbenchOverview] = useState({
+    pendingTasks: 0,
+    overdueTasks: 0,
+    riskyTrips: 0,
+    pendingTakeovers: 0,
+  })
+  const [actionItems, setActionItems] = useState<
+    Array<{ id: string; title: string; tripName: string; status: string; dueAt: string }>
+  >([])
   const [errorMessage, setErrorMessage] = useState('')
   const [sendModalOpen, setSendModalOpen] = useState(false)
   const [activeSuggestion, setActiveSuggestion] = useState<SmartSuggestion | null>(null)
@@ -62,10 +71,29 @@ export function Dashboard() {
         dashboardApi.getRecentNotifications(10),
         dashboardApi.getSmartSuggestions(),
       ])
+      const [overviewData, actionData] = await Promise.all([
+        dashboardApi.getWorkbenchOverview({ ownerScope: 'mine' }),
+        dashboardApi.getWorkbenchActionItems({ ownerScope: 'mine', limit: 5 }),
+      ])
 
       setStats(statsData)
       setRecentNotifications(recentData)
       setSuggestions(suggData)
+      setWorkbenchOverview({
+        pendingTasks: overviewData.pendingTasks,
+        overdueTasks: overviewData.overdueTasks,
+        riskyTrips: overviewData.riskyTrips,
+        pendingTakeovers: overviewData.pendingTakeovers,
+      })
+      setActionItems(
+        actionData.map((item) => ({
+          id: item.id,
+          title: item.title,
+          tripName: item.tripName,
+          status: item.status,
+          dueAt: item.dueAt,
+        })),
+      )
       setLoadState(isStatsEmpty(statsData) && recentData.length === 0 && suggData.length === 0 ? 'empty' : 'ready')
     } catch (error) {
       setLoadState('error')
@@ -166,6 +194,45 @@ export function Dashboard() {
           icon={Bell}
         />
       </div>
+
+      <Card title="今日工作台速览" className="mt-8 border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <div className="rounded-xl bg-slate-50 p-4">
+            <p className="text-xs text-slate-500">待办任务</p>
+            <p className="mt-1 text-2xl font-black text-slate-900">{workbenchOverview.pendingTasks}</p>
+          </div>
+          <div className="rounded-xl bg-amber-50 p-4">
+            <p className="text-xs text-amber-700">逾期任务</p>
+            <p className="mt-1 text-2xl font-black text-amber-700">{workbenchOverview.overdueTasks}</p>
+          </div>
+          <div className="rounded-xl bg-rose-50 p-4">
+            <p className="text-xs text-rose-700">高风险团</p>
+            <p className="mt-1 text-2xl font-black text-rose-700">{workbenchOverview.riskyTrips}</p>
+          </div>
+          <div className="rounded-xl bg-violet-50 p-4">
+            <p className="text-xs text-violet-700">待接管</p>
+            <p className="mt-1 text-2xl font-black text-violet-700">{workbenchOverview.pendingTakeovers}</p>
+          </div>
+        </div>
+        <div className="mt-5">
+          <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-slate-500">待我处理</p>
+          {actionItems.length === 0 ? (
+            <p className="text-sm text-slate-500">当前没有待处理任务</p>
+          ) : (
+            <div className="space-y-2">
+              {actionItems.map((item) => (
+                <div key={item.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                    <p className="text-xs text-slate-500">{item.tripName} · 截止 {formatTime(item.dueAt)}</p>
+                  </div>
+                  <Badge variant={item.status === 'overdue' ? 'warning' : 'info'}>{item.status}</Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Card>
 
       {suggestions.length > 0 ? (
         <section className="mt-8 rounded-2xl border border-sky-100 bg-gradient-to-r from-sky-500 to-blue-500 p-6 text-white shadow-2xl shadow-sky-900/20">
