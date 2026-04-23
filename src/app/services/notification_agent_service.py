@@ -73,15 +73,13 @@ class AlgorithmAgent:
             "noon": {
                 "purpose": "午间节奏与健康提示",
                 "priority_points": ["天气变化", "补水与饮食", "财物安全"],
-                "content_points": common_points
-                + ["合理安排午间休息", "高风险场景执行专项提醒"],
+                "content_points": common_points + ["合理安排午间休息", "高风险场景执行专项提醒"],
                 "max_length": 220,
             },
             "evening": {
                 "purpose": "晚间复盘与次日预告",
                 "priority_points": ["次日安排", "酒店入住", "退房集合提醒"],
-                "content_points": common_points
-                + ["复盘当日注意事项", "同步次日天气与出发时间"],
+                "content_points": common_points + ["复盘当日注意事项", "同步次日天气与出发时间"],
                 "max_length": 240,
             },
         }
@@ -104,7 +102,9 @@ class WriterAgent:
             "要求：语气专业温暖，120-220字，不要编造。"
         )
 
-    def generate_message(self, *, period: str, plan: dict[str, Any], context: dict[str, Any]) -> str:
+    def generate_message(
+        self, *, period: str, plan: dict[str, Any], context: dict[str, Any]
+    ) -> str:
         scene = f"{period}通知"
         prompt = self._scene_prompt(period, plan, context)
         try:
@@ -118,8 +118,12 @@ class WriterAgent:
         except RuntimeError:
             return self._fallback_message(period=period, plan=plan, context=context)
 
-    def _fallback_message(self, *, period: str, plan: dict[str, Any], context: dict[str, Any]) -> str:
-        line1 = f"【{period}提醒】{context.get('group_name', '各位团友')}，{plan.get('purpose', '')}。"
+    def _fallback_message(
+        self, *, period: str, plan: dict[str, Any], context: dict[str, Any]
+    ) -> str:
+        line1 = (
+            f"【{period}提醒】{context.get('group_name', '各位团友')}，{plan.get('purpose', '')}。"
+        )
         line2 = f"今日路线：{context.get('route_text', '')}；天气：{context.get('weather', '')}。"
         line3 = "；".join(plan.get("priority_points", []))
         return f"{line1}{line2}请重点关注：{line3}。"
@@ -160,9 +164,7 @@ class NotificationAgentService:
         work_text = _clean(core_work) or "行程服务保障"
         detail_text = _clean(action_detail)
 
-        context_line = (
-            f"路线：{route_text}；阶段：{stage_text}；时间节点：{node_text}；核心工作：{work_text}。"
-        )
+        context_line = f"路线：{route_text}；阶段：{stage_text}；时间节点：{node_text}；核心工作：{work_text}。"
         if detail_text:
             context_line = f"{context_line}重点动作：{detail_text}"
 
@@ -234,7 +236,13 @@ class NotificationAgentService:
             "weather": weather,
         }
         messages: list[dict[str, Any]] = []
-        debug: dict[str, Any] = {"stage": stage, "time_node": time_node, "plan": plan, "validation": {}}
+        debug: dict[str, Any] = {
+            "stage": stage,
+            "time_node": time_node,
+            "route_text": route_text,
+            "plan": plan,
+            "validation": {},
+        }
         for period in ("morning", "noon", "evening"):
             period_plan = plan[period]
             generated = self.writer_agent.generate_message(
