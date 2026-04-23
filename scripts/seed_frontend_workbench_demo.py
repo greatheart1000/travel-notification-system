@@ -8,13 +8,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import date, timedelta
 import json
+from datetime import date, timedelta
 from typing import Any
 from urllib import parse, request
 
 
-def http_json(method: str, url: str, payload: dict[str, Any] | None = None, token: str | None = None) -> dict[str, Any]:
+def http_json(
+    method: str, url: str, payload: dict[str, Any] | None = None, token: str | None = None
+) -> dict[str, Any]:
     body = None
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if token:

@@ -170,6 +170,21 @@ python scripts/seed_frontend_workbench_demo.py \
 
 执行后刷新前端 `/dashboard`、`/tasks/todo`、`/groups/high-risk` 等页面即可看到真实后端驱动的数据。
 
+如果你希望“一条命令完成灌数 + 启前端(real模式) + 自动验路由”，可在仓库根目录运行：
+
+```bash
+bash scripts/run_workbench_demo.sh
+```
+
+它会自动验证：
+- `/dashboard`
+- `/tasks/todo`
+- `/tasks/overdue`
+- `/tasks/takeover`
+- `/groups/high-risk`
+- `/tasks/:taskId`（动态采样）
+- `/groups/high-risk/:groupId`（动态采样）
+
 ## 样式定制
 
 所有颜色和样式都通过 Tailwind CSS 管理，可在 `tailwind.config.js` 中定制：

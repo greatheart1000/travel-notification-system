@@ -1,4 +1,5 @@
 import type { Task } from './types'
+import type { ExecutionTask, WorkbenchTask } from '../../types/api'
 
 export interface TaskApiResponse {
   id: string
@@ -37,5 +38,55 @@ export function adaptTaskFromApi(payload: TaskApiResponse): Task {
     tags: payload.tags ?? [],
     aiSuggestion: payload.ai_suggestion ?? '',
     history: payload.history ?? [],
+  }
+}
+
+function normalizeStatus(status?: string): Task['status'] {
+  if (status === 'handover_in_progress') return 'pending_takeover'
+  if (status === 'todo' || status === 'in_progress' || status === 'done' || status === 'overdue' || status === 'blocked') {
+    return status
+  }
+  return 'todo'
+}
+
+export function adaptTaskFromWorkbenchTask(payload: WorkbenchTask): Task {
+  return {
+    id: payload.id,
+    title: payload.title,
+    type: payload.nodeKey || payload.stage || 'workbench_task',
+    status: normalizeStatus(payload.status),
+    priority: payload.priority === 'p0' ? 'P0' : payload.priority === 'p2' ? 'P2' : 'P1',
+    riskLevel: payload.riskLevel === 'unknown' ? 'medium' : payload.riskLevel,
+    dueAt: payload.dueAt || new Date().toISOString(),
+    departureDate: payload.dueAt || new Date().toISOString(),
+    assignee: payload.ownerName || '',
+    groupId: payload.tripId,
+    groupName: payload.tripName,
+    customerName: '待补充',
+    destination: payload.tripName,
+    tags: [payload.stage || '行程任务'],
+    aiSuggestion: '建议优先核对通知节点和触达结果，必要时发起人工接管。',
+    history: [],
+  }
+}
+
+export function adaptTaskFromExecutionTask(payload: ExecutionTask, tripMeta: { tripId: string; tripName: string }): Task {
+  return {
+    id: payload.taskId,
+    title: payload.title,
+    type: payload.nodeKey || payload.stage || 'execution_task',
+    status: normalizeStatus(payload.status),
+    priority: 'P1',
+    riskLevel: 'medium',
+    dueAt: payload.dueAt || new Date().toISOString(),
+    departureDate: payload.dueAt || new Date().toISOString(),
+    assignee: payload.ownerName || '',
+    groupId: tripMeta.tripId,
+    groupName: tripMeta.tripName,
+    customerName: '待补充',
+    destination: tripMeta.tripName,
+    tags: [payload.stage || '行程任务'],
+    aiSuggestion: '建议结合团进度与天气变化，确认是否需要追加提醒。',
+    history: [],
   }
 }
