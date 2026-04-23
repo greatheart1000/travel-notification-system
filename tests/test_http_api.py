@@ -91,6 +91,54 @@ def test_preferences_read_write() -> None:
     assert updated.json()["data"]["allow_marketing"] is False
 
 
+def test_trip_import_snapshot_and_apply_validation() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    token = _login(client, "user", "123456")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "伊宁-赛里木湖",
+            "team": "TEAM-IMPORT-001",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-03",
+            "participants": 6,
+        },
+    )
+    assert created.status_code == 201
+    trip_id = created.json()["data"]["trip"]["id"]
+
+    updated = client.put(
+        f"/api/trips/{trip_id}",
+        headers=headers,
+        json={
+            "itinerary": [
+                {"date": "2026-08-01", "transport": "大巴", "route": "伊宁->赛里木湖", "hotel": "赛里木湖酒店"}
+            ],
+            "guests": [{"name": "张三", "phone": "", "notes": "成人"}],
+        },
+    )
+    assert updated.status_code == 200
+
+    snapshot = client.get(f"/api/trips/{trip_id}/import-snapshot", headers=headers)
+    assert snapshot.status_code == 200
+    missing_labels = [item["label"] for item in snapshot.json()["data"]["missing_fields"]]
+    assert "游客联系方式" in missing_labels
+    assert "领队电话" in missing_labels
+
+    applied = client.put(
+        f"/api/trips/{trip_id}/import-validation",
+        headers=headers,
+        json={"fields": {"leader_phone": "13800138000"}},
+    )
+    assert applied.status_code == 200
+    new_missing_labels = [item["label"] for item in applied.json()["data"]["snapshot"]["missing_fields"]]
+    assert "领队电话" not in new_missing_labels
+
+
 def test_template_crud_and_admin_guard() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)
