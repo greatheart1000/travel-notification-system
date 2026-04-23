@@ -91,49 +91,9 @@ class AlgorithmAgent:
 class WriterAgent:
     """LLM 文案生成 Agent。"""
 
-    def _few_shot_examples(self, period: str) -> str:
-        if period == "morning":
-            return (
-                "【示例-早间】\n"
-                "亲爱的游客朋友们早上好💐今日请按集合时间准时出发，先检查证件与随身物品。"
-                "新疆早晚温差较大请适当增添衣物，上车后请全员系好安全带，"
-                "老人小孩不建议坐前排，旅途平安顺利。\n"
-            )
-        if period == "noon":
-            return (
-                "【示例-午间】\n"
-                "《温馨提示》大家中午好！当前天气变化较快，请及时补水并注意防晒/防雨。"
-                "用餐尽量选择卫生餐厅，下午出行前再次确认集合点与贵重物品，"
-                "如遇雨天道路湿滑请放慢脚步。\n"
-            )
-        return (
-            "【示例-晚间】\n"
-            "亲爱的游客朋友们🌷今日行程辛苦了，明日天气与路线已更新，"
-            "请关注群内集合时间通知。退房前请带齐证件与随身物品，祝您今晚好梦。\n"
-        )
-
     def _scene_prompt(self, period: str, plan: dict[str, Any], context: dict[str, Any]) -> str:
         points = "；".join(plan.get("content_points", []))
         priority = "；".join(plan.get("priority_points", []))
-        examples = self._few_shot_examples(period)
-        special_tags = context.get("special_tags", [])
-        special_text = "、".join(special_tags) if isinstance(special_tags, list) else ""
-        extra_example = ""
-        if "骑马" in special_text:
-            extra_example = (
-                "【示例-特殊场景(骑马)】景区骑马请选择正规马队，检查骑具，"
-                "全程听从教练指挥，不得擅自脱队。\n"
-            )
-        elif "滑雪" in special_text:
-            extra_example = (
-                "【示例-特殊场景(滑雪)】明日滑雪请提前准备保暖装备与头盔雪镜，"
-                "滑雪前充分热身并按雪道等级选择线路。\n"
-            )
-        elif "高海拔" in special_text or "高原" in special_text:
-            extra_example = (
-                "【示例-特殊场景(高海拔)】高海拔路段请放慢节奏，避免剧烈运动，"
-                "如出现头晕胸闷请第一时间告知领队。\n"
-            )
         return (
             "你是旅行社通知文案助手，请写给游客群的中文通知。"
             f"发送时段：{period}；目的：{plan.get('purpose', '')}。"
@@ -141,10 +101,7 @@ class WriterAgent:
             f"参考信息：{points}。"
             f"团名：{context.get('group_name', '')}；路线：{context.get('route_text', '')}；"
             f"酒店：{context.get('hotel', '')}；天气：{context.get('weather', '')}。"
-            f"特殊标签：{special_text or '无'}。"
             "要求：语气专业温暖，120-220字，不要编造。"
-            "请参考以下 few-shot 风格示例，但不要逐字照抄：\n"
-            f"{examples}{extra_example}"
         )
 
     def generate_message(self, *, period: str, plan: dict[str, Any], context: dict[str, Any]) -> str:
@@ -275,7 +232,6 @@ class NotificationAgentService:
             "route_text": route_text,
             "hotel": hotel,
             "weather": weather,
-            "special_tags": special_tags,
         }
         messages: list[dict[str, Any]] = []
         debug: dict[str, Any] = {"stage": stage, "time_node": time_node, "plan": plan, "validation": {}}

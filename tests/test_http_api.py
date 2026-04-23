@@ -228,12 +228,9 @@ def test_agent_generates_morning_noon_evening_templates_and_admin_can_modify() -
 
 
 def test_generate_daily_notifications_uses_multi_agent_pipeline(monkeypatch) -> None:
-    captured_prompts: list[str] = []
-
     async def _fake_llm(
         trip_destination: str, scene: str, prompt_override: str | None = None
     ) -> str:
-        captured_prompts.append(prompt_override or "")
         return f"【AI生成】{scene}：{trip_destination}，请关注集合时间与路线安排。"
 
     monkeypatch.setattr("app.services.notification_agent_service.generate_smart_message", _fake_llm)
@@ -266,7 +263,7 @@ def test_generate_daily_notifications_uses_multi_agent_pipeline(monkeypatch) -> 
                     "date": "2026-04-22",
                     "route": "塔县-慕士塔格冰川公园-喀什",
                     "hotel": "喀什万巢国际酒店",
-                    "special_tags": ["冰川", "高海拔", "骑马"],
+                    "special_tags": ["冰川", "高海拔"],
                 }
             ]
         },
@@ -294,10 +291,6 @@ def test_generate_daily_notifications_uses_multi_agent_pipeline(monkeypatch) -> 
     assert all("AI生成" in item["message"] for item in payload["messages"])
     assert len(payload["created_template_ids"]) == 3
     assert "debug" in payload
-    assert captured_prompts
-    assert any("few-shot 风格示例" in item for item in captured_prompts)
-    assert any("示例-早间" in item for item in captured_prompts)
-    assert any("特殊场景(骑马)" in item for item in captured_prompts)
 
 
 def test_emergency_weather_summary_returns_ai_risk_and_trip_preview() -> None:
