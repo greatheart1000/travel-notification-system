@@ -5,7 +5,7 @@ import argparse
 import os
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -17,6 +17,13 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def build_backend_opener():
+    return build_opener(ProxyHandler({}))
+
+
+BACKEND_OPENER = build_backend_opener()
 
 
 class FrontendProxyHandler(SimpleHTTPRequestHandler):
@@ -42,7 +49,7 @@ class FrontendProxyHandler(SimpleHTTPRequestHandler):
 
         req = Request(target, data=body, headers=forward_headers, method=self.command)
         try:
-            with urlopen(req, timeout=30) as resp:
+            with BACKEND_OPENER.open(req, timeout=30) as resp:
                 resp_body = resp.read()
                 self.send_response(resp.status)
                 for key, value in resp.getheaders():

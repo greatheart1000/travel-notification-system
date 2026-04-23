@@ -2,7 +2,7 @@
 """Seed demo trips so Travel Hub workbench pages can show real backend data.
 
 Usage:
-  python scripts/seed_frontend_workbench_demo.py --base-url http://127.0.0.1:8000 --username admin --password 123456
+  python scripts/seed_frontend_workbench_demo.py --base-url http://127.0.0.1:8001 --username admin --password 123456
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import json
 from datetime import date, timedelta
 from typing import Any
 from urllib import parse, request
+
+URL_OPENER = request.build_opener(request.ProxyHandler({}))
 
 
 def http_json(
@@ -25,7 +27,7 @@ def http_json(
         body = json.dumps(payload).encode("utf-8")
 
     req = request.Request(url, method=method, data=body, headers=headers)
-    with request.urlopen(req, timeout=15) as response:
+    with URL_OPENER.open(req, timeout=15) as response:
         raw = response.read().decode("utf-8")
     return json.loads(raw)
 
@@ -53,7 +55,7 @@ def ensure_workbench_tasks(base_url: str, token: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8001")
     parser.add_argument("--username", default="admin")
     parser.add_argument("--password", default="123456")
     args = parser.parse_args()

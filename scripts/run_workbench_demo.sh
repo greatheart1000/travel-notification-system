@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="http://127.0.0.1:8000"
+BASE_URL="http://127.0.0.1:8001"
 FRONTEND_URL="http://127.0.0.1:5173"
 USERNAME="admin"
 PASSWORD="123456"
@@ -60,7 +60,7 @@ python "$REPO_ROOT/scripts/seed_frontend_workbench_demo.py" \
 echo "[2/4] Starting frontend in real-data mode..."
 (
   cd "$FRONTEND_DIR"
-  VITE_WORKBENCH_DATA_MODE=real npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" > /tmp/workbench-frontend.log 2>&1
+  VITE_API_BASE_URL="$BASE_URL" VITE_WORKBENCH_DATA_MODE=real npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" > /tmp/workbench-frontend.log 2>&1
 ) &
 FRONTEND_PID=$!
 
@@ -69,7 +69,7 @@ for _ in {1..30}; do
   if python - <<PY
 from urllib import request
 try:
-    request.urlopen("$FRONTEND_URL/dashboard", timeout=2)
+    request.build_opener(request.ProxyHandler({})).open("$FRONTEND_URL/dashboard", timeout=2)
     print("ok")
 except Exception:
     raise SystemExit(1)
@@ -87,7 +87,7 @@ python "$REPO_ROOT/scripts/verify_workbench_routes.py" \
   --username "$USERNAME" \
   --password "$PASSWORD"
 
-echo "\n✅ All checks passed."
+printf "\n✅ All checks passed.\n"
 echo "Frontend log: /tmp/workbench-frontend.log"
 
 if [[ "$KEEP_RUNNING" == "true" ]]; then

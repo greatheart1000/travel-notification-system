@@ -7,6 +7,9 @@ import argparse
 import json
 from urllib import request
 
+URL_OPENER = request.build_opener(request.ProxyHandler({}))
+FRONTEND_HTML_READ_BYTES = 64 * 1024
+
 
 def http_json(method: str, url: str, token: str | None = None, payload: dict | None = None) -> dict:
     body = None
@@ -16,20 +19,20 @@ def http_json(method: str, url: str, token: str | None = None, payload: dict | N
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
     req = request.Request(url, method=method, headers=headers, data=body)
-    with request.urlopen(req, timeout=15) as resp:
+    with URL_OPENER.open(req, timeout=15) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def http_status(url: str) -> tuple[int, str]:
     req = request.Request(url, method="GET")
-    with request.urlopen(req, timeout=15) as resp:
-        content = resp.read(300).decode("utf-8", errors="ignore")
+    with URL_OPENER.open(req, timeout=15) as resp:
+        content = resp.read(FRONTEND_HTML_READ_BYTES).decode("utf-8", errors="ignore")
         return resp.status, content
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--backend-url", default="http://127.0.0.1:8001")
     parser.add_argument("--frontend-url", default="http://127.0.0.1:5173")
     parser.add_argument("--username", default="admin")
     parser.add_argument("--password", default="123456")
@@ -42,9 +45,17 @@ def main() -> None:
     )
     token = str(login["data"]["access_token"])
 
-    overview = http_json("GET", f"{args.backend_url}/api/workbench/today/overview?owner_scope=all", token=token)
-    action_items = http_json("GET", f"{args.backend_url}/api/workbench/today/action-items?limit=10&owner_scope=all", token=token)
-    trip_rows = http_json("GET", f"{args.backend_url}/api/trips/execution?owner_scope=all", token=token)
+    overview = http_json(
+        "GET", f"{args.backend_url}/api/workbench/today/overview?owner_scope=all", token=token
+    )
+    action_items = http_json(
+        "GET",
+        f"{args.backend_url}/api/workbench/today/action-items?limit=10&owner_scope=all",
+        token=token,
+    )
+    trip_rows = http_json(
+        "GET", f"{args.backend_url}/api/trips/execution?owner_scope=all", token=token
+    )
 
     items = action_items.get("data", {}).get("items", [])
     rows = trip_rows.get("data", {}).get("items", [])
@@ -78,7 +89,7 @@ def main() -> None:
         status, content = http_status(f"{args.frontend_url}{route}")
         if status != 200:
             raise SystemExit(f"❌ {route} -> HTTP {status}")
-        if "<div id=\"root\"" not in content:
+        if '<div id="root"' not in content:
             raise SystemExit(f"❌ {route} -> unexpected HTML content")
         print(f"  - {route} -> HTTP 200")
 
