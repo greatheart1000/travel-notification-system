@@ -17,7 +17,7 @@ import {
   Send,
   Trash2,
 } from 'lucide-react'
-import { getErrorMessage, notificationsApi } from '../services/api'
+import { getErrorMessage, notificationsApi, tripsApi } from '../services/api'
 import {
   type ChannelCode,
   type EmergencyWeatherSummary,
@@ -26,6 +26,7 @@ import {
   type NotificationRuleTimeSlotCode,
   type NotificationTemplate,
   type ProjectNotificationConfig,
+  type TripScheduleDay,
   type Trip,
 } from '../types/api'
 
@@ -45,6 +46,15 @@ interface RuleFormState {
   enabled: boolean
   priority: number
   templateId: string
+}
+
+interface TripDailyNotificationPreview {
+  day: number
+  date: string
+  route: string
+  morning: string
+  afternoon: string
+  evening: string
 }
 
 const EMPTY_TEMPLATE_FORM: TemplateFormState = {
@@ -101,6 +111,36 @@ function formatUpdatedAt(value: string): string {
   })
 }
 
+function findTimeSlotTemplate(
+  rules: NotificationRule[],
+  templateById: Map<string, string>,
+  slot: NotificationRuleTimeSlotCode,
+): string {
+  const matchedRule = rules.find((rule) => rule.enabled && (rule.timeSlot === slot || rule.timeSlot === 'all_day'))
+  if (!matchedRule) {
+    return '—'
+  }
+  const matchedTemplate = (templateById.get(matchedRule.templateId) || matchedRule.templateLabel || matchedRule.scene).trim()
+  return matchedTemplate ? matchedTemplate.slice(0, 48) : '—'
+}
+
+function buildTripDailyNotificationPreview(
+  days: TripScheduleDay[],
+  rules: NotificationRule[],
+  templates: NotificationTemplate[],
+): TripDailyNotificationPreview[] {
+  const templateById = new Map(templates.map((template) => [template.id, template.template]))
+  const onTripRules = rules.filter((rule) => rule.stage === 'on_trip' || rule.stage === 'custom')
+  return days.map((day) => ({
+    day: day.day,
+    date: day.date,
+    route: day.route || day.title || `Day ${day.day}`,
+    morning: findTimeSlotTemplate(onTripRules, templateById, 'morning'),
+    afternoon: findTimeSlotTemplate(onTripRules, templateById, 'afternoon'),
+    evening: findTimeSlotTemplate(onTripRules, templateById, 'evening'),
+  }))
+}
+
 interface NotificationsProps {
   tripId?: string | null
   onBackToTrip?: (tripId: string) => void
@@ -141,6 +181,7 @@ export function Notifications({ tripId = null, onBackToTrip }: NotificationsProp
   const [tripConfigContext, setTripConfigContext] = useState<{ trip: Trip; config: ProjectNotificationConfig } | null>(null)
   const [tripConfigSaveMessage, setTripConfigSaveMessage] = useState<string | null>(null)
   const [isTripConfigSaving, setIsTripConfigSaving] = useState(false)
+  const [tripScheduleDays, setTripScheduleDays] = useState<TripScheduleDay[]>([])
 
   const loadTemplates = async () => {
     setTemplateLoadState('loading')
@@ -200,9 +241,14 @@ export function Notifications({ tripId = null, onBackToTrip }: NotificationsProp
       setTripConfigLoadState('loading')
       setTripConfigError('')
       setTripConfigSaveMessage(null)
+      setTripScheduleDays([])
       try {
-        const context = await notificationsApi.getTripConfigContextByTripId(tripId)
+        const [context, schedule] = await Promise.all([
+          notificationsApi.getTripConfigContextByTripId(tripId),
+          tripsApi.getSchedule(tripId),
+        ])
         setTripConfigContext({ trip: context.trip, config: context.projectConfig })
+        setTripScheduleDays(schedule.days)
         setTripConfigLoadState('ready')
       } catch (error) {
         setTripConfigLoadState('error')
@@ -421,6 +467,7 @@ export function Notifications({ tripId = null, onBackToTrip }: NotificationsProp
 
   const timelineRules = rules.slice(0, 5)
   const templateById = new Map(templates.map((template) => [template.id, template.template]))
+  const tripDailyPreview = buildTripDailyNotificationPreview(tripScheduleDays, rules, templates)
   const buildSlotMessage = (rule: NotificationRule, slot: NotificationRuleTimeSlotCode): string => {
     if (rule.timeSlot !== slot) {
       return '—'
@@ -480,113 +527,155 @@ export function Notifications({ tripId = null, onBackToTrip }: NotificationsProp
             <PageState kind="error" title="当前团通知配置加载失败" description={tripConfigError} />
           ) : null}
           {tripConfigLoadState === 'ready' && tripConfigContext ? (
-            <TripNotificationConfigFormPanel
-              trip={tripConfigContext.trip}
-              config={tripConfigContext.config}
-              saving={isTripConfigSaving}
-              saveMessage={tripConfigSaveMessage}
-              onSave={saveTripConfig}
-            />
+            <div className="space-y-6">
+              <TripNotificationConfigFormPanel
+                trip={tripConfigContext.trip}
+                config={tripConfigContext.config}
+                saving={isTripConfigSaving}
+                saveMessage={tripConfigSaveMessage}
+                onSave={saveTripConfig}
+              />
+              <Card title="当前旅行团每日通知内容（早 / 中 / 晚）" className="border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+                {tripDailyPreview.length === 0 ? (
+                  <PageState
+                    kind="empty"
+                    title="当前团暂无按天行程"
+                    description="请先在“行程详情 > 每日行程编排”中补充行程日，随后可在此查看每天早中晚通知内容。"
+                  />
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[980px] text-sm">
+                      <thead>
+                        <tr className="bg-blue-50 text-left text-slate-700">
+                          <th className="px-4 py-4 font-black">行程日</th>
+                          <th className="px-4 py-4 font-black">日期</th>
+                          <th className="px-4 py-4 font-black">旅行行程</th>
+                          <th className="px-4 py-4 font-black">早间通知</th>
+                          <th className="px-4 py-4 font-black">中午通知</th>
+                          <th className="px-4 py-4 font-black">晚间通知</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tripDailyPreview.map((item) => (
+                          <tr key={`${item.day}-${item.date}`} className="border-b border-slate-100 align-top hover:bg-blue-50/40">
+                            <td className="px-4 py-4 font-bold text-slate-900">Day {item.day}</td>
+                            <td className="px-4 py-4 text-slate-700">{item.date || '待定'}</td>
+                            <td className="px-4 py-4 text-slate-700">{item.route || '待补充路线'}</td>
+                            <td className="px-4 py-4"><SmsCell label={item.morning} /></td>
+                            <td className="px-4 py-4"><SmsCell label={item.afternoon} /></td>
+                            <td className="px-4 py-4"><SmsCell label={item.evening} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+            </div>
           ) : null}
         </>
       ) : null}
 
-      <EmergencyWeatherSummaryPanel
-        weatherLoadState={weatherLoadState}
-        weatherSummary={weatherSummary}
-        weatherErrorMessage={weatherErrorMessage}
-        weatherActionMessage={weatherActionMessage}
-        weatherDraft={weatherDraft}
-        isWeatherSending={isWeatherSending}
-        onRetry={() => void loadEmergencyWeather()}
-        onOpenEditor={() => setIsWeatherEditorOpen(true)}
-        onSendNow={() => void sendEmergencyWeather()}
-        formatUpdatedAt={formatUpdatedAt}
-      />
+      {!tripId ? (
+        <>
+          <EmergencyWeatherSummaryPanel
+            weatherLoadState={weatherLoadState}
+            weatherSummary={weatherSummary}
+            weatherErrorMessage={weatherErrorMessage}
+            weatherActionMessage={weatherActionMessage}
+            weatherDraft={weatherDraft}
+            isWeatherSending={isWeatherSending}
+            onRetry={() => void loadEmergencyWeather()}
+            onOpenEditor={() => setIsWeatherEditorOpen(true)}
+            onSendNow={() => void sendEmergencyWeather()}
+            formatUpdatedAt={formatUpdatedAt}
+          />
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.25fr_0.75fr]">
-        <Card title="旅行团通知时间线管理" className="border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
-          {ruleLoadState === 'loading' ? <PageState kind="loading" title="正在加载通知规则" /> : null}
-          {ruleLoadState === 'error' ? <PageState kind="error" title="通知规则加载失败" description={ruleErrorMessage} onRetry={() => void loadRules()} /> : null}
-          {ruleLoadState === 'empty' ? <PageState kind="empty" title="暂无通知规则" description="可以新建一条规则配置" onRetry={() => void loadRules()} /> : null}
-          {ruleLoadState === 'ready' ? (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-sm">
-                <thead>
-                  <tr className="bg-blue-50 text-left text-slate-700">
-                    <th className="px-4 py-4 font-black">规则名称</th>
-                    <th className="px-4 py-4 font-black">阶段</th>
-                    <th className="px-4 py-4 font-black">时段</th>
-                    <th className="px-4 py-4 font-black">早间通知</th>
-                    <th className="px-4 py-4 font-black">午间通知</th>
-                    <th className="px-4 py-4 font-black">晚间通知</th>
-                    <th className="px-4 py-4 font-black">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {timelineRules.map((rule) => (
-                    <tr key={rule.id} className="border-b border-slate-100 align-top hover:bg-blue-50/40">
-                      <td className="px-4 py-4">
-                        <p className="font-bold text-slate-900">{rule.name}</p>
-                        <p className="text-xs text-slate-500">{rule.scene}</p>
-                      </td>
-                      <td className="px-4 py-4">{rule.stageLabel}</td>
-                      <td className="px-4 py-4">{rule.timeSlotLabel}</td>
-                      <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'morning')} /></td>
-                      <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'afternoon')} /></td>
-                      <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'evening')} /></td>
-                      <td className="px-4 py-4">
-                        <div className="flex flex-wrap gap-2">
-                          <Button variant="secondary" size="sm" onClick={() => openEditRuleModal(rule)}>
-                            <Pencil className="mr-1 inline h-3 w-3" />编辑
-                          </Button>
-                          <Button variant="secondary" size="sm" onClick={() => void toggleRule(rule)} disabled={isRuleTogglingId === rule.id}>
-                            <Power className="mr-1 inline h-3 w-3" />{rule.enabled ? '停用' : '启用'}
-                          </Button>
-                          <Button variant="danger" size="sm" onClick={() => void deleteRule(rule)} disabled={isRuleDeletingId === rule.id}>
-                            <Trash2 className="mr-1 inline h-3 w-3" />删除
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        </Card>
-
-        <Card title="通知模板模块" className="border-blue-100">
-          {templateLoadState === 'loading' ? <PageState kind="loading" title="正在加载通知模板" /> : null}
-          {templateLoadState === 'error' ? <PageState kind="error" title="通知模板加载失败" description={templateErrorMessage} onRetry={() => void loadTemplates()} /> : null}
-          {templateLoadState === 'empty' ? <PageState kind="empty" title="暂无通知模板" description="当前还没有可用模板" onRetry={() => void loadTemplates()} /> : null}
-          {templateLoadState === 'ready' ? (
-            <div className="space-y-3">
-              {templates.slice(0, 6).map((template) => (
-                <div key={template.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                  <div className="mb-2 flex items-start justify-between gap-3">
-                    <div>
-                      <h3 className="font-bold text-slate-900">{template.name}</h3>
-                      <p className="mt-1 line-clamp-2 text-sm text-slate-600">{template.template}</p>
-                    </div>
-                    <Badge variant={template.enabled ? 'success' : 'default'}>{template.statusLabel}</Badge>
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-slate-500">
-                    <span>{template.channelLabel} · 已发送 {template.sentCount}</span>
-                    <div className="flex gap-1">
-                      <button className="rounded p-1 hover:bg-white" aria-label="预览模板"><Eye className="h-4 w-4" /></button>
-                      <button className="rounded p-1 hover:bg-white" aria-label="复制模板"><Copy className="h-4 w-4" /></button>
-                      <button className="rounded p-1 hover:bg-white" onClick={() => openEditTemplateModal(template)} aria-label="编辑模板"><Pencil className="h-4 w-4" /></button>
-                      <button className="rounded p-1 text-blue-600 hover:bg-white" onClick={() => void sendNow(template.id, template.channel)} disabled={isSending === template.id} aria-label="发送通知"><Send className="h-4 w-4" /></button>
-                      <button className="rounded p-1 text-red-600 hover:bg-white" onClick={() => void deleteTemplate(template)} disabled={isTemplateDeletingId === template.id} aria-label="删除模板"><Trash2 className="h-4 w-4" /></button>
-                    </div>
-                  </div>
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.25fr_0.75fr]">
+            <Card title="旅行团通知时间线管理" className="border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+              {ruleLoadState === 'loading' ? <PageState kind="loading" title="正在加载通知规则" /> : null}
+              {ruleLoadState === 'error' ? <PageState kind="error" title="通知规则加载失败" description={ruleErrorMessage} onRetry={() => void loadRules()} /> : null}
+              {ruleLoadState === 'empty' ? <PageState kind="empty" title="暂无通知规则" description="可以新建一条规则配置" onRetry={() => void loadRules()} /> : null}
+              {ruleLoadState === 'ready' ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[900px] text-sm">
+                    <thead>
+                      <tr className="bg-blue-50 text-left text-slate-700">
+                        <th className="px-4 py-4 font-black">规则名称</th>
+                        <th className="px-4 py-4 font-black">阶段</th>
+                        <th className="px-4 py-4 font-black">时段</th>
+                        <th className="px-4 py-4 font-black">早间通知</th>
+                        <th className="px-4 py-4 font-black">午间通知</th>
+                        <th className="px-4 py-4 font-black">晚间通知</th>
+                        <th className="px-4 py-4 font-black">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {timelineRules.map((rule) => (
+                        <tr key={rule.id} className="border-b border-slate-100 align-top hover:bg-blue-50/40">
+                          <td className="px-4 py-4">
+                            <p className="font-bold text-slate-900">{rule.name}</p>
+                            <p className="text-xs text-slate-500">{rule.scene}</p>
+                          </td>
+                          <td className="px-4 py-4">{rule.stageLabel}</td>
+                          <td className="px-4 py-4">{rule.timeSlotLabel}</td>
+                          <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'morning')} /></td>
+                          <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'afternoon')} /></td>
+                          <td className="px-4 py-4"><SmsCell label={buildSlotMessage(rule, 'evening')} /></td>
+                          <td className="px-4 py-4">
+                            <div className="flex flex-wrap gap-2">
+                              <Button variant="secondary" size="sm" onClick={() => openEditRuleModal(rule)}>
+                                <Pencil className="mr-1 inline h-3 w-3" />编辑
+                              </Button>
+                              <Button variant="secondary" size="sm" onClick={() => void toggleRule(rule)} disabled={isRuleTogglingId === rule.id}>
+                                <Power className="mr-1 inline h-3 w-3" />{rule.enabled ? '停用' : '启用'}
+                              </Button>
+                              <Button variant="danger" size="sm" onClick={() => void deleteRule(rule)} disabled={isRuleDeletingId === rule.id}>
+                                <Trash2 className="mr-1 inline h-3 w-3" />删除
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
-            </div>
-          ) : null}
-        </Card>
-      </div>
+              ) : null}
+            </Card>
+
+            <Card title="通知模板模块" className="border-blue-100">
+              {templateLoadState === 'loading' ? <PageState kind="loading" title="正在加载通知模板" /> : null}
+              {templateLoadState === 'error' ? <PageState kind="error" title="通知模板加载失败" description={templateErrorMessage} onRetry={() => void loadTemplates()} /> : null}
+              {templateLoadState === 'empty' ? <PageState kind="empty" title="暂无通知模板" description="当前还没有可用模板" onRetry={() => void loadTemplates()} /> : null}
+              {templateLoadState === 'ready' ? (
+                <div className="space-y-3">
+                  {templates.slice(0, 6).map((template) => (
+                    <div key={template.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                      <div className="mb-2 flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="font-bold text-slate-900">{template.name}</h3>
+                          <p className="mt-1 line-clamp-2 text-sm text-slate-600">{template.template}</p>
+                        </div>
+                        <Badge variant={template.enabled ? 'success' : 'default'}>{template.statusLabel}</Badge>
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-slate-500">
+                        <span>{template.channelLabel} · 已发送 {template.sentCount}</span>
+                        <div className="flex gap-1">
+                          <button className="rounded p-1 hover:bg-white" aria-label="预览模板"><Eye className="h-4 w-4" /></button>
+                          <button className="rounded p-1 hover:bg-white" aria-label="复制模板"><Copy className="h-4 w-4" /></button>
+                          <button className="rounded p-1 hover:bg-white" onClick={() => openEditTemplateModal(template)} aria-label="编辑模板"><Pencil className="h-4 w-4" /></button>
+                          <button className="rounded p-1 text-blue-600 hover:bg-white" onClick={() => void sendNow(template.id, template.channel)} disabled={isSending === template.id} aria-label="发送通知"><Send className="h-4 w-4" /></button>
+                          <button className="rounded p-1 text-red-600 hover:bg-white" onClick={() => void deleteTemplate(template)} disabled={isTemplateDeletingId === template.id} aria-label="删除模板"><Trash2 className="h-4 w-4" /></button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </Card>
+          </div>
+        </>
+      ) : null}
 
       <Modal
         isOpen={isWeatherEditorOpen}
