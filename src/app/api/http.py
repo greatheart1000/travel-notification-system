@@ -229,6 +229,46 @@ class EmergencyWeatherSendRequest(BaseModel):
     channel: str = "sms"
 
 
+class DispatchPreviewRequest(BaseModel):
+    trip_id: str
+    node_key: str
+    channel: str = "sms"
+    channel_code: str | None = None
+    template_id: str | None = None
+
+
+class DispatchNowRequest(BaseModel):
+    trip_id: str
+    node_key: str
+    channel: str = "sms"
+    channel_code: str | None = None
+    template_id: str | None = None
+    content: str | None = None
+
+
+class RetryDispatchRequest(BaseModel):
+    reason: str | None = None
+
+
+class AssignTakeoverRequest(BaseModel):
+    task_id: str
+    assignee_user_id: str
+    assignee_name: str | None = None
+    deadline_at: str | None = None
+    note: str | None = None
+
+
+class CompleteWorkbenchTaskRequest(BaseModel):
+    result_note: str | None = None
+    evidence_type: str | None = None
+    evidence_ref: str | None = None
+
+
+class NudgeWorkbenchTaskRequest(BaseModel):
+    target_role: str | None = None
+    message: str | None = None
+
+
 class AgentNotificationDraftRequest(BaseModel):
     route: str
     travel_stage: str
@@ -792,6 +832,130 @@ def _serialize_project_notification_config(payload: dict[str, Any]) -> dict[str,
         "updated_at": payload.get("updated_at"),
     }
 
+
+def _now_iso() -> str:
+    return datetime.now(tz=UTC).isoformat()
+
+
+def _parse_missing_fields(error: Exception) -> list[str]:
+    message = str(error)
+    marker = "missing_template_variables:"
+    if marker not in message:
+        return []
+    suffix = message.split(marker, maxsplit=1)[1]
+    return [item.strip() for item in suffix.split(",") if item.strip()]
+
+
+def _default_workbench_nodes_for_trip(trip: dict[str, Any]) -> list[dict[str, str]]:
+    status = _normalize_trip_status(str(trip.get("status", "planned")))
+    if status == "planned":
+        return [
+            {
+                "stage": "pre_trip_t3",
+                "node_key": "pre_trip_t3_flight_check",
+                "title": "出发前3天航班确认与温馨提示",
+                "risk_level": "medium",
+            },
+            {
+                "stage": "pre_trip_t1",
+                "node_key": "pre_trip_t1_insurance_check",
+                "title": "出发前1天保险核查与建群检查",
+                "risk_level": "high",
+            },
+        ]
+    if status == "in_progress":
+        return [
+            {
+                "stage": "on_trip_daily",
+                "node_key": "daily_morning",
+                "title": "行程中早间提醒",
+                "risk_level": "medium",
+            },
+            {
+                "stage": "on_trip_daily",
+                "node_key": "daily_evening",
+                "title": "行程中晚间次日预告",
+                "risk_level": "medium",
+            },
+        ]
+    return [
+        {
+            "stage": "post_trip_followup",
+            "node_key": "post_trip_farewell",
+            "title": "下团欢送与满意度回访",
+            "risk_level": "low",
+        }
+    ]
+
+
+def _ensure_workbench_tasks(
+    ctx: AppContext, *, tenant_id: str, owner_scope: str | None = None
+) -> list[dict[str, Any]]:
+    records = ctx.store.read_collection("workbench_tasks")
+    tasks = [item for item in records if str(item.get("tenant_id") or "") == tenant_id]
+    existing_keys = {
+        (str(item.get("trip_id") or ""), str(item.get("node_key") or "")) for item in tasks
+    }
+    now = datetime.now(tz=UTC)
+    changed = False
+    for trip in ctx.trip_repository.list():
+        if str(trip.get("tenant_id") or "") != tenant_id:
+            continue
+        owner_id = str(trip.get("user_id") or "admin")
+        if owner_scope == "mine" and owner_id == "":
+            continue
+        trip_id = str(trip.get("id") or "")
+        for offset, node in enumerate(_default_workbench_nodes_for_trip(trip), start=1):
+            dedupe_key = (trip_id, node["node_key"])
+            if dedupe_key in existing_keys:
+                continue
+            due_at = (now + timedelta(hours=offset)).isoformat()
+            tasks.append(
+                {
+                    "id": f"task-{uuid4().hex[:10]}",
+                    "tenant_id": tenant_id,
+                    "trip_id": trip_id,
+                    "trip_name": str(trip.get("destination") or trip_id),
+                    "team_id": str(trip.get("team_id") or trip.get("team") or ""),
+                    "stage": node["stage"],
+                    "node_key": node["node_key"],
+                    "title": node["title"],
+                    "due_at": due_at,
+                    "owner_id": owner_id,
+                    "owner_role": "concierge",
+                    "owner_name": owner_id,
+                    "priority": "p0" if node["risk_level"] == "high" else "p1",
+                    "risk_level": node["risk_level"],
+                    "status": "todo",
+                    "dispatch_id": "",
+                    "created_at": _now_iso(),
+                    "updated_at": _now_iso(),
+                }
+            )
+            existing_keys.add(dedupe_key)
+            changed = True
+    if changed:
+        untouched = [item for item in records if str(item.get("tenant_id") or "") != tenant_id]
+        ctx.store.write_collection("workbench_tasks", untouched + tasks)
+    return tasks
+
+
+def _save_workbench_tasks(ctx: AppContext, tenant_id: str, tasks: list[dict[str, Any]]) -> None:
+    records = ctx.store.read_collection("workbench_tasks")
+    untouched = [item for item in records if str(item.get("tenant_id") or "") != tenant_id]
+    ctx.store.write_collection("workbench_tasks", untouched + tasks)
+
+
+def _task_status_for_due(task: dict[str, Any]) -> str:
+    status = str(task.get("status") or "todo")
+    if status in {"done", "handover_in_progress"}:
+        return status
+    due_at = str(task.get("due_at") or "")
+    try:
+        due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+    except ValueError:
+        return status
+    return "overdue" if due < datetime.now(tz=UTC) else status
 
 def _seed_default_trips(trip_repository: TripRepository) -> None:
     if trip_repository.list():
@@ -1959,6 +2123,196 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _ok_with_message(result, "rule simulation completed")
 
+    @fastapi_app.get("/api/workbench/today/overview")
+    def get_workbench_today_overview(
+        date: str | None = None,
+        owner_scope: str = "mine",
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        tenant_id = _current_tenant_id(user)
+        effective_scope = "all" if user.get("role") == "admin" and owner_scope == "all" else "mine"
+        tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id, owner_scope=effective_scope)
+        if effective_scope == "mine":
+            tasks = [item for item in tasks if item.get("owner_id") == user.get("id")]
+        normalized = [{**item, "status": _task_status_for_due(item)} for item in tasks]
+        pending = [item for item in normalized if item.get("status") not in {"done"}]
+        overdue = [item for item in normalized if item.get("status") == "overdue"]
+        risky = [item for item in normalized if str(item.get("risk_level")) in {"high", "critical"}]
+        takeovers = [
+            item for item in normalized if str(item.get("status")) == "handover_in_progress"
+        ]
+        return _ok(
+            {
+                "date": date or datetime.now(tz=UTC).date().isoformat(),
+                "timezone": "UTC",
+                "pending_tasks": len(pending),
+                "overdue_tasks": len(overdue),
+                "risky_trips": len({str(item.get("trip_id")) for item in risky}),
+                "pending_takeovers": len(takeovers),
+            }
+        )
+
+    @fastapi_app.get("/api/workbench/today/action-items")
+    def get_workbench_action_items(
+        limit: int = 20,
+        owner_scope: str = "mine",
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        tenant_id = _current_tenant_id(user)
+        effective_scope = "all" if user.get("role") == "admin" and owner_scope == "all" else "mine"
+        tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id, owner_scope=effective_scope)
+        if effective_scope == "mine":
+            tasks = [item for item in tasks if item.get("owner_id") == user.get("id")]
+        items = [{**item, "status": _task_status_for_due(item)} for item in tasks]
+        items_sorted = sorted(
+            items,
+            key=lambda item: (str(item.get("status") != "overdue"), str(item.get("due_at") or "")),
+        )
+        return _ok({"items": items_sorted[: max(limit, 0)]})
+
+    @fastapi_app.get("/api/trips/execution")
+    def list_trip_execution(
+        owner_scope: str = "mine",
+        stage: str | None = None,
+        risk_level: str | None = None,
+        date: str | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        tenant_id = _current_tenant_id(user)
+        effective_scope = "all" if user.get("role") == "admin" and owner_scope == "all" else "mine"
+        tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id, owner_scope=effective_scope)
+        if effective_scope == "mine":
+            tasks = [item for item in tasks if item.get("owner_id") == user.get("id")]
+        if stage:
+            tasks = [item for item in tasks if str(item.get("stage")) == stage]
+        if risk_level:
+            tasks = [item for item in tasks if str(item.get("risk_level")) == risk_level]
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for task in tasks:
+            grouped.setdefault(str(task.get("trip_id") or ""), []).append(task)
+        trips = {
+            str(item.get("id") or ""): item
+            for item in ctx.trip_repository.list()
+            if str(item.get("tenant_id") or "") == tenant_id
+        }
+        rows: list[dict[str, Any]] = []
+        now = datetime.now(tz=UTC)
+        for trip_id, trip_tasks in grouped.items():
+            trip = trips.get(trip_id)
+            if trip is None:
+                continue
+            statuses = [_task_status_for_due(item) for item in trip_tasks]
+            todo_count = len([status for status in statuses if status != "done"])
+            overdue_minutes = 0
+            next_due_candidates: list[str] = []
+            for item in trip_tasks:
+                due_at = str(item.get("due_at") or "")
+                if due_at:
+                    next_due_candidates.append(due_at)
+                if _task_status_for_due(item) == "overdue":
+                    try:
+                        due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+                    except ValueError:
+                        continue
+                    overdue_minutes = max(
+                        overdue_minutes, int((now - due).total_seconds() // 60)
+                    )
+            dispatch_status = "pending"
+            if any(status == "handover_in_progress" for status in statuses):
+                dispatch_status = "manual_intervention"
+            elif todo_count == 0:
+                dispatch_status = "sent"
+            rows.append(
+                {
+                    "trip_id": trip_id,
+                    "team_id": str(trip.get("team_id") or trip.get("team") or ""),
+                    "trip_name": str(trip.get("destination") or trip_id),
+                    "current_stage": str(trip_tasks[0].get("stage") or "unknown"),
+                    "todo_count": todo_count,
+                    "total_count": len(trip_tasks),
+                    "next_node_due_at": min(next_due_candidates) if next_due_candidates else "",
+                    "risk_level": max(
+                        (str(item.get("risk_level") or "low") for item in trip_tasks),
+                        key=lambda level: {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(
+                            level, 0
+                        ),
+                    ),
+                    "dispatch_status": dispatch_status,
+                    "owner_name": str(trip_tasks[0].get("owner_name") or ""),
+                    "overdue_minutes": overdue_minutes,
+                    "date": date or datetime.now(tz=UTC).date().isoformat(),
+                }
+            )
+        rows_sorted = sorted(
+            rows,
+            key=lambda item: (
+                -int(item.get("overdue_minutes") or 0),
+                str(item.get("risk_level") not in {"critical", "high"}),
+                str(item.get("next_node_due_at") or ""),
+            ),
+        )
+        return _ok({"items": rows_sorted})
+
+    @fastapi_app.get("/api/trips/{trip_id}/execution")
+    def get_trip_execution_detail(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        tenant_id = _current_tenant_id(user)
+        tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id)
+        trip_tasks = [item for item in tasks if str(item.get("trip_id")) == trip_id]
+        normalized = [{**item, "status": _task_status_for_due(item)} for item in trip_tasks]
+        today_total = len(normalized)
+        today_done = len([item for item in normalized if item.get("status") == "done"])
+        risk = "low"
+        if any(str(item.get("risk_level")) == "high" for item in normalized):
+            risk = "high"
+        elif any(str(item.get("risk_level")) == "medium" for item in normalized):
+            risk = "medium"
+        return _ok(
+            {
+                "trip_id": trip_id,
+                "team_id": str(trip.get("team_id") or trip.get("team") or ""),
+                "trip_name": str(trip.get("destination") or trip_id),
+                "current_stage": str(normalized[0].get("stage") if normalized else "unknown"),
+                "today_total": today_total,
+                "today_done": today_done,
+                "risk_level": risk,
+                "next_dispatch_at": min(
+                    [str(item.get("due_at") or "") for item in normalized if item.get("due_at")]
+                )
+                if normalized
+                else "",
+                "tasks": [
+                    {
+                        "task_id": item.get("id"),
+                        "title": item.get("title"),
+                        "stage": item.get("stage"),
+                        "node_key": item.get("node_key"),
+                        "due_at": item.get("due_at"),
+                        "status": item.get("status"),
+                        "owner_role": item.get("owner_role"),
+                        "owner_name": item.get("owner_name"),
+                        "evidence_required": item.get("priority") == "p0",
+                        "dispatch_id": item.get("dispatch_id") or "",
+                    }
+                    for item in normalized
+                ],
+            }
+        )
+
     @fastapi_app.get("/api/trips")
     def list_trips(
         user: dict[str, str] = Depends(get_current_user),
@@ -2263,6 +2617,238 @@ def create_app() -> FastAPI:
             },
         )
         return _ok(generated)
+
+    @fastapi_app.post("/api/notifications/dispatch/preview")
+    def preview_notification_dispatch(
+        payload: DispatchPreviewRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:read")
+        trip = ctx.trip_repository.get(payload.trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        tenant_id = _current_tenant_id(user)
+        template = None
+        if payload.template_id:
+            template = ctx.template_service.get_notification_template(payload.template_id, tenant_id)
+        if template is None:
+            template = ctx.template_service.ensure_default_template(tenant_id=tenant_id)
+        variables = {
+            "customer_name": "全团游客",
+            "destination": str(trip.get("destination") or ""),
+        }
+        try:
+            content = ctx.template_service.render_notification(template, variables)
+            variable_check = {"ok": True, "missing_fields": []}
+        except ValueError as exc:
+            content = template.content
+            variable_check = {"ok": False, "missing_fields": _parse_missing_fields(exc)}
+        return _ok(
+            {
+                "trip_id": payload.trip_id,
+                "node_key": payload.node_key,
+                "channel": _parse_channel(payload.channel).value,
+                "template_id": template.id,
+                "content": content,
+                "variable_check": variable_check,
+            }
+        )
+
+    @fastapi_app.post("/api/notifications/dispatch")
+    def dispatch_notification_now(
+        payload: DispatchNowRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        trip = ctx.trip_repository.get(payload.trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        tenant_id = _current_tenant_id(user)
+        content = (payload.content or "").strip()
+        template = None
+        if not content:
+            if payload.template_id:
+                template = ctx.template_service.get_notification_template(payload.template_id, tenant_id)
+            if template is None:
+                template = ctx.template_service.ensure_default_template(tenant_id=tenant_id)
+            content = ctx.template_service.render_notification(
+                template,
+                {
+                    "customer_name": "全团游客",
+                    "destination": str(trip.get("destination") or ""),
+                },
+            )
+        dispatch_task = NotificationTask(
+            tenant_id=tenant_id,
+            team_id=str(trip.get("team_id") or trip.get("team") or ""),
+            trip_id=payload.trip_id,
+            customer_id=user["id"],
+            rendered_content=content,
+            idempotency_key=f"workbench:{payload.trip_id}:{payload.node_key}:{uuid4().hex}",
+            primary_channel=_parse_channel(payload.channel),
+            fallback_channel=Channel.WECHAT_WORK_GROUP,
+            provider_context={
+                "customer_name": "全团游客",
+                "trip_label": str(trip.get("destination") or payload.trip_id),
+            },
+        )
+        ctx.notification_tasks[dispatch_task.id] = dispatch_task
+        result = ctx.notification_service.dispatch(dispatch_task)
+        dispatch_id = dispatch_task.attempts[-1].id if dispatch_task.attempts else dispatch_task.id
+
+        tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id)
+        for item in tasks:
+            if str(item.get("trip_id")) == payload.trip_id and str(item.get("node_key")) == payload.node_key:
+                item["dispatch_id"] = dispatch_id
+                item["updated_at"] = _now_iso()
+                item["status"] = "done" if result.get("ok") else "handover_in_progress"
+                break
+        _save_workbench_tasks(ctx, tenant_id, tasks)
+        return _ok(
+            {
+                "ok": bool(result.get("ok")),
+                "status": "sent" if result.get("ok") else "manual_intervention",
+                "message": "dispatch sent" if result.get("ok") else "dispatch failed",
+                "task_id": dispatch_task.id,
+                "dispatch_id": dispatch_id,
+            }
+        )
+
+    @fastapi_app.post("/api/notifications/dispatch/{dispatch_id}/retry")
+    def retry_dispatch(
+        dispatch_id: str,
+        payload: RetryDispatchRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        tenant_id = _current_tenant_id(user)
+        history = ctx.notification_attempt_repository.list_history(limit=None)
+        matched = next((item for item in history if item.get("attempt_id") == dispatch_id), None)
+        if matched is None:
+            raise HTTPException(status_code=404, detail="Dispatch not found")
+        trip_id = str(matched.get("trip_id") or "")
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        retry_task = NotificationTask(
+            tenant_id=tenant_id,
+            team_id=str(matched.get("team_id") or ""),
+            trip_id=trip_id,
+            customer_id=str(matched.get("customer_id") or user["id"]),
+            rendered_content=str(matched.get("provider_message") or "重试通知"),
+            idempotency_key=f"retry:{dispatch_id}:{uuid4().hex}",
+            primary_channel=_parse_channel(str(matched.get("channel") or "sms")),
+            fallback_channel=Channel.WECHAT_WORK_GROUP,
+            provider_context={
+                "customer_name": str(matched.get("customer_name") or "游客"),
+                "trip_label": str(matched.get("trip_label") or trip_id),
+            },
+        )
+        ctx.notification_tasks[retry_task.id] = retry_task
+        ctx.notification_service.dispatch(retry_task)
+        latest_dispatch_id = retry_task.attempts[-1].id if retry_task.attempts else retry_task.id
+        return _ok(
+            {
+                "ok": True,
+                "status": "retrying",
+                "message": payload.reason or "dispatch retry accepted",
+                "task_id": retry_task.id,
+                "dispatch_id": latest_dispatch_id,
+            }
+        )
+
+    @fastapi_app.post("/api/workbench/takeovers")
+    def assign_workbench_takeover(
+        payload: AssignTakeoverRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        tenant_id = _current_tenant_id(user)
+        tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id)
+        target = next((item for item in tasks if item.get("id") == payload.task_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        target["status"] = "handover_in_progress"
+        target["assignee_user_id"] = payload.assignee_user_id
+        target["assignee_name"] = payload.assignee_name or payload.assignee_user_id
+        target["deadline_at"] = payload.deadline_at or ""
+        target["note"] = payload.note or ""
+        target["updated_at"] = _now_iso()
+        _save_workbench_tasks(ctx, tenant_id, tasks)
+        return _ok(
+            {
+                "ok": True,
+                "status": "handover_in_progress",
+                "message": "takeover assigned",
+                "task_id": target.get("id"),
+                "dispatch_id": target.get("dispatch_id") or "",
+            }
+        )
+
+    @fastapi_app.post("/api/workbench/tasks/{task_id}/complete")
+    def complete_workbench_task(
+        task_id: str,
+        payload: CompleteWorkbenchTaskRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        tenant_id = _current_tenant_id(user)
+        tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id)
+        target = next((item for item in tasks if item.get("id") == task_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        target["status"] = "done"
+        target["result_note"] = payload.result_note or ""
+        target["evidence_type"] = payload.evidence_type or "none"
+        target["evidence_ref"] = payload.evidence_ref or ""
+        target["updated_at"] = _now_iso()
+        _save_workbench_tasks(ctx, tenant_id, tasks)
+        return _ok(
+            {
+                "ok": True,
+                "status": "done",
+                "message": "task completed",
+                "task_id": target.get("id"),
+                "dispatch_id": target.get("dispatch_id") or "",
+            }
+        )
+
+    @fastapi_app.post("/api/workbench/tasks/{task_id}/nudge")
+    def nudge_workbench_task(
+        task_id: str,
+        payload: NudgeWorkbenchTaskRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        tenant_id = _current_tenant_id(user)
+        tasks = _ensure_workbench_tasks(ctx, tenant_id=tenant_id)
+        target = next((item for item in tasks if item.get("id") == task_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        target["last_nudge_at"] = _now_iso()
+        target["last_nudge_by"] = user.get("id")
+        target["last_nudge_target_role"] = payload.target_role or ""
+        target["last_nudge_message"] = payload.message or ""
+        target["updated_at"] = _now_iso()
+        _save_workbench_tasks(ctx, tenant_id, tasks)
+        return _ok(
+            {
+                "ok": True,
+                "status": "nudged",
+                "message": "nudge sent",
+                "task_id": target.get("id"),
+                "dispatch_id": target.get("dispatch_id") or "",
+            }
+        )
 
     @fastapi_app.post("/api/notifications/send")
     def send_notification(
