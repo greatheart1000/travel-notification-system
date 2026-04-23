@@ -178,6 +178,121 @@ def test_notification_template_alias_supports_update_and_delete() -> None:
     assert deleted.status_code == 200
 
 
+def test_agent_generates_morning_noon_evening_templates_and_admin_can_modify() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    user_token = _login(client, "user", "123456")
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    user_headers = {"Authorization": f"Bearer {user_token}"}
+
+    forbidden = client.post(
+        "/api/notifications/templates/agent-drafts",
+        headers=user_headers,
+        json={
+            "route": "乌鲁木齐-喀纳斯",
+            "travel_stage": "行程中",
+            "time_node": "每日固定时段",
+            "core_work": "时段性专属温馨提示",
+        },
+    )
+    assert forbidden.status_code == 403
+
+    created = client.post(
+        "/api/notifications/templates/agent-drafts",
+        headers=admin_headers,
+        json={
+            "route": "乌鲁木齐-喀纳斯",
+            "travel_stage": "行程中",
+            "time_node": "每日固定时段",
+            "core_work": "时段性专属温馨提示",
+            "action_detail": "早中晚分别发送安全、天气、次日预告",
+            "project_id": "proj-xinjiang",
+            "template_prefix": "行中日播",
+        },
+    )
+    assert created.status_code == 200
+    payload = created.json()["data"]
+    assert len(payload["drafts"]) == 3
+    assert [item["time_slot"] for item in payload["drafts"]] == ["morning", "noon", "evening"]
+    assert len(payload["created_template_ids"]) == 3
+
+    template_id = payload["created_template_ids"][0]
+    updated = client.put(
+        f"/api/notifications/templates/{template_id}",
+        headers=admin_headers,
+        json={"content": "【人工修订】明日早上集合前请再次检查证件与保暖衣物。"},
+    )
+    assert updated.status_code == 200
+    assert "人工修订" in updated.json()["data"]["content"]
+
+
+def test_generate_daily_notifications_uses_multi_agent_pipeline(monkeypatch) -> None:
+    async def _fake_llm(
+        trip_destination: str, scene: str, prompt_override: str | None = None
+    ) -> str:
+        return f"【AI生成】{scene}：{trip_destination}，请关注集合时间与路线安排。"
+
+    monkeypatch.setattr("app.services.notification_agent_service.generate_smart_message", _fake_llm)
+
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    admin_token = _login(client, "admin", "123456")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    created_trip = client.post(
+        "/api/trips",
+        headers=headers,
+        json={
+            "destination": "塔县-慕士塔格冰川公园-喀什",
+            "team": "TEAM-AGENT-001",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-26",
+            "participants": 18,
+        },
+    )
+    assert created_trip.status_code == 201
+    trip_id = created_trip.json()["data"]["trip"]["id"]
+
+    patched_trip = client.put(
+        f"/api/trips/{trip_id}",
+        headers=headers,
+        json={
+            "itinerary": [
+                {
+                    "date": "2026-04-22",
+                    "route": "塔县-慕士塔格冰川公园-喀什",
+                    "hotel": "喀什万巢国际酒店",
+                    "special_tags": ["冰川", "高海拔"],
+                }
+            ]
+        },
+    )
+    assert patched_trip.status_code == 200
+
+    generated = client.post(
+        "/api/notifications/generate-daily",
+        headers=headers,
+        json={
+            "group_id": "TEAM-AGENT-001",
+            "date": "2026-04-22",
+            "weather": "小雨 11°C",
+            "core_work": "时段性专属温馨提示",
+            "save_as_templates": True,
+            "project_id": "proj-agent",
+        },
+    )
+    assert generated.status_code == 200
+    payload = generated.json()["data"]
+    assert payload["stage"] == "行程中"
+    assert payload["time_node"] == "每日固定时段"
+    assert len(payload["messages"]) == 3
+    assert [item["period"] for item in payload["messages"]] == ["morning", "noon", "evening"]
+    assert all("AI生成" in item["message"] for item in payload["messages"])
+    assert len(payload["created_template_ids"]) == 3
+    assert "debug" in payload
+
+
 def test_emergency_weather_summary_returns_ai_risk_and_trip_preview() -> None:
     reset_state(purge_persistence=True)
     client = TestClient(app)

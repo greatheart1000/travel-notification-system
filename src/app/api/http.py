@@ -40,6 +40,7 @@ from app.services.analytics_view_service import AnalyticsViewService
 from app.services.async_dispatch import AsyncDispatchService
 from app.services.dashboard_service import DashboardService
 from app.services.emergency_weather_service import EmergencyWeatherService
+from app.services.notification_agent_service import NotificationAgentService
 from app.services.preference_service import UserPreferenceService
 from app.services.scheduler_service import init_scheduler
 from app.services.template_service import TemplateService
@@ -226,6 +227,29 @@ class EmergencyWeatherSendRequest(BaseModel):
     alert_id: str
     custom_content: str | None = None
     channel: str = "sms"
+
+
+class AgentNotificationDraftRequest(BaseModel):
+    route: str
+    travel_stage: str
+    time_node: str
+    core_work: str
+    action_detail: str = ""
+    project_id: str = ""
+    channel: str = "sms"
+    notification_type: str = "daily_reminder"
+    save_as_templates: bool = True
+    template_prefix: str = "Agent自动生成"
+
+
+class DailyNotificationGenerateRequest(BaseModel):
+    group_id: str
+    date: str
+    weather: str = "多云"
+    core_work: str = "时段性专属温馨提示"
+    save_as_templates: bool = False
+    channel: str = "sms"
+    project_id: str = ""
 
 
 class ProjectNotificationConfigUpsertRequest(BaseModel):
@@ -1197,6 +1221,56 @@ def create_app() -> FastAPI:
             notification_service=ctx.notification_service,
         )
 
+    def _build_notification_agent_service() -> NotificationAgentService:
+        return NotificationAgentService()
+
+    def _resolve_trip_for_group(
+        ctx: AppContext, *, tenant_id: str, group_id: str
+    ) -> dict[str, Any] | None:
+        matched = [
+            trip
+            for trip in ctx.trip_repository.list()
+            if str(trip.get("tenant_id") or "") == tenant_id
+            and str(trip.get("team_id") or trip.get("team") or "") == group_id
+        ]
+        if not matched:
+            return None
+        matched_sorted = sorted(
+            matched,
+            key=lambda item: str(item.get("start_date") or ""),
+            reverse=True,
+        )
+        return matched_sorted[0]
+
+    def _resolve_daily_itinerary_context(trip: dict[str, Any], target_date: str) -> dict[str, Any]:
+        itinerary = trip.get("itinerary")
+        if not isinstance(itinerary, list):
+            itinerary = []
+        selected = next(
+            (
+                item
+                for item in itinerary
+                if isinstance(item, dict) and str(item.get("date") or "") == target_date
+            ),
+            {},
+        )
+        route_text = str(
+            selected.get("route")
+            or selected.get("title")
+            or trip.get("destination")
+            or trip.get("team")
+            or ""
+        )
+        hotel = str(selected.get("hotel") or selected.get("hotel_name") or "")
+        special_tags = selected.get("special_tags")
+        if not isinstance(special_tags, list):
+            special_tags = []
+        return {
+            "route_text": route_text,
+            "hotel": hotel,
+            "special_tags": [str(item) for item in special_tags if str(item).strip()],
+        }
+
     def _require_permission_or_403(user: dict[str, str], permission: str) -> None:
         try:
             require_permission(user, permission)
@@ -1451,6 +1525,58 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         return list_templates(user, ctx)
+
+    @fastapi_app.post("/api/notifications/templates/agent-drafts")
+    def generate_agent_notification_drafts(
+        payload: AgentNotificationDraftRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "template:write")
+        tenant_id = _current_tenant_id(user)
+        channel = _parse_channel(payload.channel).value
+        agent = _build_notification_agent_service()
+        result = agent.generate_daily_drafts(
+            route=payload.route,
+            travel_stage=payload.travel_stage,
+            time_node=payload.time_node,
+            core_work=payload.core_work,
+            action_detail=payload.action_detail,
+        )
+        drafts = result["drafts"]
+        created_template_ids: list[str] = []
+        if payload.save_as_templates:
+            for item in drafts:
+                template = ctx.template_service.create_notification_template(
+                    tenant_id=tenant_id,
+                    name=f"{payload.template_prefix}-{result['context']['time_node']}-{item['title']}",
+                    content=item["content"],
+                    channel=channel,
+                    notification_type=payload.notification_type,
+                    is_active=True,
+                    project_id=payload.project_id,
+                    stage=payload.travel_stage,
+                    time_slot=item["time_slot"],
+                    scene="agent_generated",
+                )
+                created_template_ids.append(template.id)
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="template_agent_drafts_generated",
+            target=payload.project_id or payload.route,
+            detail={
+                "draft_count": len(drafts),
+                "saved": payload.save_as_templates,
+                "template_ids": created_template_ids,
+            },
+        )
+        return _ok(
+            {
+                **result,
+                "saved_as_templates": payload.save_as_templates,
+                "created_template_ids": created_template_ids,
+            }
+        )
 
     @fastapi_app.get("/api/project-configs")
     def list_project_configs(
@@ -2058,6 +2184,62 @@ def create_app() -> FastAPI:
             operator_id=user["id"], action="trip_deleted", target=trip_id, detail={}
         )
         return {"code": 200}
+
+    @fastapi_app.post("/api/notifications/generate-daily")
+    def generate_daily_notifications(
+        payload: DailyNotificationGenerateRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        tenant_id = _current_tenant_id(user)
+        trip = _resolve_trip_for_group(ctx, tenant_id=tenant_id, group_id=payload.group_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip group not found")
+        itinerary_ctx = _resolve_daily_itinerary_context(trip, payload.date)
+        service = _build_notification_agent_service()
+        generated = service.generate_daily_messages(
+            group_id=payload.group_id,
+            group_name=str(trip.get("team") or trip.get("team_id") or payload.group_id),
+            travel_date=payload.date,
+            start_date=str(trip.get("start_date") or payload.date),
+            end_date=str(trip.get("end_date") or payload.date),
+            route_text=itinerary_ctx["route_text"],
+            hotel=itinerary_ctx["hotel"],
+            weather=payload.weather,
+            core_work=payload.core_work,
+            special_tags=itinerary_ctx["special_tags"],
+        )
+        created_template_ids: list[str] = []
+        if payload.save_as_templates:
+            channel = _parse_channel(payload.channel).value
+            for item in generated["messages"]:
+                template = ctx.template_service.create_notification_template(
+                    tenant_id=tenant_id,
+                    name=f"Agent日播-{payload.group_id}-{item['period']}",
+                    content=item["message"],
+                    channel=channel,
+                    notification_type="daily_reminder",
+                    is_active=True,
+                    project_id=payload.project_id,
+                    stage=generated["stage"],
+                    time_slot=item["period"],
+                    scene="agent_generated_daily",
+                )
+                created_template_ids.append(template.id)
+        generated["created_template_ids"] = created_template_ids
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="notification_daily_generated",
+            target=payload.group_id,
+            detail={
+                "date": payload.date,
+                "stage": generated["stage"],
+                "time_node": generated["time_node"],
+                "saved_templates": bool(created_template_ids),
+            },
+        )
+        return _ok(generated)
 
     @fastapi_app.post("/api/notifications/send")
     def send_notification(
