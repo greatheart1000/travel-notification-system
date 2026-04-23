@@ -460,6 +460,226 @@ export interface RecentNotification {
   createdAt: string
 }
 
+export type WorkbenchRiskLevel = 'low' | 'medium' | 'high' | 'critical' | 'unknown'
+export type WorkbenchPriority = 'p0' | 'p1' | 'p2' | 'unknown'
+export type WorkbenchTaskStatus =
+  | 'todo'
+  | 'in_progress'
+  | 'blocked'
+  | 'overdue'
+  | 'done'
+  | 'handover_in_progress'
+  | 'unknown'
+
+export interface RawWorkbenchOverview {
+  date?: string
+  timezone?: string
+  pending_tasks?: number | string
+  overdue_tasks?: number | string
+  risky_trips?: number | string
+  pending_takeovers?: number | string
+}
+
+export interface WorkbenchOverview {
+  date: string
+  timezone: string
+  pendingTasks: number
+  overdueTasks: number
+  riskyTrips: number
+  pendingTakeovers: number
+}
+
+export interface RawWorkbenchTask {
+  id?: string
+  trip_id?: string
+  trip_name?: string
+  team_id?: string
+  stage?: string
+  node_key?: string
+  title?: string
+  due_at?: string
+  owner_role?: string
+  owner_name?: string
+  priority?: string
+  risk_level?: string
+  status?: string
+}
+
+export interface WorkbenchTask {
+  id: string
+  tripId: string
+  tripName: string
+  teamId: string
+  stage: string
+  nodeKey: string
+  title: string
+  dueAt: string
+  ownerRole: string
+  ownerName: string
+  priority: WorkbenchPriority
+  riskLevel: WorkbenchRiskLevel
+  status: WorkbenchTaskStatus
+}
+
+export interface RawTripExecutionRow {
+  trip_id?: string
+  team_id?: string
+  trip_name?: string
+  current_stage?: string
+  todo_count?: number | string
+  total_count?: number | string
+  next_node_due_at?: string
+  risk_level?: string
+  dispatch_status?: string
+  owner_name?: string
+  overdue_minutes?: number | string
+}
+
+export interface TripExecutionRow {
+  tripId: string
+  teamId: string
+  tripName: string
+  currentStage: string
+  todoCount: number
+  totalCount: number
+  nextNodeDueAt: string
+  riskLevel: WorkbenchRiskLevel
+  dispatchStatus: string
+  ownerName: string
+  overdueMinutes: number
+}
+
+export interface RawExecutionTask {
+  task_id?: string
+  title?: string
+  stage?: string
+  node_key?: string
+  due_at?: string
+  status?: string
+  owner_role?: string
+  owner_name?: string
+  evidence_required?: boolean
+  dispatch_id?: string
+}
+
+export interface ExecutionTask {
+  taskId: string
+  title: string
+  stage: string
+  nodeKey: string
+  dueAt: string
+  status: WorkbenchTaskStatus
+  ownerRole: string
+  ownerName: string
+  evidenceRequired: boolean
+  dispatchId: string
+}
+
+export interface RawTripExecutionDetail {
+  trip_id?: string
+  team_id?: string
+  trip_name?: string
+  current_stage?: string
+  today_total?: number | string
+  today_done?: number | string
+  risk_level?: string
+  next_dispatch_at?: string
+  tasks?: RawExecutionTask[]
+}
+
+export interface TripExecutionDetail {
+  tripId: string
+  teamId: string
+  tripName: string
+  currentStage: string
+  todayTotal: number
+  todayDone: number
+  riskLevel: WorkbenchRiskLevel
+  nextDispatchAt: string
+  tasks: ExecutionTask[]
+}
+
+export interface DispatchPreviewInput {
+  tripId: string
+  nodeKey: string
+  channel: ChannelCode
+  templateId?: string
+}
+
+export interface RawDispatchPreview {
+  trip_id?: string
+  node_key?: string
+  channel?: string
+  template_id?: string
+  content?: string
+  variable_check?: {
+    ok?: boolean
+    missing_fields?: string[]
+  }
+}
+
+export interface DispatchPreview {
+  tripId: string
+  nodeKey: string
+  channel: ChannelCode
+  templateId: string
+  content: string
+  variableCheck: {
+    ok: boolean
+    missingFields: string[]
+  }
+}
+
+export interface DispatchNowInput {
+  tripId: string
+  nodeKey: string
+  channel: ChannelCode
+  content?: string
+  templateId?: string
+}
+
+export interface RetryDispatchInput {
+  dispatchId: string
+  reason?: string
+}
+
+export interface AssignTakeoverInput {
+  taskId: string
+  assigneeUserId: string
+  assigneeName?: string
+  deadlineAt?: string
+  note?: string
+}
+
+export interface CompleteTaskInput {
+  taskId: string
+  resultNote?: string
+  evidenceType?: 'none' | 'receipt' | 'screenshot' | 'external_link'
+  evidenceRef?: string
+}
+
+export interface NudgeTaskInput {
+  taskId: string
+  targetRole?: string
+  message?: string
+}
+
+export interface RawActionResult {
+  ok?: boolean
+  status?: string
+  message?: string
+  task_id?: string
+  dispatch_id?: string
+}
+
+export interface ActionResult {
+  ok: boolean
+  status: string
+  message: string
+  taskId: string
+  dispatchId: string
+}
+
 export interface RawAnalyticsResponse {
   metrics?: {
     notification_success_rate?: string | number
