@@ -145,6 +145,31 @@ proxy: {
 - `POST /api/notifications/send` - 发送通知
 - `GET /api/analytics/metrics` - 获取分析数据
 
+## Workbench（首页四卡片）真实数据接入
+
+新增的 Workbench 页面支持三种数据模式（通过 `VITE_WORKBENCH_DATA_MODE`）：
+
+- `auto`（默认）：优先请求真实后端，失败自动回退 mock。
+- `real`：只走真实后端 API。
+- `mock`：只走前端本地 mock。
+
+示例：
+
+```bash
+VITE_WORKBENCH_DATA_MODE=real npm run dev
+```
+
+如果你本地启动了后端但看不到足够数据，可运行仓库脚本自动灌入演示数据：
+
+```bash
+python scripts/seed_frontend_workbench_demo.py \
+  --base-url http://127.0.0.1:8000 \
+  --username admin \
+  --password 123456
+```
+
+执行后刷新前端 `/dashboard`、`/tasks/todo`、`/groups/high-risk` 等页面即可看到真实后端驱动的数据。
+
 ## 样式定制
 
 所有颜色和样式都通过 Tailwind CSS 管理，可在 `tailwind.config.js` 中定制：

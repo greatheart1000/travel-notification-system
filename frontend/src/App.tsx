@@ -1,19 +1,16 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import { AUTH_STATE_CHANGED_EVENT, hasAccessToken } from './adapters/authAdapter'
+import { parseAppRoute, pageToPath, type AppRoute } from './app/router'
 import { Button } from './components/Button'
 import { Sidebar } from './components/Sidebar'
+import { HighRiskGroupDetailPage } from './pages/groups/HighRiskGroupDetailPage'
+import { HighRiskGroupListPage } from './pages/groups/HighRiskGroupListPage'
+import { WorkflowDashboardPage } from './pages/dashboard/WorkflowDashboardPage'
+import { TaskBucketPage } from './pages/tasks/TaskBucketPage'
+import { TaskDetailPage } from './pages/tasks/TaskDetailPage'
 import { authApi, getErrorMessage } from './services/api'
 
-type Page = 'dashboard' | 'trips' | 'notifications' | 'preferences' | 'analytics'
-
-interface AppRoute {
-  page: Page
-  tripId: string | null
-}
-
-
 const Analytics = lazy(() => import('./pages/Analytics').then((module) => ({ default: module.Analytics })))
-const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })))
 const Notifications = lazy(() => import('./pages/Notifications').then((module) => ({ default: module.Notifications })))
 const Preferences = lazy(() => import('./pages/Preferences').then((module) => ({ default: module.Preferences })))
 const Trips = lazy(() => import('./pages/Trips').then((module) => ({ default: module.Trips })))
@@ -27,46 +24,8 @@ function PageLoadingFallback() {
   )
 }
 
-function pickTripIdFromSearch(search: string): string | null {
-  const query = new URLSearchParams(search)
-  const value = query.get('trip_id')
-  if (!value) {
-    return null
-  }
-  return decodeURIComponent(value)
-}
-
-function parseRoute(pathname: string): AppRoute {
-  return parseRouteWithSearch(pathname, window.location.search)
-}
-
-function parseRouteWithSearch(pathname: string, search: string): AppRoute {
-  const parts = pathname.split('/').filter(Boolean)
-  if (parts[0] === 'trips' && parts[1]) {
-    return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
-  }
-  if (parts[0] === 'trips') {
-    return { page: 'trips', tripId: null }
-  }
-  if (parts[0] === 'notifications') {
-    return { page: 'notifications', tripId: pickTripIdFromSearch(search) }
-  }
-  if (parts[0] === 'notifications' || parts[0] === 'preferences' || parts[0] === 'analytics') {
-    return { page: parts[0], tripId: null }
-  }
-  return { page: 'dashboard', tripId: null }
-}
-
-function pagePath(page: Page, tripId?: string | null): string {
-  if (page === 'notifications' && tripId) {
-    return `/notifications?trip_id=${encodeURIComponent(tripId)}`
-  }
-  return page === 'dashboard' ? '/' : `/${page}`
-}
-
 export default function App() {
-  const [route, setRoute] = useState<AppRoute>(() => parseRoute(window.location.pathname))
-  const [pageKey, setPageKey] = useState(0)
+  const [route, setRoute] = useState<AppRoute>(() => parseAppRoute(window.location.pathname, window.location.search))
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -75,6 +34,14 @@ export default function App() {
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('123456')
   const [isLoginSubmitting, setIsLoginSubmitting] = useState(false)
+
+  const navigate = useCallback((path: string) => {
+    window.history.pushState({}, '', path)
+    setRoute(parseAppRoute(window.location.pathname, window.location.search))
+  }, [])
+
+  const openTask = useCallback((taskId: string) => navigate(pageToPath('task_detail', { taskId })), [navigate])
+  const openGroup = useCallback((groupId: string) => navigate(pageToPath('group_detail', { groupId })), [navigate])
 
   useEffect(() => {
     let active = true
@@ -112,9 +79,7 @@ export default function App() {
       setIsAuthenticated(authenticated)
       setAuthError(null)
       if (!authenticated) {
-        window.history.replaceState({}, '', '/')
-        setRoute({ page: 'dashboard', tripId: null })
-        setPageKey(0)
+        navigate('/dashboard')
       }
     }
 
@@ -125,7 +90,7 @@ export default function App() {
       active = false
       window.removeEventListener(AUTH_STATE_CHANGED_EVENT, handleAuthStateChanged)
     }
-  }, [])
+  }, [navigate])
 
   const handleLogin = async () => {
     if (!username.trim() || !password.trim()) {
@@ -140,9 +105,7 @@ export default function App() {
       await authApi.login(username.trim(), password)
       await authApi.me()
       setIsAuthenticated(true)
-      window.history.pushState({}, '', '/')
-      setRoute({ page: 'dashboard', tripId: null })
-      setPageKey((prev) => prev + 1)
+      navigate('/dashboard')
     } catch (error) {
       setIsAuthenticated(false)
       setAuthError(getErrorMessage(error))
@@ -151,75 +114,62 @@ export default function App() {
     }
   }
 
-  const handlePageChange = useCallback(
-    (newPage: Page) => {
-      if (newPage === route.page && route.tripId === null) {
-        setPageKey((prev) => prev + 1)
-        return
-      }
-      window.history.pushState({}, '', pagePath(newPage, null))
-      setRoute({ page: newPage, tripId: null })
-    },
-    [route.page, route.tripId],
-  )
-
   useEffect(() => {
-    const handlePopState = () => setRoute(parseRouteWithSearch(window.location.pathname, window.location.search))
+    const handlePopState = () => setRoute(parseAppRoute(window.location.pathname, window.location.search))
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
-  const openTripDetail = useCallback((tripId: string) => {
-    window.history.pushState({}, '', `/trips/${encodeURIComponent(tripId)}`)
-    setRoute({ page: 'trips', tripId })
-  }, [])
-
-  const backToTrips = useCallback(() => {
-    window.history.pushState({}, '', '/trips')
-    setRoute({ page: 'trips', tripId: null })
-    setPageKey((prev) => prev + 1)
-  }, [])
-
-  const openTripNotifications = useCallback((tripId: string) => {
-    window.history.pushState({}, '', pagePath('notifications', tripId))
-    setRoute({ page: 'notifications', tripId })
-  }, [])
-
-  const backToTripDetail = useCallback((tripId: string) => {
-    window.history.pushState({}, '', `/trips/${encodeURIComponent(tripId)}`)
-    setRoute({ page: 'trips', tripId })
-  }, [])
+  const sidebarPage = useMemo(() => {
+    if (
+      route.page === 'dashboard' ||
+      route.page === 'tasks_todo' ||
+      route.page === 'tasks_overdue' ||
+      route.page === 'tasks_takeover' ||
+      route.page === 'task_detail' ||
+      route.page === 'group_high_risk' ||
+      route.page === 'group_detail'
+    ) {
+      return 'dashboard'
+    }
+    return route.page
+  }, [route.page])
 
   const pageNode = useMemo(() => {
     switch (route.page) {
       case 'dashboard':
-        return <Dashboard key={`dashboard-${pageKey}`} />
+        return <WorkflowDashboardPage onNavigate={navigate} />
+      case 'tasks_todo':
+        return <TaskBucketPage bucket="todo" onOpenTask={openTask} />
+      case 'tasks_overdue':
+        return <TaskBucketPage bucket="overdue" onOpenTask={openTask} />
+      case 'tasks_takeover':
+        return <TaskBucketPage bucket="takeover" onOpenTask={openTask} />
+      case 'task_detail':
+        return route.taskId ? <TaskDetailPage taskId={route.taskId} onOpenGroup={openGroup} /> : <WorkflowDashboardPage onNavigate={navigate} />
+      case 'group_high_risk':
+        return <HighRiskGroupListPage onOpenGroup={openGroup} />
+      case 'group_detail':
+        return route.groupId ? <HighRiskGroupDetailPage groupId={route.groupId} onOpenTask={openTask} /> : <HighRiskGroupListPage onOpenGroup={openGroup} />
       case 'trips':
         return (
           <Trips
-            key={`trips-${pageKey}-${route.tripId ?? 'list'}`}
-            tripId={route.tripId}
-            onOpenTrip={openTripDetail}
-            onBackToList={backToTrips}
-            onOpenTripNotifications={openTripNotifications}
+            tripId={route.tripId ?? null}
+            onOpenTrip={(tripId) => navigate(`/trips/${encodeURIComponent(tripId)}`)}
+            onBackToList={() => navigate('/trips')}
+            onOpenTripNotifications={(tripId) => navigate(pageToPath('notifications', { tripId }))}
           />
         )
       case 'notifications':
-        return (
-          <Notifications
-            key={`notifications-${pageKey}-${route.tripId ?? 'global'}`}
-            tripId={route.tripId}
-            onBackToTrip={backToTripDetail}
-          />
-        )
+        return <Notifications tripId={route.tripId ?? null} onBackToTrip={(tripId) => navigate(`/trips/${encodeURIComponent(tripId)}`)} />
       case 'preferences':
-        return <Preferences key={`preferences-${pageKey}`} />
+        return <Preferences />
       case 'analytics':
-        return <Analytics key={`analytics-${pageKey}`} />
+        return <Analytics />
       default:
-        return <Dashboard key={`dashboard-${pageKey}`} />
+        return <WorkflowDashboardPage onNavigate={navigate} />
     }
-  }, [backToTripDetail, backToTrips, openTripDetail, openTripNotifications, pageKey, route.page, route.tripId])
+  }, [navigate, openGroup, openTask, route.groupId, route.page, route.taskId, route.tripId])
 
   if (isCheckingAuth) {
     return (
@@ -279,9 +229,17 @@ export default function App() {
   return (
     <div className="flex h-screen bg-gray-50 print:h-auto print:bg-white print:block">
       <div className="print:hidden">
-        <Sidebar currentPage={route.page} onPageChange={handlePageChange} />
+        <Sidebar
+          currentPage={sidebarPage}
+          onPageChange={(page) => {
+            if (page === 'dashboard') navigate('/dashboard')
+            else navigate(`/${page}`)
+          }}
+        />
       </div>
-      <main className="flex-1 overflow-auto print:overflow-visible print:w-full"><Suspense fallback={<PageLoadingFallback />}>{pageNode}</Suspense></main>
+      <main className="flex-1 overflow-auto print:overflow-visible print:w-full">
+        <Suspense fallback={<PageLoadingFallback />}>{pageNode}</Suspense>
+      </main>
     </div>
   )
 }
