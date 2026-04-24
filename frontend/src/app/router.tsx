@@ -44,6 +44,7 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
   if (parts[0] === 'trips' && parts[1]) return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
   if (parts[0] === 'trips') return { page: 'trips', tripId: null }
 
+  if (parts[0] === 'notifications' && parts[1] === 'team' && parts[2]) return { page: 'notifications', tripId: decodeURIComponent(parts[2]) }
   if (parts[0] === 'notifications') {
     if (parts[1] === 'team' && parts[2]) {
       return { page: 'notifications', tripId: decodeURIComponent(parts[2]) }
@@ -76,7 +77,7 @@ export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: 
     case 'group_detail':
       return `/groups/high-risk/${encodeURIComponent(params?.groupId ?? '')}`
     case 'notifications':
-      return params?.tripId ? `/notifications?trip_id=${encodeURIComponent(params.tripId)}` : '/notifications'
+      return params?.tripId ? `/notifications/team/${encodeURIComponent(params.tripId)}` : '/notifications'
     case 'preferences':
       return '/preferences'
     case 'analytics':

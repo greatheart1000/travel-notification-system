@@ -881,6 +881,27 @@ export const notificationsApi = {
     return items.map((item) => mapRawNotificationTemplate(item))
   },
 
+
+
+  async generateDaily(payload: {
+    groupId: string
+    date: string
+    weather?: string
+    coreWork?: string
+  }): Promise<{ stage: string; timeNode: string }> {
+    const raw = await unwrapData<{ stage?: string; time_node?: string }>(
+      client.post('/notifications/generate-daily', {
+        group_id: payload.groupId,
+        date: payload.date,
+        weather: payload.weather,
+        core_work: payload.coreWork,
+      }),
+    )
+    return {
+      stage: String(raw.stage || ''),
+      timeNode: String(raw.time_node || ''),
+    }
+  },
   async send(payload: {
     templateId?: string
     customContent?: string
