@@ -1162,10 +1162,8 @@ def _task_status_for_due(task: dict[str, Any]) -> str:
 
 
 def _seed_default_trips(trip_repository: TripRepository) -> None:
-    if trip_repository.list():
-        return
-
     now = datetime.now(tz=UTC).isoformat()
+    existing_trip_ids = {str(item.get("id") or "") for item in trip_repository.list()}
     default_trips: list[dict[str, Any]] = [
         {
             "id": "trip-default-pretrip",
@@ -1211,6 +1209,8 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
         },
     ]
     for trip in default_trips:
+        if str(trip.get("id") or "") in existing_trip_ids:
+            continue
         trip_repository.create(trip)
 
 
