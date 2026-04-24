@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Card } from '../../components/Card'
 import { PageShell } from '../../components/PageShell'
-import { StatusPill } from '../../components/common/StatusPill'
+import { TaskListItem } from '../../components/task/TaskListItem'
 import { taskService } from '../../modules/tasks/service'
 import type { Task } from '../../modules/tasks/types'
 
@@ -23,7 +23,7 @@ export function WorkflowDashboardPage({ onNavigate }: WorkflowDashboardPageProps
   const [queue, setQueue] = useState<Task[]>([])
 
   const loadData = async () => {
-    const [cardData, myQueue] = await Promise.all([taskService.getDashboardCards(), taskService.getMyQueue(5)])
+    const [cardData, myQueue] = await Promise.all([taskService.getDashboardCards(), taskService.getMyQueue(8)])
     setCards(cardData)
     setQueue(myQueue)
   }
@@ -33,7 +33,7 @@ export function WorkflowDashboardPage({ onNavigate }: WorkflowDashboardPageProps
   }, [])
 
   return (
-    <PageShell title="Travel Hub 首页工作台" description="按工作流处理任务：待办、逾期、高风险团、待接管。">
+    <PageShell title="Travel Hub 首页工作台" description="今日工作队列：让你明确先处理什么、为什么处理、如何闭环。">
       <Card title="今日工作台速览">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <button className="rounded-xl bg-slate-50 p-4 text-left" onClick={() => onNavigate('/tasks/todo')}>
@@ -55,23 +55,41 @@ export function WorkflowDashboardPage({ onNavigate }: WorkflowDashboardPageProps
         </div>
       </Card>
 
-      <Card title="待我处理" className="mt-6">
+      <Card title="待我处理（今日工作队列）" className="mt-6">
+        <div className="mb-3 flex justify-end">
+          <button className="text-sm text-blue-600" onClick={() => onNavigate('/tasks/my-workbench')}>
+            查看全部
+          </button>
+        </div>
         <div className="space-y-3">
           {queue.map((task) => (
-            <button
+            <TaskListItem
               key={task.id}
-              className="flex w-full items-center justify-between rounded-xl border border-slate-200 p-3 text-left"
-              onClick={() => onNavigate(`/tasks/${task.id}`)}
-            >
-              <div>
-                <p className="font-semibold text-slate-900">{task.title}</p>
-                <p className="text-sm text-slate-500">
-                  {task.groupName} · 截止 {new Date(task.dueAt).toLocaleString()}
-                </p>
-              </div>
-              <StatusPill tone={task.status === 'overdue' ? 'danger' : 'info'} label={task.status} />
-            </button>
+              task={task}
+              onOpen={(taskId) => onNavigate(`/tasks/${taskId}`)}
+              onComplete={async (taskId) => {
+                await taskService.completeTask(taskId)
+                await loadData()
+              }}
+              onDefer={async (taskId) => {
+                await taskService.deferTask(taskId)
+                await loadData()
+              }}
+              onTakeover={
+                task.status === 'pending_takeover' || !task.assigneeId
+                  ? async (taskId) => {
+                      await taskService.takeoverTask(taskId, '张三')
+                      await loadData()
+                    }
+                  : undefined
+              }
+              onMarkRisk={async (taskId) => {
+                await taskService.markTaskRisk(taskId)
+                await loadData()
+              }}
+            />
           ))}
+          {queue.length === 0 ? <p className="text-sm text-slate-500">当前没有需要今天优先处理的任务</p> : null}
         </div>
       </Card>
 

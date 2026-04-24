@@ -1,190 +1,285 @@
 import type { RiskGroup } from '../groups/types'
-import type { Task, TaskStatus } from '../tasks/types'
+import type { Task, TaskRiskLevel, TaskStatus } from '../tasks/types'
 
 export interface MockDatabase {
   tasks: Task[]
   groups: RiskGroup[]
 }
 
-const now = Date.now()
+const STORAGE_KEY = 'travelhub:workbench-db:v2'
 const hour = 60 * 60 * 1000
 
-const seedTasks: Task[] = [
-  {
-    id: 'task-101',
-    title: '出发前3天航班确认与温馨提示',
-    type: 'pre_departure_notice',
-    status: 'todo',
-    priority: 'P0',
-    riskLevel: 'medium',
-    dueAt: new Date(now + hour * 3).toISOString(),
-    departureDate: new Date(now + hour * 36).toISOString(),
-    assignee: '张三',
-    groupId: 'grp-1',
-    groupName: '乌鲁木齐-喀纳斯精品线',
-    customerName: '王先生家庭团',
-    destination: '新疆·喀纳斯',
-    tags: ['行前', '航班', '提醒'],
-    aiSuggestion: '建议叠加天气提醒，强调昼夜温差与保暖准备。',
-    history: [
-      { id: 'h-101-1', action: '系统创建任务', operator: '规则引擎', at: new Date(now - hour * 2).toISOString(), note: '触发：出发前3天' },
-    ],
-  },
-  {
-    id: 'task-102',
-    title: '行程中导游中途关怀回访',
-    type: 'in_trip_followup',
-    status: 'in_progress',
-    priority: 'P1',
-    riskLevel: 'medium',
-    dueAt: new Date(now + hour * 8).toISOString(),
-    departureDate: new Date(now - hour * 24).toISOString(),
-    assignee: '张三',
-    groupId: 'grp-2',
-    groupName: '伊犁草原深度游',
-    customerName: '陈女士闺蜜团',
-    destination: '新疆·伊犁',
-    tags: ['行中', '回访'],
-    aiSuggestion: '建议优先联系今日有高海拔行程客人，询问体感与补给。',
-    history: [
-      { id: 'h-102-1', action: '开始处理', operator: '张三', at: new Date(now - hour).toISOString(), note: '已联系领队收集反馈' },
-    ],
-  },
-  {
-    id: 'task-103',
-    title: '下团欢迎与满意度回访',
-    type: 'post_trip_feedback',
-    status: 'todo',
-    priority: 'P1',
-    riskLevel: 'low',
-    dueAt: new Date(now + hour * 12).toISOString(),
-    departureDate: new Date(now - hour * 96).toISOString(),
-    assignee: '张三',
-    groupId: 'grp-3',
-    groupName: '阿勒泰禾木轻奢团',
-    customerName: '刘先生企业团',
-    destination: '新疆·阿勒泰',
-    tags: ['行后', '回访', 'NPS'],
-    aiSuggestion: '建议按客诉标签分层回访，优先处理体验波动人群。',
-    history: [],
-  },
-  {
-    id: 'task-104',
-    title: '出发前1天保险核查与建群检查',
-    type: 'risk_control',
-    status: 'overdue',
-    priority: 'P0',
-    riskLevel: 'high',
-    dueAt: new Date(now - hour * 5).toISOString(),
-    departureDate: new Date(now + hour * 10).toISOString(),
-    assignee: '张三',
-    groupId: 'grp-4',
-    groupName: '喀什古城文化线',
-    customerName: '马女士亲子团',
-    destination: '新疆·喀什',
-    tags: ['行前', '保险', '建群'],
-    aiSuggestion: '该任务影响发团节点，建议立刻升级并补齐保单校验。',
-    history: [],
-  },
-  {
-    id: 'task-105',
-    title: '航变通知二次确认',
-    type: 'flight_change',
-    status: 'pending_takeover',
-    priority: 'P0',
-    riskLevel: 'high',
-    dueAt: new Date(now + hour * 2).toISOString(),
-    departureDate: new Date(now + hour * 30).toISOString(),
-    assignee: '',
-    groupId: 'grp-1',
-    groupName: '乌鲁木齐-喀纳斯精品线',
-    customerName: '王先生家庭团',
-    destination: '新疆·喀纳斯',
-    tags: ['接管', '航变'],
-    aiSuggestion: '建议30分钟内完成触达并确认改签方案。',
-    history: [],
-  },
-  {
-    id: 'task-106',
-    title: '酒店满房应急替换确认',
-    type: 'supplier_issue',
-    status: 'pending_takeover',
-    priority: 'P0',
-    riskLevel: 'critical',
-    dueAt: new Date(now + hour).toISOString(),
-    departureDate: new Date(now + hour * 20).toISOString(),
-    assignee: '',
-    groupId: 'grp-5',
-    groupName: '赛里木湖环线团',
-    customerName: '赵先生摄影团',
-    destination: '新疆·博州',
-    tags: ['接管', '供应商'],
-    aiSuggestion: '建议同时准备A/B酒店备选并发送补偿说明模板。',
-    history: [],
-  },
-]
+function isBrowser(): boolean {
+  return typeof window !== 'undefined'
+}
 
-const seedGroups: RiskGroup[] = [
-  {
-    id: 'grp-1',
-    groupName: '乌鲁木齐-喀纳斯精品线',
-    routeName: '北疆环线 6 天 5 晚',
-    departureDate: new Date(now + hour * 36).toISOString(),
-    riskScore: 82,
-    riskLevel: 'high',
-    riskTags: ['航班延误', '天气降温'],
-    owner: '李值守',
-    pendingTaskCount: 3,
-    blockedTaskCount: 0,
-    summary: '航班延误概率提升，需提前完成提醒触达与备选接驳。',
-    tasks: ['task-101', 'task-105'],
-    collaborators: ['张三', '王客服'],
-    timeline: [
-      { id: 'e1', title: '航司发布延误预警', at: new Date(now - hour * 3).toISOString(), level: 'high' },
-      { id: 'e2', title: '系统生成航变通知任务', at: new Date(now - hour * 2).toISOString(), level: 'medium' },
-    ],
-  },
-  {
-    id: 'grp-4',
-    groupName: '喀什古城文化线',
-    routeName: '南疆人文 5 天 4 晚',
-    departureDate: new Date(now + hour * 10).toISOString(),
-    riskScore: 92,
-    riskLevel: 'critical',
-    riskTags: ['保险未核查', '供应商波动'],
-    owner: '周主管',
-    pendingTaskCount: 2,
-    blockedTaskCount: 1,
-    summary: '出发前关键资料尚未闭环，存在发团阻断风险。',
-    tasks: ['task-104'],
-    collaborators: ['张三', '陈调度'],
-    timeline: [
-      { id: 'e3', title: '保险凭证缺失告警', at: new Date(now - hour * 6).toISOString(), level: 'critical' },
-    ],
-  },
-  {
-    id: 'grp-5',
-    groupName: '赛里木湖环线团',
-    routeName: '伊犁+赛湖 4 天 3 晚',
-    departureDate: new Date(now + hour * 20).toISOString(),
-    riskScore: 88,
-    riskLevel: 'high',
-    riskTags: ['酒店满房', '节假日拥堵'],
-    owner: '待分配',
-    pendingTaskCount: 2,
-    blockedTaskCount: 1,
-    summary: '酒店容量不足，需紧急替换与补偿策略。',
-    tasks: ['task-106'],
-    collaborators: ['资源采购组'],
-    timeline: [
-      { id: 'e4', title: '酒店方通知满房', at: new Date(now - hour * 4).toISOString(), level: 'high' },
-    ],
-  },
-]
+function nowIso(offsetHours = 0): string {
+  return new Date(Date.now() + offsetHours * hour).toISOString()
+}
 
-const db: MockDatabase = {
-  tasks: seedTasks,
-  groups: seedGroups,
+function buildSeedTasks(): Task[] {
+  return [
+    {
+      id: 'task-101',
+      title: 'T-3 航班确认与集合通知',
+      type: 'pre_trip_t3_flight_check',
+      status: 'todo',
+      priority: 'P0',
+      riskLevel: 'medium',
+      teamId: 'team-001',
+      teamName: '乌鲁木齐-喀纳斯精品线',
+      teamCode: 'XJ-KNS-0428',
+      destination: '新疆·喀纳斯',
+      departureDate: nowIso(32),
+      dueAt: nowIso(3),
+      assigneeId: 'u-zhangsan',
+      assigneeName: '张三',
+      source: '规则引擎：行前 T-3 节点',
+      relatedDayId: 'day-0',
+      relatedNotificationTaskId: 'ntf-101',
+      recommendedAction: '去确认航班',
+      aiSuggestion: '优先确认去程航班号与值机状态，并同步早晚温差提醒。',
+      linkedNotificationNode: '行前提醒（T-3）',
+      currentTripDay: 0,
+      travelerCount: 24,
+      tags: ['行前', '航班'],
+      history: [
+        { id: 'h-101-1', action: '系统创建任务', operator: '规则引擎', at: nowIso(-8), note: '触发条件：出发前 3 天' },
+      ],
+    },
+    {
+      id: 'task-102',
+      title: '今日晨间出行提醒执行',
+      type: 'daily_morning',
+      status: 'overdue',
+      priority: 'P0',
+      riskLevel: 'high',
+      teamId: 'team-002',
+      teamName: '伊犁草原深度游',
+      teamCode: 'XJ-YL-0426',
+      destination: '新疆·伊犁',
+      departureDate: nowIso(-24),
+      dueAt: nowIso(-2),
+      assigneeId: 'u-zhangsan',
+      assigneeName: '张三',
+      source: '通知编排：行中晨间触达',
+      relatedDayId: 'day-2',
+      relatedNotificationTaskId: 'ntf-201',
+      recommendedAction: '去通知执行',
+      aiSuggestion: '请先发送路况与集合时间提醒，再确认老年游客回执。',
+      linkedNotificationNode: '行中晨间提醒',
+      currentTripDay: 2,
+      travelerCount: 18,
+      overdueReason: '08:00 前需触达全员，当前仍有 7 位游客未收到晨间通知。',
+      remedySuggestion: '先推送短信兜底，再电话补触达领队。',
+      tags: ['行中', '晨间'],
+      history: [
+        { id: 'h-102-1', action: '触达失败重试', operator: '系统', at: nowIso(-3), note: '微信失败，已进入人工处理池' },
+      ],
+    },
+    {
+      id: 'task-103',
+      title: '午间风险播报执行',
+      type: 'daily_noon',
+      status: 'todo',
+      priority: 'P1',
+      riskLevel: 'high',
+      teamId: 'team-003',
+      teamName: '阿勒泰禾木轻奢团',
+      teamCode: 'XJ-ALT-0425',
+      destination: '新疆·阿勒泰',
+      departureDate: nowIso(-48),
+      dueAt: nowIso(5),
+      assigneeId: 'u-zhangsan',
+      assigneeName: '张三',
+      source: '天气风险引擎',
+      relatedDayId: 'day-3',
+      relatedNotificationTaskId: 'ntf-301',
+      recommendedAction: '去通知执行',
+      aiSuggestion: '建议在午间通知补充降温与补水提醒。',
+      linkedNotificationNode: '行中午间播报',
+      currentTripDay: 3,
+      travelerCount: 16,
+      tags: ['行中', '午间', '天气'],
+      history: [],
+    },
+    {
+      id: 'task-104',
+      title: '保险与建群核验',
+      type: 'insurance_check',
+      status: 'blocked',
+      priority: 'P0',
+      riskLevel: 'high',
+      teamId: 'team-004',
+      teamName: '喀什古城文化线',
+      teamCode: 'XJ-KS-0427',
+      destination: '新疆·喀什',
+      departureDate: nowIso(9),
+      dueAt: nowIso(4),
+      assigneeId: 'u-zhangsan',
+      assigneeName: '张三',
+      source: '风控核验清单',
+      relatedDayId: 'day-0',
+      relatedNotificationTaskId: 'ntf-401',
+      recommendedAction: '去核验保险',
+      aiSuggestion: '供应商返回保单较慢，建议并行联系渠道经理确认。',
+      linkedNotificationNode: '行前资料核验',
+      currentTripDay: 0,
+      travelerCount: 29,
+      tags: ['行前', '保险', '阻塞'],
+      history: [],
+    },
+    {
+      id: 'task-105',
+      title: '航变通知人工接管',
+      type: 'pending_takeover',
+      status: 'pending_takeover',
+      priority: 'P0',
+      riskLevel: 'high',
+      teamId: 'team-001',
+      teamName: '乌鲁木齐-喀纳斯精品线',
+      teamCode: 'XJ-KNS-0428',
+      destination: '新疆·喀纳斯',
+      departureDate: nowIso(32),
+      dueAt: nowIso(1),
+      assigneeId: '',
+      assigneeName: '待接管',
+      source: '航变监控告警',
+      relatedDayId: 'day-0',
+      relatedNotificationTaskId: 'ntf-105',
+      recommendedAction: '立即接管',
+      aiSuggestion: '建议 30 分钟内完成触达并同步改签说明。',
+      linkedNotificationNode: '航变告警通知',
+      currentTripDay: 0,
+      travelerCount: 24,
+      tags: ['接管', '航变'],
+      history: [],
+    },
+    {
+      id: 'task-106',
+      title: '行后回访问卷补录',
+      type: 'post_trip_farewell',
+      status: 'todo',
+      priority: 'P2',
+      riskLevel: 'low',
+      teamId: 'team-005',
+      teamName: '赛里木湖环线团',
+      teamCode: 'XJ-SLMH-0422',
+      destination: '新疆·博州',
+      departureDate: nowIso(-120),
+      dueAt: nowIso(20),
+      assigneeId: 'u-zhangsan',
+      assigneeName: '张三',
+      source: '行后回访流程',
+      relatedDayId: 'day+1',
+      relatedNotificationTaskId: 'ntf-501',
+      recommendedAction: '去回访记录',
+      aiSuggestion: '优先补录差评旅客的后续关怀结果。',
+      linkedNotificationNode: '行后回访问卷',
+      currentTripDay: 0,
+      travelerCount: 20,
+      tags: ['行后', '回访'],
+      history: [],
+    },
+    {
+      id: 'task-107',
+      title: '晚间安全播报执行',
+      type: 'daily_evening',
+      status: 'todo',
+      priority: 'P1',
+      riskLevel: 'medium',
+      teamId: 'team-006',
+      teamName: '那拉提草原营地团',
+      teamCode: 'XJ-NLT-0429',
+      destination: '新疆·那拉提',
+      departureDate: nowIso(14),
+      dueAt: nowIso(22),
+      assigneeId: 'u-lisi',
+      assigneeName: '李四',
+      source: '日常通知编排',
+      relatedDayId: 'day-1',
+      relatedNotificationTaskId: 'ntf-601',
+      recommendedAction: '去通知执行',
+      aiSuggestion: '建议提醒游客夜间低温与集合点变更。',
+      linkedNotificationNode: '行中晚间播报',
+      currentTripDay: 1,
+      travelerCount: 14,
+      tags: ['行中', '晚间'],
+      history: [],
+    },
+  ]
+}
+
+function buildSeedGroups(): RiskGroup[] {
+  return [
+    {
+      id: 'team-001',
+      groupName: '乌鲁木齐-喀纳斯精品线',
+      routeName: '北疆环线 6 天 5 晚',
+      departureDate: nowIso(32),
+      riskScore: 84,
+      riskLevel: 'high',
+      riskTags: ['航变风险', '天气降温'],
+      owner: '张三',
+      pendingTaskCount: 2,
+      blockedTaskCount: 0,
+      summary: '航班存在波动，需优先处理航变通知与兜底触达。',
+      tasks: ['task-101', 'task-105'],
+      collaborators: ['张三', '王客服'],
+      timeline: [{ id: 'e1', title: '航司发布延误预警', at: nowIso(-4), level: 'high' }],
+    },
+    {
+      id: 'team-002',
+      groupName: '伊犁草原深度游',
+      routeName: '伊犁草原 5 天 4 晚',
+      departureDate: nowIso(-24),
+      riskScore: 90,
+      riskLevel: 'high',
+      riskTags: ['晨间通知未触达'],
+      owner: '张三',
+      pendingTaskCount: 1,
+      blockedTaskCount: 0,
+      summary: '晨间通知逾期，需补触达并确认回执。',
+      tasks: ['task-102'],
+      collaborators: ['张三', '通知调度'],
+      timeline: [{ id: 'e2', title: '晨间通知失败', at: nowIso(-2), level: 'critical' }],
+    },
+  ]
+}
+
+function buildSeedDb(): MockDatabase {
+  return {
+    tasks: buildSeedTasks(),
+    groups: buildSeedGroups(),
+  }
+}
+
+function loadDbFromStorage(): MockDatabase {
+  if (!isBrowser()) {
+    return buildSeedDb()
+  }
+
+  const raw = window.localStorage.getItem(STORAGE_KEY)
+  if (!raw) {
+    const seed = buildSeedDb()
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(seed))
+    return seed
+  }
+
+  try {
+    return JSON.parse(raw) as MockDatabase
+  } catch {
+    const seed = buildSeedDb()
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(seed))
+    return seed
+  }
+}
+
+const db: MockDatabase = loadDbFromStorage()
+
+function persistDb() {
+  if (!isBrowser()) return
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(db))
 }
 
 function pushHistory(taskId: string, action: string, operator: string, note: string) {
@@ -199,6 +294,18 @@ function pushHistory(taskId: string, action: string, operator: string, note: str
   })
 }
 
+function syncGroupRiskFromTask(task: Task, riskLevel: TaskRiskLevel) {
+  const group = db.groups.find((item) => item.id === task.teamId)
+  if (!group) return
+  if (riskLevel === 'high' || riskLevel === 'critical') {
+    group.riskLevel = riskLevel === 'critical' ? 'critical' : 'high'
+    group.riskScore = Math.max(group.riskScore, 85)
+    if (!group.riskTags.includes('人工标记高风险')) {
+      group.riskTags = [...group.riskTags, '人工标记高风险']
+    }
+  }
+}
+
 export function getDb(): MockDatabase {
   return db
 }
@@ -208,14 +315,43 @@ export function updateTaskStatus(taskId: string, status: TaskStatus, operator = 
   if (!task) return null
   task.status = status
   pushHistory(taskId, `状态变更为 ${status}`, operator, note)
+  persistDb()
   return task
 }
 
-export function takeoverTask(taskId: string, operator = '张三') {
+export function completeTask(taskId: string, operator = '张三') {
+  return updateTaskStatus(taskId, 'done', operator, '任务处理完成')
+}
+
+export function deferTask(taskId: string, operator = '张三') {
+  const task = db.tasks.find((item) => item.id === taskId)
+  if (!task) return null
+  task.dueAt = new Date(new Date(task.dueAt).getTime() + 24 * hour).toISOString()
+  if (task.status === 'overdue') {
+    task.status = 'todo'
+  }
+  pushHistory(taskId, '延期处理', operator, '截止时间顺延 24 小时')
+  persistDb()
+  return task
+}
+
+export function takeoverTask(taskId: string, assigneeId = 'u-zhangsan', assigneeName = '张三') {
   const task = db.tasks.find((item) => item.id === taskId)
   if (!task) return null
   task.status = 'todo'
-  task.assignee = operator
-  pushHistory(taskId, '任务接管', operator, '从待接管池接入个人待办')
+  task.assigneeId = assigneeId
+  task.assigneeName = assigneeName
+  pushHistory(taskId, '任务接管', assigneeName, '从待接管池接入个人待办')
+  persistDb()
+  return task
+}
+
+export function markTaskRisk(taskId: string, operator = '张三') {
+  const task = db.tasks.find((item) => item.id === taskId)
+  if (!task) return null
+  task.riskLevel = 'high'
+  syncGroupRiskFromTask(task, 'high')
+  pushHistory(taskId, '标记高风险', operator, '任务提升为高风险，已同步团风险池')
+  persistDb()
   return task
 }

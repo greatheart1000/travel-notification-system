@@ -126,6 +126,7 @@ export default function App() {
       route.page === 'tasks_todo' ||
       route.page === 'tasks_overdue' ||
       route.page === 'tasks_takeover' ||
+      route.page === 'tasks_my_workbench' ||
       route.page === 'task_detail' ||
       route.page === 'group_high_risk' ||
       route.page === 'group_detail'
@@ -145,8 +146,14 @@ export default function App() {
         return <TaskBucketPage bucket="overdue" onOpenTask={openTask} />
       case 'tasks_takeover':
         return <TaskBucketPage bucket="takeover" onOpenTask={openTask} />
+      case 'tasks_my_workbench':
+        return <TaskBucketPage bucket="my" onOpenTask={openTask} />
       case 'task_detail':
-        return route.taskId ? <TaskDetailPage taskId={route.taskId} onOpenGroup={openGroup} /> : <WorkflowDashboardPage onNavigate={navigate} />
+        return route.taskId ? (
+          <TaskDetailPage taskId={route.taskId} onOpenGroup={openGroup} onNavigate={navigate} />
+        ) : (
+          <WorkflowDashboardPage onNavigate={navigate} />
+        )
       case 'group_high_risk':
         return <HighRiskGroupListPage onOpenGroup={openGroup} />
       case 'group_detail':

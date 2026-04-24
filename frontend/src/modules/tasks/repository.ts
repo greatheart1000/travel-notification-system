@@ -9,6 +9,9 @@ export interface TaskRepository {
   getStats(bucket: TaskBucket): Promise<TaskListStats>
   takeover(taskId: string, operator?: string): Promise<Task | null>
   updateStatus(taskId: string, status: TaskStatus): Promise<Task | null>
+  complete(taskId: string): Promise<Task | null>
+  defer(taskId: string): Promise<Task | null>
+  markRisk(taskId: string): Promise<Task | null>
   getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }>
   getMyQueue(limit?: number): Promise<Task[]>
 }
@@ -32,6 +35,15 @@ export class MockTaskRepository implements TaskRepository {
 
   updateStatus(taskId: string, status: TaskStatus): Promise<Task | null> {
     return taskMockDataSource.updateStatus(taskId, status)
+  }
+  complete(taskId: string): Promise<Task | null> {
+    return taskMockDataSource.complete(taskId)
+  }
+  defer(taskId: string): Promise<Task | null> {
+    return taskMockDataSource.defer(taskId)
+  }
+  markRisk(taskId: string): Promise<Task | null> {
+    return taskMockDataSource.markRisk(taskId)
   }
 
   getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
@@ -62,7 +74,7 @@ export class RealTaskRepository implements TaskRepository {
     }
 
     if (filters?.keyword) {
-      tasks = tasks.filter((task) => `${task.title}${task.groupName}${task.destination}`.includes(filters.keyword!))
+      tasks = tasks.filter((task) => `${task.title}${task.teamName}${task.destination}${task.teamCode}`.includes(filters.keyword!))
     }
     if (filters?.riskLevel && filters.riskLevel !== 'all') {
       tasks = tasks.filter((task) => task.riskLevel === filters.riskLevel)
@@ -100,7 +112,7 @@ export class RealTaskRepository implements TaskRepository {
   async takeover(taskId: string, operator = '张三'): Promise<Task | null> {
     await notificationsApi.assignTakeover({
       taskId,
-      assigneeUserId: 'u-001',
+      assigneeUserId: 'u-zhangsan',
       assigneeName: operator,
       note: 'frontend takeover action',
     })
@@ -115,8 +127,8 @@ export class RealTaskRepository implements TaskRepository {
     if (status === 'pending_takeover') {
       await notificationsApi.assignTakeover({
         taskId,
-        assigneeUserId: 'u-001',
-        assigneeName: '待接管',
+        assigneeUserId: 'u-zhangsan',
+        assigneeName: '任务接管池',
         note: '转派接管',
       })
       return this.getById(taskId)
@@ -139,6 +151,16 @@ export class RealTaskRepository implements TaskRepository {
   async getMyQueue(limit = 5): Promise<Task[]> {
     const items = await dashboardApi.getWorkbenchActionItems({ limit, ownerScope: 'mine' })
     return items.map((item) => adaptTaskFromWorkbenchTask(item))
+  }
+
+  complete(taskId: string): Promise<Task | null> {
+    return this.updateStatus(taskId, 'done')
+  }
+  defer(taskId: string): Promise<Task | null> {
+    return this.updateStatus(taskId, 'todo')
+  }
+  markRisk(taskId: string): Promise<Task | null> {
+    return this.updateStatus(taskId, 'blocked')
   }
 }
 
@@ -179,6 +201,27 @@ class AutoTaskRepository implements TaskRepository {
       return await this.real.updateStatus(taskId, status)
     } catch {
       return this.mock.updateStatus(taskId, status)
+    }
+  }
+  async complete(taskId: string): Promise<Task | null> {
+    try {
+      return await this.real.complete(taskId)
+    } catch {
+      return this.mock.complete(taskId)
+    }
+  }
+  async defer(taskId: string): Promise<Task | null> {
+    try {
+      return await this.real.defer(taskId)
+    } catch {
+      return this.mock.defer(taskId)
+    }
+  }
+  async markRisk(taskId: string): Promise<Task | null> {
+    try {
+      return await this.real.markRisk(taskId)
+    } catch {
+      return this.mock.markRisk(taskId)
     }
   }
   async getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
