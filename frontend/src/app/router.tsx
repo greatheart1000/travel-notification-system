@@ -3,6 +3,7 @@ export type AppPage =
   | 'tasks_todo'
   | 'tasks_overdue'
   | 'tasks_takeover'
+  | 'tasks_my_workbench'
   | 'task_detail'
   | 'group_high_risk'
   | 'group_detail'
@@ -25,9 +26,14 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
     return { page: 'dashboard' }
   }
 
-  if (parts[0] === 'tasks' && parts[1] === 'todo') return { page: 'tasks_todo' }
+  if (parts[0] === 'tasks' && parts[1] === 'todo') {
+    const query = new URLSearchParams(search)
+    if (query.get('scope') === 'mine') return { page: 'tasks_my_workbench' }
+    return { page: 'tasks_todo' }
+  }
   if (parts[0] === 'tasks' && parts[1] === 'overdue') return { page: 'tasks_overdue' }
   if (parts[0] === 'tasks' && parts[1] === 'takeover') return { page: 'tasks_takeover' }
+  if (parts[0] === 'tasks' && parts[1] === 'my-workbench') return { page: 'tasks_my_workbench' }
   if (parts[0] === 'tasks' && parts[1]) return { page: 'task_detail', taskId: decodeURIComponent(parts[1]) }
 
   if (parts[0] === 'groups' && parts[1] === 'high-risk' && parts[2]) {
@@ -39,6 +45,9 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
   if (parts[0] === 'trips') return { page: 'trips', tripId: null }
 
   if (parts[0] === 'notifications') {
+    if (parts[1] === 'team' && parts[2]) {
+      return { page: 'notifications', tripId: decodeURIComponent(parts[2]) }
+    }
     const query = new URLSearchParams(search)
     return { page: 'notifications', tripId: query.get('trip_id') }
   }
@@ -58,6 +67,8 @@ export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: 
       return '/tasks/overdue'
     case 'tasks_takeover':
       return '/tasks/takeover'
+    case 'tasks_my_workbench':
+      return '/tasks/my-workbench'
     case 'task_detail':
       return `/tasks/${encodeURIComponent(params?.taskId ?? '')}`
     case 'group_high_risk':

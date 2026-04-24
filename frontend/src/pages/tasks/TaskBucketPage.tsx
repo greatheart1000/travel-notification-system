@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { TaskListItem } from '../../components/task/TaskListItem'
 import { PageShell } from '../../components/PageShell'
@@ -15,7 +14,7 @@ const bucketTitleMap: Record<TaskBucket, string> = {
   todo: '待办任务',
   overdue: '逾期任务',
   takeover: '待接管任务',
-  my: '待我处理',
+  my: '我的工作台队列',
 }
 
 const emptyStats: TaskListStats = { total: 0, urgent: 0, dueSoon: 0, highRisk: 0 }
@@ -45,7 +44,7 @@ export function TaskBucketPage({ bucket, onOpenTask }: TaskBucketPageProps) {
   const title = bucketTitleMap[bucket]
 
   return (
-    <PageShell title={title} description="按任务工作流进行处理，不依赖真实后端接口。">
+    <PageShell title={title} description="按任务工作流处理，支持完成/延期/接管/标记风险的 mock 闭环。">
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Card title="总任务数">{stats.total}</Card>
         <Card title="P0 紧急">{stats.urgent}</Card>
@@ -93,18 +92,26 @@ export function TaskBucketPage({ bucket, onOpenTask }: TaskBucketPageProps) {
               key={task.id}
               task={task}
               onOpen={onOpenTask}
-              actionSlot={
-                bucket === 'takeover' ? (
-                  <Button
-                    onClick={async () => {
-                      await taskService.takeoverTask(task.id, '张三')
+              onComplete={async (taskId) => {
+                await taskService.completeTask(taskId)
+                await load()
+              }}
+              onDefer={async (taskId) => {
+                await taskService.deferTask(taskId)
+                await load()
+              }}
+              onTakeover={
+                bucket === 'takeover'
+                  ? async (taskId) => {
+                      await taskService.takeoverTask(taskId, '张三')
                       await load()
-                    }}
-                  >
-                    接管
-                  </Button>
-                ) : undefined
+                    }
+                  : undefined
               }
+              onMarkRisk={async (taskId) => {
+                await taskService.markTaskRisk(taskId)
+                await load()
+              }}
             />
           ))}
           {tasks.length === 0 ? <p className="text-sm text-slate-500">当前筛选条件下暂无任务</p> : null}

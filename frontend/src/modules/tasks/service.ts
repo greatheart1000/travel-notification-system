@@ -31,6 +31,18 @@ export class TaskService {
   updateTaskStatus(taskId: string, status: TaskStatus): Promise<Task | null> {
     return this.repository.updateStatus(taskId, status)
   }
+
+  completeTask(taskId: string): Promise<Task | null> {
+    return this.repository.complete(taskId)
+  }
+
+  deferTask(taskId: string): Promise<Task | null> {
+    return this.repository.defer(taskId)
+  }
+
+  markTaskRisk(taskId: string): Promise<Task | null> {
+    return this.repository.markRisk(taskId)
+  }
 }
 
 const repositoryMode = (import.meta.env.VITE_WORKBENCH_DATA_MODE as 'mock' | 'real' | 'auto' | undefined) ?? 'auto'

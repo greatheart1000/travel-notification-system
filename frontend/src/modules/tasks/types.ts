@@ -17,15 +17,25 @@ export interface Task {
   status: TaskStatus
   priority: TaskPriority
   riskLevel: TaskRiskLevel
-  dueAt: string
-  departureDate: string
-  assignee: string
-  groupId: string
-  groupName: string
-  customerName: string
+  teamId: string
+  teamName: string
+  teamCode: string
   destination: string
-  tags: string[]
+  departureDate: string
+  dueAt: string
+  assigneeId: string
+  assigneeName: string
+  source: string
+  relatedDayId?: string
+  relatedNotificationTaskId?: string
+  recommendedAction: string
   aiSuggestion: string
+  linkedNotificationNode: string
+  currentTripDay: number
+  travelerCount: number
+  overdueReason?: string
+  remedySuggestion?: string
+  tags: string[]
   history: TaskHistoryRecord[]
 }
 

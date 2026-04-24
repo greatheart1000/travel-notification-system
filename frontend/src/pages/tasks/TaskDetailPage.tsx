@@ -1,23 +1,64 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { PageShell } from '../../components/PageShell'
 import { taskService } from '../../modules/tasks/service'
-import type { Task, TaskStatus } from '../../modules/tasks/types'
+import type { Task } from '../../modules/tasks/types'
 
 interface TaskDetailPageProps {
   taskId: string
   onOpenGroup: (groupId: string) => void
+  onNavigate: (path: string) => void
 }
 
-const actionStatusMap: Array<{ label: string; status: TaskStatus }> = [
-  { label: '标记完成', status: 'done' },
-  { label: '延期处理', status: 'in_progress' },
-  { label: '转派接管', status: 'pending_takeover' },
-  { label: '标记风险', status: 'blocked' },
-]
+function dueText(task: Task): string {
+  const diffHours = Math.floor((Date.now() - new Date(task.dueAt).getTime()) / (1000 * 60 * 60))
+  if (diffHours > 0) return `已逾期 ${diffHours} 小时`
+  return `剩余 ${Math.abs(diffHours)} 小时`
+}
 
-export function TaskDetailPage({ taskId, onOpenGroup }: TaskDetailPageProps) {
+function mainAction(task: Task, onNavigate: (path: string) => void): { label: string; onClick: () => Promise<void> } {
+  if (task.type === 'daily_morning' || task.type === 'daily_noon' || task.type === 'daily_evening') {
+    return {
+      label: '进入通知执行',
+      onClick: async () => {
+        onNavigate(`/notifications/team/${task.teamId}`)
+      },
+    }
+  }
+  if (task.type === 'pre_trip_t3_flight_check') {
+    return {
+      label: '查看团详情',
+      onClick: async () => {
+        onNavigate(`/trips/${task.teamId}`)
+      },
+    }
+  }
+  if (task.type === 'post_trip_farewell') {
+    return {
+      label: '填写回访结果',
+      onClick: async () => {
+        window.alert('已打开回访结果表单（Mock）')
+      },
+    }
+  }
+  if (task.status === 'pending_takeover') {
+    return {
+      label: '接管任务',
+      onClick: async () => {
+        await taskService.takeoverTask(task.id, '张三')
+      },
+    }
+  }
+  return {
+    label: '处理任务',
+    onClick: async () => {
+      await taskService.updateTaskStatus(task.id, 'in_progress')
+    },
+  }
+}
+
+export function TaskDetailPage({ taskId, onOpenGroup, onNavigate }: TaskDetailPageProps) {
   const [task, setTask] = useState<Task | null>(null)
 
   const load = async () => {
@@ -29,6 +70,8 @@ export function TaskDetailPage({ taskId, onOpenGroup }: TaskDetailPageProps) {
     void load()
   }, [taskId])
 
+  const action = useMemo(() => (task ? mainAction(task, onNavigate) : null), [onNavigate, task])
+
   if (!task) {
     return (
       <PageShell title="任务详情">
@@ -38,32 +81,35 @@ export function TaskDetailPage({ taskId, onOpenGroup }: TaskDetailPageProps) {
   }
 
   return (
-    <PageShell title={task.title} description="任务详情（Mock版，可平滑切换真实 API）。">
+    <PageShell title={task.title} description="任务详情（工作队列上下文版）。">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          <Card title="基本信息">
+          <Card title="任务与团队上下文">
             <div className="grid grid-cols-2 gap-3 text-sm text-slate-700">
-              <p>任务类型：{task.type}</p>
-              <p>状态：{task.status}</p>
-              <p>优先级：{task.priority}</p>
-              <p>风险等级：{task.riskLevel}</p>
-              <p>截止时间：{new Date(task.dueAt).toLocaleString()}</p>
+              <p>团名：{task.teamName}</p>
+              <p>团号：{task.teamCode}</p>
+              <p>目的地：{task.destination}</p>
               <p>出发日期：{new Date(task.departureDate).toLocaleString()}</p>
+              <p>当前行程天数：第 {task.currentTripDay} 天</p>
+              <p>关联游客数量：{task.travelerCount}</p>
+              <p>关联通知节点：{task.linkedNotificationNode}</p>
+              <p>任务来源：{task.source}</p>
+              <p>截止时间：{new Date(task.dueAt).toLocaleString()}</p>
+              <p>逾期状态：{dueText(task)}</p>
+              <p>当前负责人：{task.assigneeName || '待分配'}</p>
+              <p>推荐动作：{task.recommendedAction}</p>
             </div>
-          </Card>
-
-          <Card title="行程上下文">
-            <p className="text-sm text-slate-700">关联团：{task.groupName}</p>
-            <p className="mt-2 text-sm text-slate-700">目的地：{task.destination}</p>
-            <Button className="mt-3" onClick={() => onOpenGroup(task.groupId)}>
+            <Button className="mt-3" onClick={() => onOpenGroup(task.teamId)}>
               查看高风险团详情
             </Button>
           </Card>
 
-          <Card title="客户信息">
-            <p className="text-sm text-slate-700">客户姓名：{task.customerName}</p>
-            <p className="mt-2 text-sm text-slate-700">当前负责人：{task.assignee || '待分配'}</p>
-          </Card>
+          {task.status === 'overdue' ? (
+            <Card title="逾期原因与补救建议">
+              <p className="text-sm text-slate-700">逾期原因：{task.overdueReason || '待补充逾期说明'}</p>
+              <p className="mt-2 text-sm text-slate-700">补救建议：{task.remedySuggestion || '建议立即补触达并同步负责人。'}</p>
+            </Card>
+          ) : null}
 
           <Card title="处理记录">
             <div className="space-y-2">
@@ -82,23 +128,64 @@ export function TaskDetailPage({ taskId, onOpenGroup }: TaskDetailPageProps) {
         </div>
 
         <div className="space-y-6">
-          <Card title="AI 建议区">
+          <Card title="AI 建议">
             <p className="text-sm text-slate-700">{task.aiSuggestion}</p>
           </Card>
           <Card title="操作区">
             <div className="space-y-2">
-              {actionStatusMap.map((item) => (
+              {action ? (
                 <Button
-                  key={item.label}
                   className="w-full"
                   onClick={async () => {
-                    await taskService.updateTaskStatus(task.id, item.status)
+                    await action.onClick()
                     await load()
                   }}
                 >
-                  {item.label}
+                  {action.label}
                 </Button>
-              ))}
+              ) : null}
+              {task.type === 'pre_trip_t3_flight_check' ? (
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  onClick={async () => {
+                    await taskService.completeTask(task.id)
+                    await load()
+                  }}
+                >
+                  标记航班已确认
+                </Button>
+              ) : null}
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={async () => {
+                  await taskService.deferTask(task.id)
+                  await load()
+                }}
+              >
+                延期处理
+              </Button>
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={async () => {
+                  await taskService.completeTask(task.id)
+                  onNavigate('/tasks/my-workbench')
+                }}
+              >
+                标记完成
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full"
+                onClick={async () => {
+                  await taskService.takeoverTask(task.id, '张三')
+                  await load()
+                }}
+              >
+                转派接管
+              </Button>
             </div>
           </Card>
         </div>
