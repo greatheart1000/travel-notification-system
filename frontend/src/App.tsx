@@ -9,6 +9,7 @@ import { WorkflowDashboardPage } from './pages/dashboard/WorkflowDashboardPage'
 import { TaskBucketPage } from './pages/tasks/TaskBucketPage'
 import { TaskDetailPage } from './pages/tasks/TaskDetailPage'
 import { authApi, getErrorMessage } from './services/api'
+import { travelDemoService } from './services/travel/travelDemoService'
 
 const Analytics = lazy(() => import('./pages/Analytics').then((module) => ({ default: module.Analytics })))
 const Notifications = lazy(() => import('./pages/Notifications').then((module) => ({ default: module.Notifications })))
@@ -26,6 +27,10 @@ function PageLoadingFallback() {
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>(() => parseAppRoute(window.location.pathname, window.location.search))
+
+  useEffect(() => {
+    travelDemoService.bootstrap()
+  }, [])
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
