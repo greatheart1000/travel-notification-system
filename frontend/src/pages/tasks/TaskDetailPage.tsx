@@ -20,9 +20,9 @@ function dueText(task: Task): string {
 function mainAction(task: Task, onNavigate: (path: string) => void): { label: string; onClick: () => Promise<void> } {
   if (task.type === 'daily_morning' || task.type === 'daily_noon' || task.type === 'daily_evening') {
     return {
-      label: '进入通知执行',
+      label: '进入团详情',
       onClick: async () => {
-        onNavigate(`/notifications/team/${task.teamId}`)
+        onNavigate(`/trips/${task.teamId}`)
       },
     }
   }

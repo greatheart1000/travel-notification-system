@@ -14,7 +14,6 @@ interface TripsProps {
   tripId?: string | null
   onOpenTrip?: (tripId: string) => void
   onBackToList?: () => void
-  onOpenTripNotifications?: (tripId: string) => void
 }
 
 function statusBadgeVariant(status: TravelTeam['status']): 'success' | 'info' | 'default' {
@@ -29,7 +28,7 @@ const statusText: Record<TravelTeam['status'], string> = {
   completed: '已完成',
 }
 
-export function Trips({ tripId = null, onOpenTrip, onBackToList, onOpenTripNotifications }: TripsProps) {
+export function Trips({ tripId = null, onOpenTrip, onBackToList }: TripsProps) {
   const [teams, setTeams] = useState<TravelTeam[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
 
@@ -53,14 +52,8 @@ export function Trips({ tripId = null, onOpenTrip, onBackToList, onOpenTripNotif
     window.dispatchEvent(new PopStateEvent('popstate'))
   }
 
-  const handleOpenTripNotifications = (teamId: string) => {
-    if (onOpenTripNotifications) return onOpenTripNotifications(teamId)
-    window.history.pushState({}, '', `/notifications/team/${encodeURIComponent(teamId)}`)
-    window.dispatchEvent(new PopStateEvent('popstate'))
-  }
-
   if (tripId) {
-    return <TripDetail tripId={tripId} onBack={() => onBackToList?.()} onOpenTripNotifications={onOpenTripNotifications} />
+    return <TripDetail tripId={tripId} onBack={() => onBackToList?.()} />
   }
 
   return (
@@ -88,7 +81,6 @@ export function Trips({ tripId = null, onOpenTrip, onBackToList, onOpenTripNotif
               </div>
               <div className="mt-4 flex items-center gap-2 border-t border-slate-200 pt-4" onClick={(event) => event.stopPropagation()}>
                 <Button size="sm" className="flex-1" onClick={() => handleOpenTrip(team.id)}>进入团详情 <ArrowRight className="ml-1 inline h-4 w-4" /></Button>
-                <Button size="sm" variant="secondary" onClick={() => handleOpenTripNotifications(team.id)}>通知设置</Button>
               </div>
             </Card>
           ))}
