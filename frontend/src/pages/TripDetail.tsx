@@ -47,6 +47,8 @@ export function TripDetail({ tripId, onBack }: TripDetailProps) {
   if (loading) return <PageState kind="loading" title="正在加载团详情" />
   if (!team) return <PageState kind="error" title="团详情不存在" description={`未找到 teamId=${tripId} 对应的旅行团。`} />
 
+  const sortedItinerary = [...itinerary].sort((a, b) => a.dayIndex - b.dayIndex)
+
   return (
     <>
       <Header />
