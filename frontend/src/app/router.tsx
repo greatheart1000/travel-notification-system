@@ -8,7 +8,6 @@ export type AppPage =
   | 'group_high_risk'
   | 'group_detail'
   | 'trips'
-  | 'notifications'
   | 'preferences'
   | 'analytics'
 
@@ -44,13 +43,12 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
   if (parts[0] === 'trips' && parts[1]) return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
   if (parts[0] === 'trips') return { page: 'trips', tripId: null }
 
-  if (parts[0] === 'notifications' && parts[1] === 'team' && parts[2]) return { page: 'notifications', tripId: decodeURIComponent(parts[2]) }
   if (parts[0] === 'notifications') {
     if (parts[1] === 'team' && parts[2]) {
-      return { page: 'notifications', tripId: decodeURIComponent(parts[2]) }
+      return { page: 'trips', tripId: decodeURIComponent(parts[2]) }
     }
     const query = new URLSearchParams(search)
-    return { page: 'notifications', tripId: query.get('trip_id') }
+    return { page: 'trips', tripId: query.get('trip_id') }
   }
   if (parts[0] === 'preferences') return { page: 'preferences' }
   if (parts[0] === 'analytics') return { page: 'analytics' }
@@ -76,8 +74,6 @@ export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: 
       return '/groups/high-risk'
     case 'group_detail':
       return `/groups/high-risk/${encodeURIComponent(params?.groupId ?? '')}`
-    case 'notifications':
-      return params?.tripId ? `/notifications/team/${encodeURIComponent(params.tripId)}` : '/notifications'
     case 'preferences':
       return '/preferences'
     case 'analytics':
