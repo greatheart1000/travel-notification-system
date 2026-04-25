@@ -12,7 +12,6 @@ import { authApi, getErrorMessage } from './services/api'
 import { travelDemoService } from './services/travel/travelDemoService'
 
 const Analytics = lazy(() => import('./pages/Analytics').then((module) => ({ default: module.Analytics })))
-const Notifications = lazy(() => import('./pages/Notifications').then((module) => ({ default: module.Notifications })))
 const Preferences = lazy(() => import('./pages/Preferences').then((module) => ({ default: module.Preferences })))
 const Trips = lazy(() => import('./pages/Trips').then((module) => ({ default: module.Trips })))
 
@@ -169,11 +168,8 @@ export default function App() {
             tripId={route.tripId ?? null}
             onOpenTrip={(tripId) => navigate(`/trips/${encodeURIComponent(tripId)}`)}
             onBackToList={() => navigate('/trips')}
-            onOpenTripNotifications={(tripId) => navigate(pageToPath('notifications', { tripId }))}
           />
         )
-      case 'notifications':
-        return <Notifications tripId={route.tripId ?? null} onBackToTrip={(tripId) => navigate(`/trips/${encodeURIComponent(tripId)}`)} />
       case 'preferences':
         return <Preferences />
       case 'analytics':

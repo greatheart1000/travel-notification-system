@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { Header } from '../components/Header'
-import { Button } from '../components/Button'
 import { Card } from '../components/Card'
 import { PageState } from '../components/PageState'
 import { travelRepository } from '../repositories/travelRepository'
@@ -11,10 +10,9 @@ import type { Guest, ItineraryDay, PickupPlan, TravelTeam, NotificationTask } fr
 interface TripDetailProps {
   tripId: string | null
   onBack: () => void
-  onOpenTripNotifications?: (tripId: string) => void
 }
 
-export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDetailProps) {
+export function TripDetail({ tripId, onBack }: TripDetailProps) {
   const [loading, setLoading] = useState(true)
   const [team, setTeam] = useState<TravelTeam | null>(null)
   const [guests, setGuests] = useState<Guest[]>([])
@@ -59,7 +57,6 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
               <button onClick={onBack} className="rounded-full p-2 hover:bg-slate-100"><ArrowLeft className="h-4 w-4" /></button>
               <div><h1 className="text-lg font-semibold">{team.name}</h1><p className="text-xs text-slate-500">{team.teamCode}</p></div>
             </div>
-            <Button onClick={() => onOpenTripNotifications?.(team.id)}>通知执行页</Button>
           </div>
         </div>
 
@@ -71,7 +68,7 @@ export function TripDetail({ tripId, onBack, onOpenTripNotifications }: TripDeta
           </div></Card>
           <Card title="数据联动校验"><div className="space-y-2 text-sm text-slate-700">
             <p>每日行程：{itinerary.length} 天</p><p>接送安排：{pickups.length} 条</p><p>通知任务：{tasks.length} 条</p>
-            <p>说明：该页与通知执行页均读取真实后端 API 数据。</p>
+            <p>说明：该页读取真实后端 API 数据。</p>
           </div></Card>
         </div>
       </div>
