@@ -88,7 +88,7 @@ export function Trips({ tripId = null, onOpenTrip, onBackToList, onOpenTripNotif
               </div>
               <div className="mt-4 flex items-center gap-2 border-t border-slate-200 pt-4" onClick={(event) => event.stopPropagation()}>
                 <Button size="sm" className="flex-1" onClick={() => handleOpenTrip(team.id)}>进入团详情 <ArrowRight className="ml-1 inline h-4 w-4" /></Button>
-                <Button size="sm" variant="secondary" onClick={() => handleOpenTripNotifications(team.id)}>通知执行</Button>
+                <Button size="sm" variant="secondary" onClick={() => handleOpenTripNotifications(team.id)}>通知设置</Button>
               </div>
             </Card>
           ))}
