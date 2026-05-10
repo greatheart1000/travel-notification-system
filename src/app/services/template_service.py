@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from jinja2 import Template as JinjaTemplate
 
 from app.core.entities import EventName
 from app.core.entities import Template as RuleTemplate
@@ -272,19 +272,17 @@ class TemplateService:
         return content
 
     def render_notification(self, template: NotificationTemplate, variables: dict[str, Any]) -> str:
-        """使用 Jinja2 渲染模板，支持复杂逻辑和默认值"""
-        from jinja2 import StrictUndefined
-        from jinja2.exceptions import UndefinedError
+        """Render ``{{ variable }}`` placeholders and fail fast on missing fields."""
+        placeholders = set(re.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", template.content))
+        missing = sorted(name for name in placeholders if name not in variables)
+        if missing:
+            raise ValueError(f"missing_template_variables: {','.join(missing)}")
 
-        try:
-            jinja_tmpl = JinjaTemplate(template.content, undefined=StrictUndefined)
-            return jinja_tmpl.render(**variables)
-        except UndefinedError as e:
-            # 必须抛出 ValueError，遵循契约
-            raise ValueError(f"missing_template_variables: {str(e)}")
-        except Exception as e:
-            # 语法错误等其他异常
-            raise ValueError(f"template_render_error: {str(e)}")
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            return str(variables.get(key, ""))
+
+        return re.sub(r"{{\s*([a-zA-Z0-9_]+)\s*}}", replace, template.content)
 
     def list_notification_templates(
         self, tenant_id: str | None = None

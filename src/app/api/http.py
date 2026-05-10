@@ -5,7 +5,7 @@ import io
 import os
 import re
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -44,12 +44,26 @@ from app.services.dashboard_service import DashboardService
 from app.services.emergency_weather_service import EmergencyWeatherService
 from app.services.notification_agent_service import NotificationAgentService
 from app.services.preference_service import UserPreferenceService
+from app.services.risk_notification_service import RiskEvidenceRepository, RiskNotificationWorkflow
 from app.services.scheduler_service import init_scheduler
 from app.services.template_service import TemplateService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 UTC = UTC
 
+
+
+
+def _parse_optional_datetime(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid datetime") from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
 
 def _patch_starlette_router_compat() -> None:
     """
@@ -92,6 +106,7 @@ class AppContext:
     audit_service: AuditService
     analytics_service: AnalyticsService
     weather_provider: WeatherProvider
+    risk_evidence_repository: RiskEvidenceRepository
     notification_tasks: dict[str, NotificationTask]
 
 
@@ -1706,6 +1721,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     )
     auth_service = AuthService()
     weather_provider = WeatherProvider()
+    risk_evidence_repository = RiskEvidenceRepository(store=persistence)
     return AppContext(
         store=persistence,
         auth_service=auth_service,
@@ -1720,9 +1736,22 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         audit_service=audit_service,
         analytics_service=analytics_service,
         weather_provider=weather_provider,
+        risk_evidence_repository=risk_evidence_repository,
         notification_tasks={},
     )
 
+
+
+def _build_risk_notification_workflow(ctx: AppContext) -> RiskNotificationWorkflow:
+    return RiskNotificationWorkflow(
+        trip_repository=ctx.trip_repository,
+        template_service=ctx.template_service,
+        notification_service=ctx.notification_service,
+        weather_provider=ctx.weather_provider,
+        evidence_repository=ctx.risk_evidence_repository,
+        audit_service=ctx.audit_service,
+        project_notification_config_repository=ctx.project_notification_config_repository,
+    )
 
 def create_app() -> FastAPI:
     _patch_starlette_router_compat()
@@ -2227,6 +2256,75 @@ def create_app() -> FastAPI:
             detail={"tenant_id": _current_tenant_id(user)},
         )
         return _ok(_serialize_project_notification_config(config))
+
+    @fastapi_app.get("/api/risk-notifications/triggers")
+    def list_risk_notification_triggers(
+        now: str | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:read")
+        current = _parse_optional_datetime(now)
+        workflow = _build_risk_notification_workflow(ctx)
+        triggers = workflow.build_triggers(tenant_id=_current_tenant_id(user), now=current)
+        return _ok({"items": [asdict(trigger) for trigger in triggers]})
+
+    @fastapi_app.post("/api/risk-notifications/run")
+    def run_risk_notifications(
+        now: str | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        current = _parse_optional_datetime(now)
+        workflow = _build_risk_notification_workflow(ctx)
+        result = workflow.send_due_risks(tenant_id=_current_tenant_id(user), now=current)
+        return _ok(result)
+
+    @fastapi_app.get("/api/risk-notifications/evidence")
+    def list_risk_notification_evidence(
+        trip_id: str | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:read")
+        return _ok(
+            {
+                "items": ctx.risk_evidence_repository.list(
+                    tenant_id=_current_tenant_id(user),
+                    trip_id=trip_id,
+                )
+            }
+        )
+
+    @fastapi_app.post("/api/risk-notifications/evidence/{evidence_id}/confirm")
+    def confirm_risk_notification_evidence(
+        evidence_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        workflow = _build_risk_notification_workflow(ctx)
+        try:
+            return _ok(workflow.confirm(evidence_id, operator_id=user["id"]))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Evidence not found") from exc
+
+    @fastapi_app.post("/api/risk-notifications/escalate-overdue")
+    def escalate_overdue_risk_notifications(
+        timeout_minutes: int = 15,
+        now: str | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "ops:read")
+        workflow = _build_risk_notification_workflow(ctx)
+        items = workflow.escalate_overdue(
+            tenant_id=_current_tenant_id(user),
+            now=_parse_optional_datetime(now),
+            timeout_minutes=timeout_minutes,
+        )
+        return _ok({"escalated_count": len(items), "items": items})
 
     @fastapi_app.post("/api/notifications/templates", status_code=201)
     def create_templates_alias(
