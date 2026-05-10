@@ -248,8 +248,18 @@ class RiskNotificationWorkflow:
             )
         return {"sent_count": len(sent), "items": sent}
 
-    def confirm(self, evidence_id: str, *, operator_id: str, now: datetime | None = None) -> dict[str, Any]:
+    def confirm(
+        self,
+        evidence_id: str,
+        *,
+        tenant_id: str,
+        operator_id: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
         current = now or datetime.now(tz=UTC)
+        existing = self.evidence_repository.get(evidence_id)
+        if existing is None or str(existing.get("tenant_id") or "") != tenant_id:
+            raise KeyError(evidence_id)
         updated = self.evidence_repository.update(
             evidence_id,
             {
@@ -260,7 +270,11 @@ class RiskNotificationWorkflow:
         )
         if updated is None:
             raise KeyError(evidence_id)
-        self._audit("risk_notification_confirmed", str(updated.get("trip_id") or ""), {"evidence_id": evidence_id, "operator_id": operator_id})
+        self._audit(
+            "risk_notification_confirmed",
+            str(updated.get("trip_id") or ""),
+            {"evidence_id": evidence_id, "operator_id": operator_id},
+        )
         return updated
 
     def escalate_overdue(
@@ -324,7 +338,12 @@ class RiskNotificationWorkflow:
                     hit_rules=[f"erp_tag:{tag}" for tag in special_tags],
                     recommendation_actions=[self._recommendation_for_tag(tag) for tag in special_tags],
                     itinerary_day=str(item.get("day") or item_date.isoformat()),
-                    itinerary_title=str(item.get("title") or item.get("summary") or "特殊风险行程"),
+                    itinerary_title=str(
+                        item.get("title")
+                        or item.get("summary")
+                        or item.get("route")
+                        or "特殊风险行程"
+                    ),
                 )
             )
         return triggers
@@ -444,12 +463,20 @@ class RiskNotificationWorkflow:
     def _risk_tags_for_itinerary_item(self, item: dict[str, Any]) -> set[str]:
         raw_tags = self._extract_raw_tags(item, keys=("risk_tags", "business_tags", "tags", "labels"))
         tags = self._normalize_tags(raw_tags)
+        title_text = " ".join(
+            str(item.get(key) or "")
+            for key in ("title", "summary", "route", "transport")
+        )
+        description_text = " ".join(
+            str(item.get(key) or "")
+            for key in ("description", "content", "remark", "hotel")
+        )
         report = self.itinerary_risk_service.build_report(
             [
                 ItineraryItem(
                     day=str(item.get("day") or item.get("date") or ""),
-                    title=str(item.get("title") or item.get("summary") or ""),
-                    description=str(item.get("description") or item.get("content") or ""),
+                    title=title_text,
+                    description=description_text,
                     distance_km=int(item.get("distance_km") or 0),
                     estimated_drive_hours=float(item.get("estimated_drive_hours") or 0),
                 )
