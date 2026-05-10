@@ -6,6 +6,7 @@ import zipfile
 from fastapi.testclient import TestClient
 
 from app.api.http import app, create_app, reset_state
+from app.services.risk_notification_service import RiskNotificationEvidence
 
 
 def _login(client: TestClient, username: str, password: str) -> str:
@@ -170,6 +171,37 @@ def test_tenant_isolation_for_trip_and_history_queries() -> None:
     partner_history = client.get("/api/notifications/history?limit=20", headers=partner_headers)
     assert partner_history.status_code == 200
     assert partner_history.json()["data"]["total"] == 0
+
+
+def test_risk_notification_confirm_rejects_cross_tenant_evidence_id() -> None:
+    reset_state(purge_persistence=True)
+    client = TestClient(app)
+    partner_token = _login(client, "partner", "123456")
+    app.state.ctx.risk_evidence_repository.add(
+        RiskNotificationEvidence(
+            evidence_id="evidence-tenant-a",
+            trigger_id="trigger-1",
+            task_id="task-1",
+            tenant_id="tenant-a",
+            trip_id="trip-1",
+            team_id="TEAM-1",
+            channel="wechat_work_group",
+            content="风险提醒",
+            status="sent",
+            provider_message="accepted",
+            sent_at="2026-05-10T08:00:00+00:00",
+        )
+    )
+
+    response = client.post(
+        "/api/risk-notifications/evidence/evidence-tenant-a/confirm",
+        headers={"Authorization": f"Bearer {partner_token}"},
+    )
+
+    assert response.status_code == 404
+    evidence = app.state.ctx.risk_evidence_repository.get("evidence-tenant-a")
+    assert evidence is not None
+    assert evidence["concierge_confirmation_status"] == "pending"
 
 
 def test_preferences_read_write() -> None:
