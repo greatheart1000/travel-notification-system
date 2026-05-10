@@ -2306,7 +2306,11 @@ def create_app() -> FastAPI:
         _require_permission_or_403(user, "notification:write")
         workflow = _build_risk_notification_workflow(ctx)
         try:
-            return _ok(workflow.confirm(evidence_id, operator_id=user["id"]))
+            return _ok(
+                workflow.confirm(
+                    evidence_id, tenant_id=_current_tenant_id(user), operator_id=user["id"]
+                )
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Evidence not found") from exc
 

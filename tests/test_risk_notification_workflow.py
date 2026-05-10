@@ -96,14 +96,19 @@ def test_sync_erp_risk_tags_normalizes_trip_and_itinerary_tags() -> None:
                 {
                     "date": "2026-05-11",
                     "title": "喀纳斯骑马体验",
-                    "description": "雪场装备检查后进入无人区边缘观景",
+                    "description": "普通观景",
+                    "content": "普通自由活动",
+                    "route": "沿边境口岸方向前往景区",
+                    "transport": {"memo": "雪场装备车随团"},
+                    "remark": "进入无人区边缘观景",
+                    "hotel": ["高原木屋"],
                 }
             ],
         }
     )
 
     assert set(synced["risk_tags"]) >= {"highland", "border", "horse_riding", "skiing", "no_man_land"}
-    assert set(synced["itinerary"][0]["risk_tags"]) >= {"horse_riding", "skiing", "no_man_land"}
+    assert set(synced["itinerary"][0]["risk_tags"]) >= {"highland", "border", "horse_riding", "skiing", "no_man_land"}
     assert synced["erp_risk_tag_synced_at"]
 
 
@@ -169,7 +174,12 @@ def test_send_due_risks_keeps_wecom_evidence_and_supports_confirmation_and_escal
     assert all(item["concierge_confirmation_status"] == "pending" for item in evidence_items)
     assert any("骑马" in item["content"] or "滑雪" in item["content"] for item in evidence_items)
 
-    confirmed = workflow.confirm(evidence_items[0]["evidence_id"], operator_id="concierge-1", now=now)
+    confirmed = workflow.confirm(
+        evidence_items[0]["evidence_id"],
+        tenant_id="tenant-a",
+        operator_id="concierge-1",
+        now=now,
+    )
     assert confirmed["concierge_confirmation_status"] == "confirmed"
     assert confirmed["concierge_confirmed_by"] == "concierge-1"
 
@@ -182,3 +192,42 @@ def test_send_due_risks_keeps_wecom_evidence_and_supports_confirmation_and_escal
     assert all(item["escalated"] for item in escalated)
     assert "risk_notification_sent" in {item["action"] for item in audit.logs}
     assert "risk_notification_escalated" in {item["action"] for item in audit.logs}
+
+
+def test_confirm_rejects_cross_tenant_evidence_without_updating() -> None:
+    workflow, _ = _build_workflow(
+        [
+            {
+                "id": "trip-1",
+                "tenant_id": "tenant-a",
+                "team_id": "TEAM-1",
+                "project_id": "proj-xj",
+                "destination": "阿勒泰",
+                "status": "in_progress",
+                "start_date": "2026-05-10",
+                "itinerary": [
+                    {"date": "2026-05-11", "title": "骑马", "description": "骑马体验"},
+                ],
+            }
+        ]
+    )
+    now = datetime(2026, 5, 10, 8, 0, tzinfo=UTC)
+    workflow.send_due_risks(tenant_id="tenant-a", now=now)
+    evidence = workflow.evidence_repository.list(tenant_id="tenant-a")[0]
+
+    try:
+        workflow.confirm(
+            evidence["evidence_id"],
+            tenant_id="tenant-b",
+            operator_id="tenant-b-user",
+            now=now,
+        )
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("expected cross-tenant confirmation to be rejected")
+
+    unchanged = workflow.evidence_repository.get(evidence["evidence_id"])
+    assert unchanged is not None
+    assert unchanged["concierge_confirmation_status"] == "pending"
+    assert unchanged["concierge_confirmed_by"] == ""

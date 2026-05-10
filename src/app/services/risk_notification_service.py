@@ -117,10 +117,12 @@ class RiskEvidenceRepository:
     def get(self, evidence_id: str) -> dict[str, Any] | None:
         return next((item for item in self._items if item.get("evidence_id") == evidence_id), None)
 
-    def update(self, evidence_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    def update(self, evidence_id: str, patch: dict[str, Any], *, tenant_id: str | None = None) -> dict[str, Any] | None:
         for index, item in enumerate(self._items):
             if item.get("evidence_id") != evidence_id:
                 continue
+            if tenant_id is not None and item.get("tenant_id") != tenant_id:
+                return None
             updated = {**item, **patch}
             self._items[index] = updated
             self._flush()
@@ -248,7 +250,14 @@ class RiskNotificationWorkflow:
             )
         return {"sent_count": len(sent), "items": sent}
 
-    def confirm(self, evidence_id: str, *, operator_id: str, now: datetime | None = None) -> dict[str, Any]:
+    def confirm(
+        self,
+        evidence_id: str,
+        *,
+        tenant_id: str,
+        operator_id: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
         current = now or datetime.now(tz=UTC)
         updated = self.evidence_repository.update(
             evidence_id,
@@ -257,6 +266,7 @@ class RiskNotificationWorkflow:
                 "concierge_confirmed_by": operator_id,
                 "concierge_confirmed_at": current.isoformat(),
             },
+            tenant_id=tenant_id,
         )
         if updated is None:
             raise KeyError(evidence_id)
@@ -444,12 +454,16 @@ class RiskNotificationWorkflow:
     def _risk_tags_for_itinerary_item(self, item: dict[str, Any]) -> set[str]:
         raw_tags = self._extract_raw_tags(item, keys=("risk_tags", "business_tags", "tags", "labels"))
         tags = self._normalize_tags(raw_tags)
+        scan_text = " ".join(
+            self._stringify_erp_field(item.get(key))
+            for key in ("description", "content", "route", "transport", "remark", "hotel")
+        )
         report = self.itinerary_risk_service.build_report(
             [
                 ItineraryItem(
                     day=str(item.get("day") or item.get("date") or ""),
                     title=str(item.get("title") or item.get("summary") or ""),
-                    description=str(item.get("description") or item.get("content") or ""),
+                    description=scan_text,
                     distance_km=int(item.get("distance_km") or 0),
                     estimated_drive_hours=float(item.get("estimated_drive_hours") or 0),
                 )
@@ -457,6 +471,17 @@ class RiskNotificationWorkflow:
             checklist={},
         )
         return tags | set(report.risk_tags)
+
+    def _stringify_erp_field(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, dict):
+            return " ".join(self._stringify_erp_field(item) for item in value.values())
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Iterable):
+            return " ".join(self._stringify_erp_field(item) for item in value)
+        return str(value)
 
     def _parse_item_date(self, item: dict[str, Any], trip: dict[str, Any]) -> Any | None:
         raw_date = str(item.get("date") or item.get("service_date") or "").strip()
