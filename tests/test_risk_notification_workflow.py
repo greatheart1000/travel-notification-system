@@ -100,14 +100,19 @@ def test_sync_erp_risk_tags_normalizes_trip_and_itinerary_tags() -> None:
                 {
                     "date": "2026-05-11",
                     "title": "喀纳斯骑马体验",
-                    "description": "雪场装备检查后进入无人区边缘观景",
+                    "description": "普通观景",
+                    "content": "普通自由活动",
+                    "route": "沿边境口岸方向前往景区",
+                    "transport": {"memo": "雪场装备车随团"},
+                    "remark": "进入无人区边缘观景",
+                    "hotel": ["高原木屋"],
                 }
             ],
         }
     )
 
     assert set(synced["risk_tags"]) >= {"highland", "border", "horse_riding", "skiing", "no_man_land"}
-    assert set(synced["itinerary"][0]["risk_tags"]) >= {"horse_riding", "skiing", "no_man_land"}
+    assert set(synced["itinerary"][0]["risk_tags"]) >= {"highland", "border", "horse_riding", "skiing", "no_man_land"}
     assert synced["erp_risk_tag_synced_at"]
 
 

@@ -117,10 +117,12 @@ class RiskEvidenceRepository:
     def get(self, evidence_id: str) -> dict[str, Any] | None:
         return next((item for item in self._items if item.get("evidence_id") == evidence_id), None)
 
-    def update(self, evidence_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    def update(self, evidence_id: str, patch: dict[str, Any], *, tenant_id: str | None = None) -> dict[str, Any] | None:
         for index, item in enumerate(self._items):
             if item.get("evidence_id") != evidence_id:
                 continue
+            if tenant_id is not None and item.get("tenant_id") != tenant_id:
+                return None
             updated = {**item, **patch}
             self._items[index] = updated
             self._flush()
@@ -267,6 +269,7 @@ class RiskNotificationWorkflow:
                 "concierge_confirmed_by": operator_id,
                 "concierge_confirmed_at": current.isoformat(),
             },
+            tenant_id=tenant_id,
         )
         if updated is None:
             raise KeyError(evidence_id)
@@ -484,6 +487,17 @@ class RiskNotificationWorkflow:
             checklist={},
         )
         return tags | set(report.risk_tags)
+
+    def _stringify_erp_field(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, dict):
+            return " ".join(self._stringify_erp_field(item) for item in value.values())
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Iterable):
+            return " ".join(self._stringify_erp_field(item) for item in value)
+        return str(value)
 
     def _parse_item_date(self, item: dict[str, Any], trip: dict[str, Any]) -> Any | None:
         raw_date = str(item.get("date") or item.get("service_date") or "").strip()
