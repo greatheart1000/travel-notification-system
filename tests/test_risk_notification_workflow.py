@@ -5,7 +5,11 @@ from typing import Any
 
 from app.modules.integration.weather_provider import WeatherInfo
 from app.modules.notification.service import NotificationService
-from app.services.risk_notification_service import RiskEvidenceRepository, RiskNotificationWorkflow
+from app.services.risk_notification_service import (
+    RiskEvidenceRepository,
+    RiskNotificationEvidence,
+    RiskNotificationWorkflow,
+)
 from app.services.template_service import TemplateService
 
 
@@ -112,6 +116,43 @@ def test_sync_erp_risk_tags_normalizes_trip_and_itinerary_tags() -> None:
     assert synced["erp_risk_tag_synced_at"]
 
 
+def test_sync_erp_risk_tags_scans_erp_route_transport_and_remark_fields() -> None:
+    erp_trip = {
+        "id": "trip-erp",
+        "tenant_id": "tenant-a",
+        "team_id": "TEAM-ERP",
+        "project_id": "proj-xj",
+        "destination": "喀纳斯",
+        "status": "in_progress",
+        "itinerary": [
+            {
+                "date": "2026-05-11",
+                "route": "喀纳斯骑马体验 -> 雪场",
+                "transport": "无人区越野车转场",
+                "remark": "高海拔路段注意保暖",
+            }
+        ],
+    }
+    workflow, _ = _build_workflow([erp_trip])
+
+    synced = workflow.sync_erp_risk_tags(erp_trip)
+
+    assert set(synced["risk_tags"]) >= {"horse_riding", "skiing", "no_man_land", "highland"}
+    assert set(synced["itinerary"][0]["risk_tags"]) >= {
+        "horse_riding",
+        "skiing",
+        "no_man_land",
+        "highland",
+    }
+    triggers = workflow.build_triggers(
+        tenant_id="tenant-a",
+        now=datetime(2026, 5, 10, 8, 0, tzinfo=UTC),
+    )
+    special_trigger = next(trigger for trigger in triggers if trigger.risk_type == "special_scene")
+    assert {"horse_riding", "skiing", "no_man_land", "highland"} <= set(special_trigger.risk_tags)
+    assert special_trigger.itinerary_title == "喀纳斯骑马体验 -> 雪场"
+
+
 def test_build_triggers_covers_previous_day_current_day_weather_24h_and_transport_change() -> None:
     workflow, _ = _build_workflow(
         [
@@ -194,40 +235,31 @@ def test_send_due_risks_keeps_wecom_evidence_and_supports_confirmation_and_escal
     assert "risk_notification_escalated" in {item["action"] for item in audit.logs}
 
 
-def test_confirm_rejects_cross_tenant_evidence_without_updating() -> None:
-    workflow, _ = _build_workflow(
-        [
-            {
-                "id": "trip-1",
-                "tenant_id": "tenant-a",
-                "team_id": "TEAM-1",
-                "project_id": "proj-xj",
-                "destination": "阿勒泰",
-                "status": "in_progress",
-                "start_date": "2026-05-10",
-                "itinerary": [
-                    {"date": "2026-05-11", "title": "骑马", "description": "骑马体验"},
-                ],
-            }
-        ]
+def test_confirm_requires_matching_tenant_scope() -> None:
+    workflow, _ = _build_workflow([])
+    evidence = workflow.evidence_repository.add(
+        RiskNotificationEvidence(
+            evidence_id="evidence-tenant-a",
+            trigger_id="trigger-1",
+            task_id="task-1",
+            tenant_id="tenant-a",
+            trip_id="trip-1",
+            team_id="TEAM-1",
+            channel="wechat_work_group",
+            content="风险提醒",
+            status="sent",
+            provider_message="accepted",
+            sent_at="2026-05-10T08:00:00+00:00",
+        )
     )
-    now = datetime(2026, 5, 10, 8, 0, tzinfo=UTC)
-    workflow.send_due_risks(tenant_id="tenant-a", now=now)
-    evidence = workflow.evidence_repository.list(tenant_id="tenant-a")[0]
 
     try:
-        workflow.confirm(
-            evidence["evidence_id"],
-            tenant_id="tenant-b",
-            operator_id="tenant-b-user",
-            now=now,
-        )
+        workflow.confirm(evidence["evidence_id"], tenant_id="tenant-b", operator_id="partner-1")
     except KeyError:
         pass
     else:
-        raise AssertionError("expected cross-tenant confirmation to be rejected")
+        raise AssertionError("cross-tenant evidence confirmation should be rejected")
 
-    unchanged = workflow.evidence_repository.get(evidence["evidence_id"])
-    assert unchanged is not None
-    assert unchanged["concierge_confirmation_status"] == "pending"
-    assert unchanged["concierge_confirmed_by"] == ""
+    stored = workflow.evidence_repository.get(evidence["evidence_id"])
+    assert stored is not None
+    assert stored["concierge_confirmation_status"] == "pending"

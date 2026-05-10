@@ -2308,7 +2308,9 @@ def create_app() -> FastAPI:
         try:
             return _ok(
                 workflow.confirm(
-                    evidence_id, tenant_id=_current_tenant_id(user), operator_id=user["id"]
+                    evidence_id,
+                    tenant_id=_current_tenant_id(user),
+                    operator_id=user["id"],
                 )
             )
         except KeyError as exc:
