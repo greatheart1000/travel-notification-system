@@ -10,6 +10,8 @@ RISK_KEYWORDS: dict[str, set[str]] = {
     "highland": {"高原", "海拔"},
     "border": {"边境", "口岸"},
     "extreme_uv": {"强紫外线", "暴晒"},
+    "no_man_land": {"无人区", "荒漠"},
+    "extreme_cold": {"极寒", "严寒", "低温"},
     "long_transfer": {"长途", "赶路", "车程", "转场"},
     "early_checkout": {"早起", "退房", "凌晨"},
 }
