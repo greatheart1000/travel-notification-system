@@ -45,25 +45,24 @@ cd ..
 
 ## 启动方式
 
-### 方式 A：一键联调启动（推荐）
-
-```bash
-python dev-server.py up
-```
-
-### 方式 B：分开启动
-
 后端：
 
 ```bash
-PYTHONPATH=src python -m app.main
+TRAVEL_NOTIFICATION_CORS_ORIGINS=http://127.0.0.1:4180 \
+PYTHONPATH=src python -m uvicorn app.api.http:app --host 127.0.0.1 --port 18000
 ```
 
 前端：
 
 ```bash
 cd frontend
-./start.sh dev
+npm run build
+cd ..
+python scripts/frontend_proxy_server.py \
+  --host 127.0.0.1 \
+  --port 4180 \
+  --backend http://127.0.0.1:18000 \
+  --static-dir frontend/dist
 ```
 
 ## 部署命令（前后端）
@@ -112,57 +111,50 @@ curl -fsS -X POST http://127.0.0.1:4180/api/auth/login \
 ## 健康检查
 
 ```bash
-python dev-server.py health
-# 或
-curl -fsS http://127.0.0.1:8000/api/health
+curl -fsS http://127.0.0.1:18000/api/health
 ```
 
 ## 统一状态块（2026-04-12）
 
-- `/api/health` 运行时验证：已通过（`python dev-server.py verify` smoke 链路）
+- `/api/health` 运行时验证：以直接 HTTP 健康检查为准
 - `/api/notifications/rules*` 端点现状：已实现并可鉴权访问（见 `docs/api-contract.md`）
 - 当前 blocker（命令级）：无
-- 本地执行观察（2026-04-12）：`python dev-server.py verify` 与 `python dev-server.py verify --full-tests` 均可完成，未出现超时/卡住。
+- 本地执行观察（2026-05-10）：后端 `uvicorn` 启动与 `python -m pytest -q` 为当前主验证方式。
 - 当前剩余阻塞（rules 联调内容级）：
-  1. `rules` 端点已纳入 `tests/test_http_api.py`（`test_notification_rules_contract_smoke`），并在 `python dev-server.py verify --full-tests` 中执行；默认 `python dev-server.py verify`（最小 smoke）仍不覆盖 rules 契约。
+  1. `rules` 端点已纳入 `tests/test_http_api.py`（`test_notification_rules_contract_smoke`）。
   2. 前端规则阶段枚举与后端规范值仍有收敛空间（后端规范：`pre_trip|in_trip|post_trip`）。
   3. `stage/time_slot/scene` 的别名输入策略尚未冻结为团队统一规范。
 - 临时绕行（仅当 backend 再次启动失败时）：
-  1. `python dev-server.py smoke --spawn-backend`
-  2. `cd frontend && ./start.sh dev --skip-api-check`（前端继续开发）
-  3. `python -m pytest -q tests/test_http_api.py`（后端先保契约）
+  1. `python -m pytest -q tests/test_http_api.py`
+  2. 单独启动 backend 后执行 `curl -fsS http://127.0.0.1:18000/api/health`
 - 当前可运行命令（已验证）：
-  - `python dev-server.py --help`
-  - `python dev-server.py health`（backend 运行时返回 OK；未启动时返回 unreachable 属预期）
-  - `python dev-server.py smoke --spawn-backend`（含 `/api/health`）
-  - `python dev-server.py verify`（含 `/api/health` 运行时校验）
-  - `python dev-server.py verify --full-tests`
-  - `bash frontend/start.sh --help`
-  - `bash frontend/start.sh health`
+  - `python -m pytest -q`
+  - `python -m pytest -q tests/test_http_api.py`
+  - `curl -fsS http://127.0.0.1:18000/api/health`
+  - `npm -C frontend run build`
 - 恢复步骤（统一）：
   1. backend rules 契约收口完成（以 `docs/api-contract.md` 为准）。
   2. frontend rules smoke：执行下方 `rules 最小 smoke 命令链`。
-  3. integration verify：`python dev-server.py verify`
-  4. integration full verify：`python dev-server.py verify --full-tests`（收尾）
-- 阶段边界：实现优先 + 最小验证，综合回归 deferred（待 rules 用例接入 `dev-server.py verify` 后执行）。
+  3. integration verify：`python -m pytest -q tests/test_http_api.py`
+  4. integration full verify：`python -m pytest -q`（收尾）
+- 阶段边界：实现优先 + 最小验证，综合回归 deferred（待 rules 用例纳入最小默认回归后执行）。
 - 最小联调命令（可直接复制执行）：
 ```bash
-python dev-server.py health
-python dev-server.py smoke --spawn-backend
-python dev-server.py verify
+curl -fsS http://127.0.0.1:18000/api/health
+python -m pytest -q tests/test_http_api.py
 ```
 
 - rules 最小 smoke 命令链（可直接复制执行）：
 ```bash
-TOKEN=$(curl -fsS -X POST http://127.0.0.1:8000/api/auth/login \
+TOKEN=$(curl -fsS -X POST http://127.0.0.1:18000/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"123456"}' \
   | python -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
 
-curl -fsS "http://127.0.0.1:8000/api/notifications/rules?stage=pre_trip&time_slot=morning&scene=normal" \
+curl -fsS "http://127.0.0.1:18000/api/notifications/rules?stage=pre_trip&time_slot=morning&scene=normal" \
   -H "Authorization: Bearer ${TOKEN}"
 
-curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:8000/api/notifications/rules \
+curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:18000/api/notifications/rules \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer ${TOKEN}" \
   -d '{"name":"smoke-rule","stage":"pre_trip","time_slot":"morning","scene":"normal","channels":["sms"],"enabled":true,"priority":100}'
@@ -181,7 +173,7 @@ curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:8000/api/not
 ### 最小联调校验（推荐先跑）
 
 ```bash
-python dev-server.py verify
+python -m pytest -q tests/test_http_api.py
 ```
 
 ### 契约测试（可选，主链路通后再跑）
@@ -204,13 +196,13 @@ python -m pytest -q \
 ### Smoke 测试（真实 HTTP）
 
 ```bash
-python dev-server.py smoke --spawn-backend
+curl -fsS http://127.0.0.1:18000/api/health
 ```
 
 ### 联调收尾（含全量测试）
 
 ```bash
-python dev-server.py verify --full-tests
+python -m pytest -q
 ```
 
 ## API 与联调文档

@@ -215,6 +215,103 @@ class TripImportValidationApplyRequest(BaseModel):
     fields: dict[str, str] = Field(default_factory=dict)
 
 
+class ERPImportMealFlags(BaseModel):
+    breakfast: bool = False
+    lunch: bool = False
+    dinner: bool = False
+
+
+class ERPImportGroupRequest(BaseModel):
+    group_no: str = ""
+    line_name: str = ""
+    departure_date_start: date | None = None
+    departure_date_end: date | None = None
+    operator: str = ""
+    sales: str = ""
+    people_count: int | None = None
+    people_count_text: str = ""
+    guest_source: str = ""
+    outbound_transport: str = ""
+    return_transport: str = ""
+    assembly_location: str = ""
+    dismiss_location: str = ""
+    guide: str = ""
+    agency_group_no: str = ""
+    team_social_group_no: str = ""
+
+
+class ERPImportItineraryDayRequest(BaseModel):
+    date: date
+    date_text: str = ""
+    day_index: int = 0
+    transport: str = ""
+    route: str = ""
+    breakfast: bool = False
+    lunch: bool = False
+    dinner: bool = False
+    meals: ERPImportMealFlags | None = None
+    breakfast_text: str = ""
+    lunch_text: str = ""
+    dinner_text: str = ""
+    hotel: str = ""
+    remark: str = ""
+
+
+class ERPImportGuestRequest(BaseModel):
+    guest_id: str = ""
+    name: str = ""
+    phone: str = ""
+    id_card: str = ""
+    gender: str = ""
+    age: int | None = None
+    role: str = "guest"
+    remark: str = ""
+
+
+class ERPImportTransferRequest(BaseModel):
+    operation: str = ""
+    type: str = ""
+    date: date
+    date_text: str = ""
+    location: str = ""
+    flight_or_train_no: str = ""
+    time: str = ""
+    raw_shift_text: str = ""
+    description: str = ""
+
+
+class ERPImportReportMetaRequest(BaseModel):
+    report_title: str = ""
+    report_generated_at: str = ""
+    print_person: str = ""
+    print_phone: str = ""
+    print_mobile: str = ""
+    print_date: date | None = None
+    source_url: str = ""
+    source_file_name: str = ""
+    page_count: int = 0
+
+
+class ERPImportWarningRequest(BaseModel):
+    field: str = ""
+    message: str
+
+
+class ERPImportDataRequest(BaseModel):
+    group: ERPImportGroupRequest
+    itinerary_days: list[ERPImportItineraryDayRequest] = Field(default_factory=list)
+    guests: list[ERPImportGuestRequest] = Field(default_factory=list)
+    transfers: list[ERPImportTransferRequest] = Field(default_factory=list)
+    report_meta: ERPImportReportMetaRequest = Field(default_factory=ERPImportReportMetaRequest)
+
+
+class ERPImportReportRequest(BaseModel):
+    success: bool = True
+    message: str = ""
+    data: ERPImportDataRequest
+    warnings: list[ERPImportWarningRequest] = Field(default_factory=list)
+
+
 class NotificationSendRequest(BaseModel):
     template_id: str | None = None
     trip_id: str | None = None
@@ -598,6 +695,96 @@ def _build_structured_trip_import(
     }
 
 
+def _build_trip_patch_from_erp_report(payload: ERPImportReportRequest) -> dict[str, Any]:
+    group = payload.data.group
+
+    def _meal_flag(item: ERPImportItineraryDayRequest, name: str) -> bool:
+        direct = getattr(item, name)
+        if direct:
+            return True
+        if item.meals is None:
+            return False
+        return bool(getattr(item.meals, name))
+
+    itinerary = [
+        {
+            "date": item.date.isoformat(),
+            "date_text": item.date_text,
+            "day_index": item.day_index,
+            "transport": item.transport,
+            "route": item.route,
+            "breakfast": _meal_flag(item, "breakfast"),
+            "lunch": _meal_flag(item, "lunch"),
+            "dinner": _meal_flag(item, "dinner"),
+            "breakfast_text": item.breakfast_text,
+            "lunch_text": item.lunch_text,
+            "dinner_text": item.dinner_text,
+            "hotel": item.hotel,
+            "remark": item.remark,
+        }
+        for item in payload.data.itinerary_days
+    ]
+    guests = [
+        {
+            "guest_id": item.guest_id,
+            "name": item.name,
+            "phone": item.phone,
+            "id_card": item.id_card,
+            "gender": item.gender,
+            "age": item.age,
+            "role": item.role,
+            "remark": item.remark,
+        }
+        for item in payload.data.guests
+    ]
+    transfers = [
+        {
+            "operation": item.operation,
+            "type": item.type,
+            "date": item.date.isoformat(),
+            "date_text": item.date_text,
+            "location": item.location,
+            "flight_or_train_no": item.flight_or_train_no,
+            "time": item.time,
+            "raw_shift_text": item.raw_shift_text,
+            "description": item.description,
+        }
+        for item in payload.data.transfers
+    ]
+    report_meta = {
+        "report_title": payload.data.report_meta.report_title,
+        "report_generated_at": payload.data.report_meta.report_generated_at,
+        "print_person": payload.data.report_meta.print_person,
+        "print_phone": payload.data.report_meta.print_phone,
+        "print_mobile": payload.data.report_meta.print_mobile,
+        "print_date": (
+            payload.data.report_meta.print_date.isoformat()
+            if payload.data.report_meta.print_date
+            else ""
+        ),
+        "source_url": payload.data.report_meta.source_url,
+        "source_file_name": payload.data.report_meta.source_file_name,
+        "page_count": payload.data.report_meta.page_count,
+    }
+    warnings = [{"field": item.field, "message": item.message} for item in payload.warnings]
+
+    return {
+        "destination": group.line_name,
+        "team_id": group.group_no,
+        "start_date": group.departure_date_start.isoformat() if group.departure_date_start else "",
+        "end_date": group.departure_date_end.isoformat() if group.departure_date_end else "",
+        "participants": int(group.people_count or len(guests) or 0),
+        "leader_name": guests[0].get("name", "") if guests else "",
+        "contact_phone": guests[0].get("phone", "") if guests else "",
+        "itinerary": itinerary,
+        "guests": guests,
+        "transfers": transfers,
+        "erp_group": group.model_dump(mode="json"),
+        "erp_report_meta": report_meta,
+        "erp_report_warnings": warnings,
+    }
+
+
 def _build_trip_import_snapshot(
     trip: dict[str, Any], execution_row: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -721,6 +908,7 @@ def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
     resolved_team_id = str(trip.get("team_id") or trip.get("team") or "")
     itinerary = trip.get("itinerary") if isinstance(trip.get("itinerary"), list) else []
     guests = trip.get("guests") if isinstance(trip.get("guests"), list) else []
+    transfers = trip.get("transfers") if isinstance(trip.get("transfers"), list) else []
     participants = int(trip.get("participants", 0) or 0)
     if guests:
         participants = len(guests)
@@ -737,6 +925,10 @@ def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
         "contact_phone": str(trip.get("contact_phone") or ""),
         "itinerary": itinerary,
         "guests": guests,
+        "transfers": transfers,
+        "erp_group": trip.get("erp_group", {}),
+        "erp_report_meta": trip.get("erp_report_meta", {}),
+        "erp_report_warnings": trip.get("erp_report_warnings", []),
         "user_id": trip.get("user_id", ""),
         "tenant_id": trip.get("tenant_id", ""),
         "created_at": trip.get("created_at"),
@@ -2436,6 +2628,48 @@ def create_app() -> FastAPI:
                 "created_count": len(created_items),
                 "skipped_count": skipped,
                 "items": created_items,
+            }
+        )
+
+    @fastapi_app.post("/api/erp/import-report")
+    def import_erp_report(
+        payload: ERPImportReportRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:write")
+        trip_payload = _build_trip_patch_from_erp_report(payload)
+        created = create_trip_record(
+            payload=TripCreateRequest(
+                destination=str(trip_payload["destination"]),
+                team_id=str(trip_payload["team_id"]),
+                start_date=str(trip_payload["start_date"]),
+                end_date=str(trip_payload["end_date"]),
+                participants=int(trip_payload["participants"]),
+                status="计划中",
+            ),
+            user=user,
+            ctx=ctx,
+        )
+        trip = created["trip"]
+        patch = {
+            "itinerary": trip_payload["itinerary"],
+            "guests": trip_payload["guests"],
+            "participants": max(int(trip_payload["participants"]), len(trip_payload["guests"])),
+            "leader_name": trip_payload["leader_name"],
+            "contact_phone": trip_payload["contact_phone"],
+            "transfers": trip_payload["transfers"],
+            "erp_group": trip_payload["erp_group"],
+            "erp_report_meta": trip_payload["erp_report_meta"],
+            "erp_report_warnings": trip_payload["erp_report_warnings"],
+        }
+        updated = ctx.trip_repository.update(trip["id"], patch)
+        return _ok(
+            {
+                "created_count": 1,
+                "skipped_count": 0,
+                "items": [_serialize_trip(updated or trip)],
+                "erp_report": payload.model_dump(mode="json"),
             }
         )
 
