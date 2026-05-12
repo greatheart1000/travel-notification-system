@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from gzip import decompress
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlencode
@@ -12,7 +13,7 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-WeatherTransport = Callable[[str, dict[str, str], dict[str, str]], dict[str, Any]]
+WeatherTransport = Callable[[str, str, dict[str, str], dict[str, str]], dict[str, Any]]
 
 
 class WeatherAlertProvider(Protocol):
@@ -29,6 +30,23 @@ class WeatherInfo:
     destination: str
     condition: str
     temperature: float
+    update_time: str = ""
+    obs_time: str = ""
+    feels_like: float | None = None
+    icon: str = ""
+    wind_degrees: int | None = None
+    wind_direction: str = ""
+    wind_scale: str = ""
+    wind_speed: float | None = None
+    humidity: int | None = None
+    precipitation: float | None = None
+    pressure: float | None = None
+    visibility: float | None = None
+    cloud: int | None = None
+    dew_point: float | None = None
+    fx_link: str = ""
+    refer_sources: list[str] = field(default_factory=list)
+    refer_license: list[str] = field(default_factory=list)
     warning_level: str | None = None
     alert_title: str = ""
     location_id: str = ""
@@ -65,10 +83,53 @@ def _normalize_warning_level(raw_title: str) -> str | None:
     return "warning"
 
 
+def _to_float(raw: Any) -> float | None:
+    if raw in (None, ""):
+        return None
+    return float(raw)
+
+
+def _to_int(raw: Any) -> int | None:
+    if raw in (None, ""):
+        return None
+    return int(raw)
+
+
+def _normalize_daily_forecast(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fx_date": str(item.get("fxDate", "")),
+        "sunrise": str(item.get("sunrise", "")),
+        "sunset": str(item.get("sunset", "")),
+        "moonrise": str(item.get("moonrise", "")),
+        "moonset": str(item.get("moonset", "")),
+        "moon_phase": str(item.get("moonPhase", "")),
+        "moon_phase_icon": str(item.get("moonPhaseIcon", "")),
+        "temp_max": _to_float(item.get("tempMax")),
+        "temp_min": _to_float(item.get("tempMin")),
+        "icon_day": str(item.get("iconDay", "")),
+        "text_day": str(item.get("textDay", "")),
+        "icon_night": str(item.get("iconNight", "")),
+        "text_night": str(item.get("textNight", "")),
+        "wind360_day": _to_int(item.get("wind360Day")),
+        "wind_dir_day": str(item.get("windDirDay", "")),
+        "wind_scale_day": str(item.get("windScaleDay", "")),
+        "wind_speed_day": _to_float(item.get("windSpeedDay")),
+        "wind360_night": _to_int(item.get("wind360Night")),
+        "wind_dir_night": str(item.get("windDirNight", "")),
+        "wind_scale_night": str(item.get("windScaleNight", "")),
+        "wind_speed_night": _to_float(item.get("windSpeedNight")),
+        "humidity": _to_int(item.get("humidity")),
+        "precip": _to_float(item.get("precip")),
+        "pressure": _to_float(item.get("pressure")),
+        "visibility": _to_float(item.get("vis")),
+        "cloud": _to_int(item.get("cloud")),
+        "uv_index": _to_int(item.get("uvIndex")),
+    }
+
+
 def _default_qweather_transport(
-    path: str, params: dict[str, str], headers: dict[str, str]
+    host: str, path: str, params: dict[str, str], headers: dict[str, str]
 ) -> dict[str, Any]:
-    host = os.getenv("QWEATHER_API_HOST", "").strip().rstrip("/")
     if not host:
         raise RuntimeError("QWEATHER_API_HOST is not configured")
 
@@ -78,7 +139,10 @@ def _default_qweather_transport(
         url = f"{url}?{query}"
     request = Request(url=url, headers=headers, method="GET")
     with urlopen(request, timeout=5) as response:
-        return json.loads(response.read().decode("utf-8"))
+        body = response.read()
+        if str(response.headers.get("Content-Encoding", "")).lower() == "gzip":
+            body = decompress(body)
+        return json.loads(body.decode("utf-8"))
 
 
 def _load_local_env_file() -> None:
@@ -93,6 +157,15 @@ def _load_local_env_file() -> None:
         key = key.strip()
         if key and key not in os.environ:
             os.environ[key] = value.strip().strip("'").strip('"')
+
+
+def _normalize_qweather_host(raw_host: str) -> str:
+    host = raw_host.strip()
+    if not host:
+        return ""
+    if not host.startswith(("http://", "https://")):
+        host = f"https://{host}"
+    return host.rstrip("/")
 
 
 @dataclass(slots=True)
@@ -142,18 +215,19 @@ class QWeatherProvider:
     def __post_init__(self) -> None:
         _load_local_env_file()
         if not self.api_host:
-            self.api_host = os.getenv("QWEATHER_API_HOST", "").strip().rstrip("/")
+            self.api_host = os.getenv("QWEATHER_API_HOST", "")
+        self.api_host = _normalize_qweather_host(self.api_host)
         if not self.api_key:
             self.api_key = os.getenv("QWEATHER_API_KEY", "").strip()
 
     def _headers(self) -> dict[str, str]:
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "Accept-Encoding": "gzip"}
         if self.api_key:
             headers["X-QW-Api-Key"] = self.api_key
         return headers
 
     def _request(self, path: str, params: dict[str, str]) -> dict[str, Any]:
-        return self.transport(path, params, self._headers())
+        return self.transport(self.api_host, path, params, self._headers())
 
     def _resolve_location(self, destination: str) -> dict[str, str]:
         payload = self._request("/geo/v2/city/lookup", {"location": destination})
@@ -187,6 +261,7 @@ class QWeatherProvider:
 
         now_payload = self._request("/v7/weather/now", {"location": location_id})
         hourly_payload = self._request("/v7/weather/24h", {"location": location_id})
+        daily_payload = self._request("/v7/weather/3d", {"location": location_id})
 
         alert_path = f"/weatheralert/v1/current/{lat}/{lon}" if lat and lon else ""
         alerts = []
@@ -195,17 +270,40 @@ class QWeatherProvider:
             alerts = list(alert_payload.get("warning") or [])
 
         now = now_payload.get("now") or {}
+        refer = now_payload.get("refer") or {}
         alert_title = str((alerts[0] or {}).get("title", "")) if alerts else ""
         return WeatherInfo(
             destination=resolved_destination,
             condition=str(now.get("text", "")),
             temperature=float(now.get("temp", 0.0) or 0.0),
+            update_time=str(now_payload.get("updateTime", "")),
+            obs_time=str(now.get("obsTime", "")),
+            feels_like=_to_float(now.get("feelsLike")),
+            icon=str(now.get("icon", "")),
+            wind_degrees=_to_int(now.get("wind360")),
+            wind_direction=str(now.get("windDir", "")),
+            wind_scale=str(now.get("windScale", "")),
+            wind_speed=_to_float(now.get("windSpeed")),
+            humidity=_to_int(now.get("humidity")),
+            precipitation=_to_float(now.get("precip")),
+            pressure=_to_float(now.get("pressure")),
+            visibility=_to_float(now.get("vis")),
+            cloud=_to_int(now.get("cloud")),
+            dew_point=_to_float(now.get("dew")),
+            fx_link=str(now_payload.get("fxLink", "")),
+            refer_sources=[str(item) for item in list(refer.get("sources") or [])],
+            refer_license=[str(item) for item in list(refer.get("license") or [])],
             warning_level=_normalize_warning_level(alert_title),
             alert_title=alert_title,
             location_id=location_id,
             lat=lat,
             lon=lon,
             hourly_forecast=list(hourly_payload.get("hourly") or []),
+            daily_forecast=[
+                _normalize_daily_forecast(item)
+                for item in list(daily_payload.get("daily") or [])
+                if isinstance(item, dict)
+            ],
             alerts=alerts,
             source="qweather",
         )
@@ -214,20 +312,25 @@ class QWeatherProvider:
 class WeatherProvider:
     def __init__(self) -> None:
         _load_local_env_file()
-        host = os.getenv("QWEATHER_API_HOST", "").strip()
+        self.provider: WeatherAlertProvider | None = None
+
+    def _provider(self) -> WeatherAlertProvider:
+        if self.provider is not None:
+            return self.provider
+        host = _normalize_qweather_host(os.getenv("QWEATHER_API_HOST", ""))
         api_key = os.getenv("QWEATHER_API_KEY", "").strip()
         host_configured = bool(host) and "__FILL_" not in host
-        if host_configured and api_key:
-            self.provider: WeatherAlertProvider = QWeatherProvider(
-                api_host=host,
-                api_key=api_key,
-            )
-        else:
-            self.provider = MockWeatherProvider()
+        if not host_configured or not api_key:
+            raise RuntimeError("QWEATHER_API_HOST and QWEATHER_API_KEY must be configured")
+        self.provider = QWeatherProvider(
+            api_host=host,
+            api_key=api_key,
+        )
+        return self.provider
 
     def get_weather(
         self,
         destination: str,
         location_context: dict[str, Any] | None = None,
     ) -> WeatherInfo:
-        return self.provider.get_weather(destination, location_context=location_context)
+        return self._provider().get_weather(destination, location_context=location_context)

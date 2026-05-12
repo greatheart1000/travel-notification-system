@@ -45,6 +45,26 @@ def _risk_badge(level: str) -> str:
     return mapping.get(level, "medium")
 
 
+def _forecast_text(weather: WeatherInfo) -> str:
+    if not weather.daily_forecast:
+        return ""
+    parts: list[str] = []
+    for item in weather.daily_forecast[:2]:
+        fx_date = str(item.get("fx_date") or "").strip()
+        text_day = str(item.get("text_day") or "").strip() or "天气变化"
+        temp_min = item.get("temp_min")
+        temp_max = item.get("temp_max")
+        precip = item.get("precip")
+
+        day_tokens = [fx_date + text_day if fx_date else text_day]
+        if temp_min is not None and temp_max is not None:
+            day_tokens.append(f"{temp_min:.0f}-{temp_max:.0f}°C")
+        if precip is not None:
+            day_tokens.append(f"降水{precip:.1f}mm")
+        parts.append("，".join(day_tokens))
+    return f"未来两天预报：{'；'.join(parts)}" if parts else ""
+
+
 @dataclass(slots=True)
 class EmergencyWeatherService:
     trip_repository: Any
@@ -197,10 +217,14 @@ class EmergencyWeatherService:
             weather_tokens.append(weather.alert_title)
         elif weather.warning_level:
             weather_tokens.append(f"{weather.warning_level}级预警")
+        forecast_summary = _forecast_text(weather)
+        if forecast_summary:
+            weather_tokens.append(forecast_summary)
 
         generated_notification = (
             f"【紧急天气通知】{weather.destination or selected_trip.get('destination', '')}未来6小时"
             f"{weather.condition or '天气变化明显'}，当前气温{weather.temperature:.1f}°C。"
+            f"{forecast_summary + '。' if forecast_summary else ''}"
             f"AI评估为{_risk_label(risk_level)}风险，预计影响{len(affected_trips)}个旅行团。"
             "请游客随身携带雨具和保暖衣物，减少长时间户外停留，集合与行程调整请以领队通知为准。"
         )
