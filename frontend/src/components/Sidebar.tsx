@@ -1,6 +1,6 @@
-import { BarChart3, Headphones, Home, MapPin, Plane, Settings } from 'lucide-react'
+import { BarChart3, Headphones, Home, MapPin, Plane } from 'lucide-react'
 
-type Page = 'dashboard' | 'trips' | 'preferences' | 'analytics'
+type Page = 'dashboard' | 'trips' | 'analytics'
 
 interface SidebarProps {
   currentPage: Page
@@ -9,57 +9,44 @@ interface SidebarProps {
 
 export function Sidebar({ currentPage, onPageChange }: SidebarProps) {
   const menuItems = [
-    { id: 'dashboard' as const, label: '仪表盘', icon: Home },
     { id: 'trips' as const, label: '行程管理', icon: Plane },
+    { id: 'dashboard' as const, label: '仪表盘', icon: Home },
     { id: 'analytics' as const, label: '数据分析', icon: BarChart3 },
-    { id: 'preferences' as const, label: '偏好设置', icon: Settings },
   ]
 
   return (
-    <aside className="flex h-screen w-64 flex-col bg-gradient-to-b from-sky-400 via-sky-500 to-blue-600 text-white shadow-2xl shadow-sky-900/20">
-      <div className="flex items-center gap-3 border-b border-white/10 p-6">
-        <div className="rounded-2xl bg-white/10 p-2 ring-1 ring-white/15">
-          <MapPin className="h-7 w-7" />
-        </div>
-        <div>
-          <h1 className="text-xl font-bold">Travel Hub</h1>
-          <p className="text-xs text-sky-100">行程管家服务</p>
+    <aside className="w-40 bg-gradient-to-b from-cyan-500 to-blue-600 text-white flex flex-col h-screen">
+      <div className="p-6">
+        <div className="flex items-center gap-2 mb-8">
+          <MapPin className="h-6 w-6" />
+          <div>
+            <div className="font-bold leading-tight">Travel Hub</div>
+            <div className="text-xs opacity-80">行程管理平台</div>
+          </div>
         </div>
       </div>
 
-      <nav className="flex-1 p-4">
-        <p className="mb-4 px-2 text-xs font-black uppercase tracking-[0.22em] text-sky-100">
-          菜单
-        </p>
-        <ul className="space-y-2">
-          {menuItems.map(({ id, label, icon: Icon }) => (
-            <li key={id}>
-              <button
-                onClick={() => onPageChange(id)}
-                className={`w-full rounded-xl px-4 py-3 text-left transition-all ${
-                  currentPage === id
-                    ? 'bg-white/95 text-sky-700 shadow-lg shadow-sky-900/20'
-                    : 'text-sky-50 hover:bg-white/20 hover:text-white'
-                }`}
-              >
-                <span className="flex items-center gap-3">
-                  <Icon className="h-5 w-5" />
-                  <span className="font-semibold">{label}</span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+      <nav className="flex-1 px-3">
+        {menuItems.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => onPageChange(id)}
+            className={`flex w-full items-center gap-3 px-4 py-3 rounded-lg mb-2 transition-colors text-left ${
+              currentPage === id ? 'bg-white/20 font-medium' : 'hover:bg-white/10'
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            <span className="text-sm">{label}</span>
+          </button>
+        ))}
       </nav>
 
-      <div className="border-t border-white/10 p-4">
-        <div className="rounded-2xl bg-white/10 p-4 text-sm ring-1 ring-white/10">
-          <div className="mb-2 flex items-center gap-2 font-bold">
-            <Headphones className="h-4 w-4" />
-            需要帮助？
-          </div>
-          <p className="text-xs leading-5 text-sky-50">联系值班管家团队获取运营支持</p>
-        </div>
+      <div className="p-4 border-t border-white/20">
+        <button className="flex items-center gap-2 text-sm opacity-80 hover:opacity-100">
+          <Headphones className="h-4 w-4" />
+          <span>需要帮助?</span>
+        </button>
+        <div className="text-xs mt-2 opacity-60">联系我们获取技术支持</div>
       </div>
     </aside>
   )

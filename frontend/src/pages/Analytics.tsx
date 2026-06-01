@@ -1,194 +1,132 @@
 import { useEffect, useState } from 'react'
-import { Card } from '../components/Card'
-import { MetricTile } from '../components/MetricTile'
-import { PageShell } from '../components/PageShell'
-import { PageState } from '../components/PageState'
-import { AlertTriangle, BarChart3, CheckCircle, Clock, Mail, Plus, TrendingUp } from 'lucide-react'
-import { api, getErrorMessage, tripsApi } from '../services/api'
-import { CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { type Trip, type TripSchedule } from '../types/api'
-
-const COLORS = ['#2563eb', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444']
+import { FigmaAnalyticsService, type MakeAnalyticsData } from '../services/figmaTripService'
 
 export function Analytics() {
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [data, setData] = useState<any>(null)
-  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null)
-  const [schedule, setSchedule] = useState<TripSchedule | null>(null)
-
-  const resolvePreferredTrip = (trips: Trip[]): Trip | null => {
-    if (trips.length === 0) return null
-    return (
-      trips.find((trip) => trip.status === 'in_progress')
-      || trips.find((trip) => trip.status === 'planned')
-      || trips[0]
-    )
-  }
-
-  const loadData = async () => {
-    setLoading(true)
-    try {
-      const [res, trips] = await Promise.all([
-        api.get('/analytics/metrics'),
-        tripsApi.list(),
-      ])
-      const preferredTrip = resolvePreferredTrip(trips)
-      setSelectedTrip(preferredTrip)
-      if (preferredTrip) {
-        const tripSchedule = await tripsApi.getSchedule(preferredTrip.id)
-        setSchedule(tripSchedule)
-      } else {
-        setSchedule(null)
-      }
-      setData(res)
-      setError('')
-    } catch (err) {
-      setError(getErrorMessage(err))
-    } finally {
-      setLoading(false)
-    }
-  }
+  const [analyticsData, setAnalyticsData] = useState<MakeAnalyticsData | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
-    void loadData()
+    let active = true
+
+    const loadAnalytics = async () => {
+      try {
+        const data = await FigmaAnalyticsService.getAnalytics()
+        if (active) setAnalyticsData(data)
+      } catch (error) {
+        if (active) setLoadError(error instanceof Error ? error.message : 'API 数据分析加载失败')
+      }
+    }
+
+    void loadAnalytics()
+
+    return () => {
+      active = false
+    }
   }, [])
 
-  if (loading) {
-    return (
-      <PageShell title="行程通知数据分析">
-        <PageState kind="loading" title="正在加载高级报表" />
-      </PageShell>
-    )
+  if (loadError) {
+    return <div className="p-6"><div className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">{loadError}</div></div>
   }
 
-  if (error) {
-    return (
-      <PageShell title="行程通知数据分析">
-        <PageState kind="error" title="加载失败" description={error} onRetry={loadData} />
-      </PageShell>
-    )
+  if (!analyticsData) {
+    return <div className="p-6"><div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-gray-600">正在通过 API 加载数据分析...</div></div>
   }
-
-  const summary = data.summary ?? {}
-  const metrics = data.metrics ?? {}
-  const chartTrend = data.charts?.notification_trend ?? []
-  const channelDistribution = data.charts?.channel_distribution ?? []
 
   return (
-    <PageShell
-      eyebrow="数据分析"
-      title="行程通知与紧急预警分析看板"
-      description="集中查看通知表现、紧急预警以及来自数据库的行程编排数据。"
-      actions={
-        <button className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-bold text-white transition hover:bg-slate-900">
-          <Plus className="mr-2 inline h-4 w-4" />
-          新增行程日
-        </button>
-      }
-    >
-      <div className="mb-5 flex items-center justify-between rounded-xl bg-gradient-to-r from-red-700 to-red-500 px-5 py-4 text-white shadow-lg shadow-red-900/20">
-        <div className="flex items-center gap-3">
-          <AlertTriangle className="h-6 w-6" />
-          <span className="font-black">紧急天气预警：</span>
-          <span className="text-red-50">建议立即向所有在途团发送风险提示</span>
+    <div className="p-6">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">数据分析</h1>
+        <p className="text-gray-600">查看各类数据统计和分析报表</p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-2 xl:grid-cols-4">
+        {analyticsData.overview.map((item) => (
+          <div key={item.label} className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <div className="text-gray-600 text-sm mb-2">{item.label}</div>
+            <div className="flex items-end justify-between">
+              <div className="text-3xl font-bold text-gray-900">{item.value}</div>
+              <div className="text-sm text-green-600">{item.trend}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 mb-6 xl:grid-cols-2">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+            <h2 className="font-semibold text-gray-900">旅行团状态分布</h2>
+          </div>
+          <div className="p-6">
+            {analyticsData.tripStats.map((stat) => (
+              <div key={stat.status} className="mb-4 last:mb-0">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm text-gray-700">{stat.status}</span>
+                  <span className="text-sm font-medium text-gray-900">{stat.count} 个 ({stat.percentage}%)</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div className={`${stat.color} h-2 rounded-full`} style={{ width: `${stat.percentage}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <button className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-red-700 transition hover:bg-red-50">
-          发送预警
-        </button>
+
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+            <h2 className="font-semibold text-gray-900">通知发送统计</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">通知类型</th>
+                  <th className="px-4 py-3 text-right font-medium text-gray-700">发送数</th>
+                  <th className="px-4 py-3 text-right font-medium text-gray-700">成功数</th>
+                  <th className="px-4 py-3 text-right font-medium text-gray-700">成功率</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {analyticsData.notificationStats.map((stat) => (
+                  <tr key={stat.type} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-gray-900">{stat.type}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{stat.sent}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{stat.success}</td>
+                    <td className="px-4 py-3 text-right"><span className="text-green-600 font-medium">{stat.rate}%</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <MetricTile title="通知发送总量" value={String(metrics.total_notifications ?? summary.total_notifications ?? 0)} detail="近7日发送规模" trend="增长" trendTone="good" icon={Mail} />
-        <MetricTile title="平均送达率" value={String(metrics.notification_success_rate ?? summary.success_rate ?? '0%')} detail="对比目标值稳定" trend="稳定" trendTone="good" icon={CheckCircle} />
-        <MetricTile title="平均响应耗时" value={String(metrics.avg_response_time ?? `${summary.avg_latency_ms ?? 0}ms`)} detail="自动派发耗时" trend="改善" trendTone="good" icon={Clock} />
-        <MetricTile title="渠道增长率" value={`${summary.wow_growth ?? metrics.wow_growth ?? 0}%`} detail="环比增长表现" trend="增长" trendTone="good" icon={TrendingUp} />
-      </div>
-
-      <Card
-        title={`行程短信编排明细${selectedTrip ? `（${selectedTrip.destination}）` : ''}`}
-        className="mt-6 border-blue-100 shadow-[0_14px_40px_rgba(15,23,42,0.06)]"
-      >
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+          <h2 className="font-semibold text-gray-900">近期旅行团表现</h2>
+        </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-sm">
+          <table className="w-full text-sm">
             <thead>
-              <tr className="bg-blue-50 text-left text-slate-700">
-                <th className="px-3 py-4 font-black">日期</th>
-                <th className="px-3 py-4 font-black">交通方式</th>
-                <th className="px-3 py-4 font-black">路线详情</th>
-                <th className="px-3 py-4 font-black">酒店</th>
-                <th className="px-3 py-4 font-black">晨间提醒</th>
-                <th className="px-3 py-4 font-black">午间提醒</th>
-                <th className="px-3 py-4 font-black">晚间提醒</th>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-6 py-3 text-left font-medium text-gray-700">团名</th>
+                <th className="px-6 py-3 text-right font-medium text-gray-700">参与人数</th>
+                <th className="px-6 py-3 text-right font-medium text-gray-700">收入</th>
+                <th className="px-6 py-3 text-right font-medium text-gray-700">满意度</th>
               </tr>
             </thead>
-            <tbody>
-              {(schedule?.days ?? []).map((day) => (
-                <tr key={`${day.day}-${day.date}`} className="border-b border-slate-100 align-top hover:bg-blue-50/40">
-                  <td className="px-3 py-4 font-bold text-slate-900">{day.date || `第 ${day.day} 天`}</td>
-                  <td className="px-3 py-4 text-slate-600">{day.transport || '待补充'}</td>
-                  <td className="px-3 py-4 text-slate-700">{day.route || '待补充行程路线'}</td>
-                  <td className="px-3 py-4 font-mono text-slate-500">{day.hotel || '待补充酒店'}</td>
-                  {[
-                    `08:00 早安提醒｜${day.route || '今日路线待配置'}`,
-                    `12:30 午间提醒｜${day.transport || '交通待配置'}`,
-                    `18:00 晚间提醒｜${day.hotel || '住宿待配置'}`,
-                  ].map((message) => (
-                    <td key={message} className="px-3 py-4">
-                      <p className="mb-2 max-w-[190px] text-slate-700">{message}</p>
-                      <div className="flex gap-2">
-                        <button className="rounded bg-blue-600 px-2 py-1 font-bold text-white">+</button>
-                        <button className="rounded bg-slate-100 px-2 py-1 text-slate-600">✎</button>
-                        <button className="rounded bg-slate-100 px-2 py-1 text-slate-600">🗑</button>
-                      </div>
-                    </td>
-                  ))}
+            <tbody className="divide-y divide-gray-200">
+              {analyticsData.recentTrips.map((trip) => (
+                <tr key={trip.name} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 text-gray-900">{trip.name}</td>
+                  <td className="px-6 py-4 text-right text-gray-700">{trip.participants} 人</td>
+                  <td className="px-6 py-4 text-right text-gray-700">¥{trip.revenue.toLocaleString()}</td>
+                  <td className="px-6 py-4 text-right"><span className="text-yellow-600 font-medium">{trip.satisfaction} ⭐</span></td>
                 </tr>
               ))}
-              {(schedule?.days ?? []).length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-3 py-10 text-center text-slate-500">
-                    暂无数据库行程日数据，请先在行程管理中新增每日安排。
-                  </td>
-                </tr>
-              ) : null}
             </tbody>
           </table>
         </div>
-      </Card>
-
-      <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-2">
-        <Card title="发送量趋势 (近7日)" className="border-blue-100">
-          <div className="mt-4 h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartTrend}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
-                <Tooltip />
-                <Line type="monotone" dataKey="count" name="总发送" stroke="#2563eb" strokeWidth={3} dot={{ r: 4, fill: '#2563eb' }} activeDot={{ r: 6 }} />
-                <Line type="monotone" dataKey="success" name="成功数" stroke="#10b981" strokeWidth={3} dot={{ r: 4, fill: '#10b981' }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card title="发送渠道分布" className="border-blue-100">
-          <div className="mt-4 h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={channelDistribution} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value">
-                  {channelDistribution.map((_: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend verticalAlign="bottom" height={36} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
       </div>
-    </PageShell>
+    </div>
   )
 }

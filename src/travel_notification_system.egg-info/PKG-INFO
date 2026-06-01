@@ -4,6 +4,8 @@ Version: 0.1.0
 Summary: Backend modular skeleton for itinerary notification and butler workflow
 Requires-Python: >=3.11
 Requires-Dist: fastapi>=0.115.0
+Requires-Dist: apscheduler<4,>=3.10
+Requires-Dist: python-multipart>=0.0.9
 Requires-Dist: pydantic>=2.8.0
 Requires-Dist: pymysql>=1.1.0
 Requires-Dist: uvicorn>=0.30.0

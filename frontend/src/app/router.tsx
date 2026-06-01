@@ -1,5 +1,7 @@
 export type AppPage =
   | 'dashboard'
+  | 'dashboard_ongoing_trips'
+  | 'dashboard_pending_notifications'
   | 'tasks_todo'
   | 'tasks_overdue'
   | 'tasks_takeover'
@@ -8,7 +10,6 @@ export type AppPage =
   | 'group_high_risk'
   | 'group_detail'
   | 'trips'
-  | 'preferences'
   | 'analytics'
 
 export interface AppRoute {
@@ -22,6 +23,8 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
   const parts = pathname.split('/').filter(Boolean)
 
   if (parts.length === 0 || parts[0] === 'dashboard') {
+    if (parts[1] === 'ongoing-trips') return { page: 'dashboard_ongoing_trips' }
+    if (parts[1] === 'pending-notifications') return { page: 'dashboard_pending_notifications' }
     return { page: 'dashboard' }
   }
 
@@ -40,6 +43,9 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
   }
   if (parts[0] === 'groups' && parts[1] === 'high-risk') return { page: 'group_high_risk' }
 
+  if (parts[0] === 'trips' && parts[1] && parts[2] === 'notifications') {
+    return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
+  }
   if (parts[0] === 'trips' && parts[1]) return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
   if (parts[0] === 'trips') return { page: 'trips', tripId: null }
 
@@ -48,9 +54,9 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
       return { page: 'trips', tripId: decodeURIComponent(parts[2]) }
     }
     const query = new URLSearchParams(search)
-    return { page: 'trips', tripId: query.get('trip_id') }
+    const tripId = query.get('trip_id')
+    return tripId ? { page: 'trips', tripId } : { page: 'trips', tripId: null }
   }
-  if (parts[0] === 'preferences') return { page: 'preferences' }
   if (parts[0] === 'analytics') return { page: 'analytics' }
 
   return { page: 'dashboard' }
@@ -60,6 +66,10 @@ export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: 
   switch (page) {
     case 'dashboard':
       return '/dashboard'
+    case 'dashboard_ongoing_trips':
+      return '/dashboard/ongoing-trips'
+    case 'dashboard_pending_notifications':
+      return '/dashboard/pending-notifications'
     case 'tasks_todo':
       return '/tasks/todo'
     case 'tasks_overdue':
@@ -74,8 +84,6 @@ export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: 
       return '/groups/high-risk'
     case 'group_detail':
       return `/groups/high-risk/${encodeURIComponent(params?.groupId ?? '')}`
-    case 'preferences':
-      return '/preferences'
     case 'analytics':
       return '/analytics'
     case 'trips':
