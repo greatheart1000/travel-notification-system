@@ -11,6 +11,7 @@ import { authApi, getErrorMessage } from './services/api'
 
 const Analytics = lazy(() => import('./pages/Analytics').then((module) => ({ default: module.Analytics })))
 const Trips = lazy(() => import('./pages/Trips').then((module) => ({ default: module.Trips })))
+const TripNotifications = lazy(() => import('./pages/TripNotifications').then((module) => ({ default: module.TripNotifications })))
 
 function PageLoadingFallback() {
   return (
@@ -22,11 +23,14 @@ function PageLoadingFallback() {
 }
 
 function setupMockAuth(): void {
-  setAuthTokens({
-    access_token: 'figma-make-mock-access-token',
-    refresh_token: 'figma-make-mock-refresh-token',
-    token_type: 'Bearer',
-  })
+  // Only use mock auth in dev mode, never in production
+  if (import.meta.env.DEV) {
+    setAuthTokens({
+      access_token: 'figma-make-mock-access-token',
+      refresh_token: 'figma-make-mock-refresh-token',
+      token_type: 'Bearer',
+    })
+  }
 }
 
 export default function App() {
@@ -40,7 +44,7 @@ export default function App() {
 
   const navigate = useCallback((path: string) => {
     window.history.pushState({}, '', path)
-    setRoute(parseAppRoute(window.location.pathname, window.location.search))
+    setRoute(parseAppRoute(path, ''))
   }, [])
 
   useEffect(() => {
@@ -59,7 +63,7 @@ export default function App() {
         }
       } catch (error) {
         if (active) {
-          setIsAuthenticated(true)
+          setIsAuthenticated(false)
           setAuthError(null)
         }
       } finally {
@@ -102,10 +106,7 @@ export default function App() {
       setIsAuthenticated(true)
       navigate('/dashboard')
     } catch (error) {
-      setupMockAuth()
-      setIsAuthenticated(true)
-      setAuthError(`已进入 Figma Mock 模式：${getErrorMessage(error)}`)
-      navigate('/dashboard')
+      setAuthError(getErrorMessage(error))
     } finally {
       setIsLoginSubmitting(false)
     }
@@ -118,8 +119,8 @@ export default function App() {
   }, [])
 
   const sidebarPage = useMemo(() => {
-    if (route.page === 'analytics' || route.page === 'trips') {
-      return route.page
+    if (route.page === 'analytics' || route.page === 'trips' || route.page === 'trip_notifications') {
+      return route.page === 'trip_notifications' ? 'trips' : route.page
     }
     return 'dashboard'
   }, [route.page])
@@ -138,6 +139,13 @@ export default function App() {
             tripId={route.tripId ?? null}
             onOpenTrip={(tripId) => navigate(`/trips/${encodeURIComponent(tripId)}`)}
             onBackToList={() => navigate('/trips')}
+          />
+        )
+      case 'trip_notifications':
+        return (
+          <TripNotifications
+            tripId={route.tripId ?? ''}
+            onBackToTrip={() => navigate(`/trips/${encodeURIComponent(route.tripId ?? '')}`)}
           />
         )
       case 'analytics':

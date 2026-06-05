@@ -25,6 +25,7 @@ from app.core.models import Channel
 from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
+from app.modules.integration.wechat_provider import WeChatWorkWebhookProvider
 from app.modules.integration.persistence import (
     JsonFileStore,
     ProjectNotificationConfigRepository,
@@ -2907,6 +2908,106 @@ def create_app() -> FastAPI:
         )
         return {"code": 200}
 
+    # ── 高品质游客存档 ────────────────────────────────────────────────────────
+    @fastapi_app.post("/api/trips/{trip_id}/guests/{guest_id}/mark-vip")
+    def mark_guest_vip(
+        trip_id: str,
+        guest_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:write")
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        guests = list(trip.get("guests") or [])
+        updated = False
+        for g in guests:
+            if str(g.get("id") or g.get("phone") or "") == guest_id:
+                g["is_vip"] = True
+                g["vip_tagged_by"] = user["id"]
+                updated = True
+                break
+        if not updated:
+            raise HTTPException(status_code=404, detail="Guest not found")
+        ctx.trip_repository.update(trip_id, {"guests": guests})
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="guest_marked_vip",
+            target=trip_id,
+            detail={"guest_id": guest_id},
+        )
+        return _ok({"trip_id": trip_id, "guest_id": guest_id, "is_vip": True})
+
+    @fastapi_app.get("/api/guests/vip")
+    def list_vip_guests(
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        tenant_id = _current_tenant_id(user)
+        vip_list: list[dict[str, Any]] = []
+        for trip in ctx.trip_repository.list():
+            if str(trip.get("tenant_id", "")) != tenant_id:
+                continue
+            for g in (trip.get("guests") or []):
+                if g.get("is_vip"):
+                    vip_list.append({
+                        "trip_id": trip.get("id"),
+                        "trip_name": trip.get("destination") or trip.get("team_id"),
+                        "guest_name": g.get("name"),
+                        "guest_phone": g.get("phone"),
+                        "vip_tagged_by": g.get("vip_tagged_by"),
+                    })
+        return _ok({"vip_guests": vip_list, "total": len(vip_list)})
+
+    # ── 行程单推送给司导 ──────────────────────────────────────────────────────
+    @fastapi_app.post("/api/trips/{trip_id}/notify-driver")
+    def notify_driver(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        driver_name = str(trip.get("driver_name") or "司机")
+        driver_phone = str(trip.get("driver_phone") or "")
+        destination = str(trip.get("destination") or "")
+        start_date = str(trip.get("start_date") or "")
+        end_date = str(trip.get("end_date") or "")
+        guests = trip.get("guests") or []
+        guest_count = len(guests)
+        itinerary = trip.get("itinerary") or []
+        itinerary_text = "\n".join(
+            f"  Day{i+1}: {day.get('title','') or day.get('location','') or ''}"
+            for i, day in enumerate(itinerary[:7])
+        ) or "  请参见行程详情"
+        content = (
+            f"【行程确认单】{driver_name}师傅您好！\n"
+            f"目的地：{destination}\n"
+            f"行程日期：{start_date} ~ {end_date}\n"
+            f"游客人数：{guest_count} 人\n"
+            f"行程简介：\n{itinerary_text}\n"
+            f"负责人：{str(trip.get('trip_manager_name') or trip.get('concierge_name') or '管家')}"
+            f"（{str(trip.get('contact_phone') or '')}）\n"
+            f"请提前检查车辆，准时就位，谢谢！"
+        )
+        webhook = WeChatWorkWebhookProvider()
+        ok, msg = webhook.send(f"driver:{trip_id}", content)
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="driver_notified",
+            target=trip_id,
+            detail={"ok": ok, "driver_name": driver_name, "driver_phone": driver_phone},
+        )
+        if not ok:
+            raise HTTPException(status_code=502, detail=f"WeChat push failed: {msg}")
+        return _ok({"trip_id": trip_id, "driver_name": driver_name, "message": "行程单已推送"})
+
     @fastapi_app.post("/api/notifications/generate-daily")
     def generate_daily_notifications(
         payload: DailyNotificationGenerateRequest,
@@ -3556,6 +3657,94 @@ def create_app() -> FastAPI:
                 tenant_id=tenant_id,
             )
         )
+
+    # ── Notification Rules CRUD ─────────────────────
+
+    @fastapi_app.get("/api/notifications/rules")
+    def list_notification_rules(
+        enabled: bool | None = None,
+        stage: str | None = None,
+        time_slot: str | None = None,
+        scene: str | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        rules = ctx.notification_rule_repository.list_rules(
+            tenant_id=_current_tenant_id(user),
+            enabled=enabled,
+            stage=stage,
+            time_slot=time_slot,
+            scene=scene,
+        )
+        return _ok({"total": len(rules), "items": rules})
+
+    @fastapi_app.post("/api/notifications/rules", status_code=201)
+    def create_notification_rule(
+        payload: NotificationRuleCreateRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        try:
+            rule = ctx.notification_rule_repository.create_rule({
+                "name": payload.name,
+                "stage": payload.stage,
+                "time_slot": payload.time_slot,
+                "scene": payload.scene,
+                "channels": payload.channels,
+                "template_id": payload.template_id,
+                "enabled": payload.enabled,
+                "priority": payload.priority,
+                "conditions": payload.conditions,
+                "tenant_id": _current_tenant_id(user),
+            })
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        return _ok({"rule": rule})
+
+    @fastapi_app.get("/api/notifications/rules/{rule_id}")
+    def get_notification_rule(
+        rule_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        rule = ctx.notification_rule_repository.get_rule(
+            rule_id, tenant_id=_current_tenant_id(user)
+        )
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        return _ok(rule)
+
+    @fastapi_app.put("/api/notifications/rules/{rule_id}")
+    def update_notification_rule(
+        rule_id: str,
+        payload: NotificationRuleUpdateRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        try:
+            rule = ctx.notification_rule_repository.update_rule(
+                rule_id,
+                payload.model_dump(exclude_none=True),
+                tenant_id=_current_tenant_id(user),
+            )
+        except RuleValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        return _ok(rule)
+
+    @fastapi_app.delete("/api/notifications/rules/{rule_id}")
+    def delete_notification_rule(
+        rule_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        deleted = ctx.notification_rule_repository.delete_rule(
+            rule_id, tenant_id=_current_tenant_id(user)
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        return _ok({"deleted": True})
 
     return fastapi_app
 

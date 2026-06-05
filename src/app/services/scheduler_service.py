@@ -8,6 +8,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.models import Channel, NotificationType
 from app.modules.integration.weather_provider import WeatherInfo, WeatherProvider
+from app.modules.integration.wechat_provider import WeChatWorkWebhookProvider
+from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
 from app.modules.notification.models import NotificationTask
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ class AutoNotificationScheduler:
         self._register_cron_jobs()
 
     def _register_cron_jobs(self) -> None:
-        minute, hour = _parse_cron(os.getenv("NOTIFICATION_MORNING_CRON", "0 8 * * *"), 8)
+        minute, hour = _parse_cron(os.getenv("NOTIFICATION_MORNING_CRON", "30 7 * * *"), 7)
         self.scheduler.add_job(
             self.run_morning_slot,
             "cron",
@@ -113,7 +115,7 @@ class AutoNotificationScheduler:
                 str(trip.get("destination", "")),
                 location_context=self._build_weather_context(trip, project_config),
             )
-            scene = self._resolve_scene(weather_info, project_config)
+            scene = self._resolve_scene(weather_info, project_config, trip)
             template = self.ctx.template_service.pick_notification_template(
                 tenant_id=str(trip.get("tenant_id", "tenant-a")),
                 project_id=self._resolve_project_id(trip),
@@ -174,6 +176,11 @@ class AutoNotificationScheduler:
                 self.ctx.notification_service.dispatch(task)
                 self.ctx.idempotency_store.mark(idempotency_key)
 
+            # 在途行程额外发送分岗位话术到企业微信群
+            if stage == "in_trip" and time_slot in ("morning", "afternoon"):
+                effective_slot = "morning" if time_slot == "morning" else "noon"
+                self._send_staff_role_messages(trip, effective_slot, current_time)
+
             self.ctx.audit_service.record(
                 operator_id="system_scheduler",
                 action="auto_notification_dispatched",
@@ -219,10 +226,20 @@ class AutoNotificationScheduler:
                 return "post_trip"
         return None
 
+    _SCENE_TAG_MAP: dict[str, str] = {
+        "骑马": "horse_riding",
+        "滑雪": "ski",
+        "高原": "highland",
+        "边境口岸": "border",
+        "极寒": "extreme_cold",
+        "强紫外线": "uv_alert",
+    }
+
     def _resolve_scene(
         self,
         weather_info: WeatherInfo,
         project_config: dict[str, object] | None,
+        trip: dict[str, object] | None = None,
     ) -> str:
         thresholds = (project_config or {}).get("weather_alert_thresholds") or {}
         if not isinstance(thresholds, dict):
@@ -233,6 +250,14 @@ class AutoNotificationScheduler:
             not normalized_levels or weather_info.warning_level.lower() in normalized_levels
         ):
             return "weather_alert"
+        # 检查行程特殊场景标签
+        tags = (trip or {}).get("scene_tags") or []
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        for tag in tags:
+            scene = self._SCENE_TAG_MAP.get(str(tag).strip())
+            if scene:
+                return scene
         return "normal"
 
     def _resolve_provider_template_code(
@@ -289,7 +314,67 @@ class AutoNotificationScheduler:
             "concierge_name": str(trip.get("concierge_name") or "AI管家"),
             "contact_phone": str(trip.get("contact_phone") or ""),
             "time_slot": current_time.strftime("%H:%M"),
+            "next_day_weather": str(trip.get("next_day_weather") or weather_text),
+            "next_day_highlight": str(trip.get("next_day_highlight") or "请关注明日群内通知"),
         }
+
+
+    # ── 分岗位发送 ────────────────────────────────────────────────────────────
+
+    _SEASON_MAP: dict[int, str] = {
+        1: "winter", 2: "winter", 3: "spring",
+        4: "spring", 5: "spring", 6: "summer",
+        7: "summer", 8: "summer", 9: "autumn",
+        10: "autumn", 11: "autumn", 12: "winter",
+    }
+
+    def _resolve_season(self, dt: datetime) -> str:
+        return self._SEASON_MAP.get(dt.month, "summer")
+
+    def _render_staff_template(self, content: str, variables: dict[str, str]) -> str:
+        for key, value in variables.items():
+            content = content.replace("{{" + key + "}}", value)
+        return content
+
+    def _send_staff_role_messages(
+        self,
+        trip: dict,
+        time_slot: str,
+        current_time: datetime,
+    ) -> None:
+        season = self._resolve_season(current_time)
+        slot = "morning" if time_slot == "morning" else "noon"
+        if slot not in ("morning", "noon"):
+            return
+
+        roles = [
+            ("manager", "manager_name", "manager_phone"),
+            ("concierge", "concierge_name", "concierge_phone"),
+            ("driver", "driver_name", "driver_phone"),
+        ]
+
+        webhook = WeChatWorkWebhookProvider()
+
+        for role, name_field, phone_field in roles:
+            key = f"{slot}_{season}_{role}"
+            template_content = MESSAGE_TEMPLATES.get(key)
+            if not template_content:
+                continue
+
+            staff_vars = {
+                "manager_name": str(trip.get("trip_manager_name") or trip.get("concierge_name") or "负责人"),
+                "manager_phone": str(trip.get("trip_manager_phone") or trip.get("contact_phone") or ""),
+                "concierge_name": str(trip.get("concierge_name") or "管家"),
+                "concierge_phone": str(trip.get("concierge_phone") or trip.get("contact_phone") or ""),
+                "driver_name": str(trip.get("driver_name") or "司机"),
+                "driver_phone": str(trip.get("driver_phone") or ""),
+            }
+            rendered = self._render_staff_template(template_content, staff_vars)
+            ok, msg = webhook.send(f"staff:{role}:{trip.get('id','')}", rendered)
+            if not ok:
+                logger.warning("[StaffDispatch] role=%s trip=%s failed: %s", role, trip.get("id"), msg)
+            else:
+                logger.info("[StaffDispatch] role=%s trip=%s sent ok", role, trip.get("id"))
 
 
 def init_scheduler(ctx):

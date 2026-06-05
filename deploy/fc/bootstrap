@@ -1,0 +1,19 @@
+#!/bin/bash
+# FC Python3 运行时 bootstrap
+set -e
+
+# FC 自动注入 PORT，用它；否则用 9000
+export PORT="${PORT:-9000}"
+export FC_SERVER_PORT="${PORT}"
+
+export TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND="${TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND:-json}"
+export TRAVEL_NOTIFICATION_DB_DIR="${TRAVEL_NOTIFICATION_DB_DIR:-/tmp/travel-data}"
+export TRAVEL_NOTIFICATION_CORS_ORIGINS="${TRAVEL_NOTIFICATION_CORS_ORIGINS:-*}"
+export PYTHONPATH="/code:${PYTHONPATH}"
+export FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-/code/frontend}"
+
+echo "[bootstrap] PORT=${PORT}" >&2
+echo "[bootstrap] python=$(which python3)" >&2
+echo "[bootstrap] persistence=${TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND}" >&2
+
+exec python3 /code/serve.py 2>&1

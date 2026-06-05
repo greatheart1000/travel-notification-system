@@ -82,8 +82,10 @@ import {
   type WorkbenchTask,
 } from '../types/api'
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
+
 const client = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',

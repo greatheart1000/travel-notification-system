@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FigmaTripService, FigmaWeatherService } from '../services/figmaTripService'
 import type { MakeTrip, MakeTripStatus, MakeWeatherInfo } from '../data/figmaMockData'
+import { makeStatusColorMap } from '../data/figmaMockData'
 import { TripDetail } from './TripDetail'
+
+// Module-level cache — persists across navigations within the same session
+let cachedTrips: MakeTrip[] | null = null
+let cachedWeather: MakeWeatherInfo[] | null = null
+let cachedStatusColorMap: Partial<Record<MakeTripStatus, string>> | null = null
 
 interface TripsProps {
   tripId?: string | null
@@ -30,8 +36,13 @@ export function Trips({
   const [warningMessageContent, setWarningMessageContent] = useState('')
   const [editableWarnings, setEditableWarnings] = useState<MakeWeatherInfo[]>([])
   const [statusColorMap, setStatusColorMap] = useState<Partial<Record<MakeTripStatus, string>>>({})
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(!cachedTrips)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
+  const [newTrip, setNewTrip] = useState<MakeTrip>({
+    id: '', teamId: '', name: '', code: '', startDate: '', endDate: '',
+    participants: 0, leader: '', status: '招募中', statusColor: makeStatusColorMap['招募中'] ?? '',
+  })
   const itemsPerPage = 10
 
   const warningCities = useMemo(() => weatherData.filter((weather) => weather.warning !== null), [weatherData])
@@ -42,7 +53,13 @@ export function Trips({
     let active = true
 
     const loadApiData = async () => {
-      setIsLoading(true)
+      // Show cached data immediately if available
+      if (cachedTrips) {
+        setTrips(cachedTrips)
+        if (cachedWeather) setWeatherData(cachedWeather)
+        if (cachedStatusColorMap) setStatusColorMap(cachedStatusColorMap)
+      }
+      setIsLoading(!cachedTrips)
       setLoadError(null)
       try {
         const [apiTrips, apiWeather, apiStatusColorMap] = await Promise.all([
@@ -51,6 +68,9 @@ export function Trips({
           FigmaTripService.getStatusColorMap(),
         ])
         if (!active) return
+        cachedTrips = apiTrips
+        cachedWeather = apiWeather
+        cachedStatusColorMap = apiStatusColorMap
         setTrips(apiTrips)
         setWeatherData(apiWeather)
         setStatusColorMap(apiStatusColorMap)
@@ -80,6 +100,7 @@ export function Trips({
 
   const refreshTrips = async () => {
     const nextTrips = await FigmaTripService.getAllTrips()
+    cachedTrips = nextTrips
     setTrips(nextTrips)
     return nextTrips
   }
@@ -136,7 +157,37 @@ export function Trips({
   }
 
   const handleCreateTrip = () => {
-    setToast('创建新团为演示按钮：新版 Make 中仅展示入口，未配置弹窗。')
+    setIsCreating(true)
+  }
+
+  const handleCancelCreate = () => {
+    setIsCreating(false)
+    setNewTrip({
+      id: '', teamId: '', name: '', code: '', startDate: '', endDate: '',
+      participants: 0, leader: '', status: '招募中', statusColor: makeStatusColorMap['招募中'] ?? '',
+    })
+  }
+
+  const handleSaveNewTrip = async () => {
+    if (!newTrip.name.trim() || !newTrip.code.trim() || !newTrip.startDate || !newTrip.endDate) {
+      setToast('请填写团名、团号、开始日期和结束日期')
+      return
+    }
+    try {
+      await FigmaTripService.createTrip({
+        name: newTrip.name,
+        teamId: newTrip.code,
+        startDate: newTrip.startDate,
+        endDate: newTrip.endDate,
+        participants: newTrip.participants,
+        leader: newTrip.leader,
+      })
+      await refreshTrips()
+      setToast(`创建成功：${newTrip.name}`)
+      handleCancelCreate()
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '创建失败')
+    }
   }
 
   const buildWarningMessage = (warnings: MakeWeatherInfo[]) => {
@@ -297,6 +348,46 @@ export function Trips({
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
+              {isCreating && (
+                <tr className="bg-green-50">
+                  <td className="pl-4 pr-2 py-3"></td>
+                  <td className="px-3 py-3">
+                    <input value={newTrip.name} onChange={(e) => setNewTrip({ ...newTrip, name: e.target.value })} placeholder="团名" className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500" />
+                  </td>
+                  <td className="px-3 py-3">
+                    <input value={newTrip.code} onChange={(e) => setNewTrip({ ...newTrip, code: e.target.value })} placeholder="团号" className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500" />
+                  </td>
+                  <td className="px-3 py-3">
+                    <input type="date" value={newTrip.startDate} onChange={(e) => setNewTrip({ ...newTrip, startDate: e.target.value })} className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500" />
+                  </td>
+                  <td className="px-3 py-3">
+                    <input type="date" value={newTrip.endDate} onChange={(e) => setNewTrip({ ...newTrip, endDate: e.target.value })} className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500" />
+                  </td>
+                  <td className="px-3 py-3">
+                    <input type="number" value={newTrip.participants} onChange={(e) => setNewTrip({ ...newTrip, participants: Number(e.target.value) })} className="w-20 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500" />
+                  </td>
+                  <td className="px-3 py-3">
+                    <input value={newTrip.leader} onChange={(e) => setNewTrip({ ...newTrip, leader: e.target.value })} placeholder="领队" className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500" />
+                  </td>
+                  <td className="px-3 py-3">
+                    <select value={newTrip.status} onChange={(e) => {
+                      const s = e.target.value as MakeTripStatus
+                      setNewTrip({ ...newTrip, status: s, statusColor: statusColorMap[s] ?? newTrip.statusColor })
+                    }} className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500">
+                      <option value="进行中">进行中</option>
+                      <option value="即将出发">即将出发</option>
+                      <option value="招募中">招募中</option>
+                      <option value="已满员">已满员</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-3">
+                    <div className="flex gap-2">
+                      <button onClick={handleSaveNewTrip} className="px-2 py-1 bg-green-500 text-white rounded text-xs hover:bg-green-600">保存</button>
+                      <button onClick={handleCancelCreate} className="px-2 py-1 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">取消</button>
+                    </div>
+                  </td>
+                </tr>
+              )}
               {currentTrips.map((trip) => {
                 const isEditing = editingTripId === trip.id
                 const displayTrip = isEditing && editedTrip ? editedTrip : trip
@@ -372,7 +463,7 @@ export function Trips({
                         </div>
                       ) : (
                         <div className="flex gap-2 flex-wrap">
-                          <button onClick={() => onOpenTrip?.(trip.teamId)} className="px-3 py-1 text-xs text-cyan-600 hover:bg-cyan-50 rounded">查看详情</button>
+                          <button onClick={() => onOpenTrip?.(trip.id)} className="px-3 py-1 text-xs text-cyan-600 hover:bg-cyan-50 rounded">查看详情</button>
                           <button onClick={() => handleEditTrip(trip)} className="px-3 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded">编辑</button>
                           <button onClick={() => handleDeleteTrip(trip)} className="px-3 py-1 text-xs text-red-600 hover:bg-red-50 rounded">删除</button>
                         </div>

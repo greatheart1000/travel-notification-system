@@ -10,6 +10,7 @@ from typing import Any, Protocol
 from app.core.models import Channel
 from app.modules.integration.persistence import JsonFileStore
 from app.modules.integration.sms_provider import SMSProvider, get_sms_provider
+from app.modules.integration.wechat_provider import WeChatWorkWebhookProvider
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import (
     DispatchStatus,
@@ -152,11 +153,10 @@ class NotificationService:
         idempotency_store: IdempotencyStore | None = None,
         attempt_repository: NotificationAttemptRepository | None = None,
     ) -> None:
-        default_provider = StubProvider()
         sms_backend = RealWorldSMSProvider(get_sms_provider())
         self.providers: dict[Channel, ChannelProvider] = providers or {
             Channel.SMS: sms_backend,
-            Channel.WECHAT_WORK_GROUP: default_provider,
+            Channel.WECHAT_WORK_GROUP: WeChatWorkWebhookProvider(),
         }
         self.idempotency_store = idempotency_store or IdempotencyStore()
         self.attempt_repository = attempt_repository

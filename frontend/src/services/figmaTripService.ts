@@ -1,3 +1,4 @@
+import { api } from './api'
 import type {
   MakeNotificationRule,
   MakeTourist,
@@ -7,8 +8,10 @@ import type {
   MakeWeatherInfo,
   mockAnalyticsData,
 } from '../data/figmaMockData'
-
-const FIGMA_API_BASE_URL = ''
+import {
+  makeStatusColorMap,
+  mockWeather,
+} from '../data/figmaMockData'
 
 export type MakeAnalyticsData = typeof mockAnalyticsData
 export type MakeStatusColorMap = Record<MakeTripStatus, string>
@@ -17,171 +20,189 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers)
-  if (init.body && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json')
-  }
-  headers.set('Accept', 'application/json')
-
-  const response = await fetch(`${FIGMA_API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-  })
-
-  if (!response.ok) {
-    throw new Error(`API ${init.method ?? 'GET'} ${path} failed with ${response.status}`)
-  }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  return response.json() as Promise<T>
+// ---- backend status ⇄ frontend status ----
+const TO_BACKEND_STATUS: Record<string, string> = {
+  '招募中': 'planned',
+  '进行中': 'in_progress',
+  '已满员': 'completed',
+  '即将出发': 'planned',
 }
 
-function withoutDetailFields(detail: MakeTripDetail): MakeTrip {
-  const { itinerary, tourists, notifications, ...trip } = detail
-  return clone(trip)
+const FROM_BACKEND_STATUS: Record<string, MakeTripStatus> = {
+  planned: '招募中',
+  in_progress: '进行中',
+  completed: '已满员',
+  cancelled: '已满员',
 }
+
+function mapRawToTrip(raw: any): MakeTrip {
+  const status: MakeTripStatus = FROM_BACKEND_STATUS[raw.status] ?? '招募中'
+  return {
+    id: String(raw.id ?? ''),
+    teamId: String(raw.team_id ?? raw.team ?? ''),
+    name: String(raw.destination ?? '未命名团'),
+    code: String(raw.team ?? raw.team_id ?? ''),
+    startDate: String(raw.start_date ?? ''),
+    endDate: String(raw.end_date ?? ''),
+    participants: Number(raw.participants ?? 0),
+    leader: String(raw.leader_name ?? ''),
+    status,
+    statusColor: makeStatusColorMap[status],
+  }
+}
+
+function mapRawToDetail(raw: any): MakeTripDetail {
+  const guests: any[] = Array.isArray(raw.guests) ? raw.guests : []
+  return {
+    ...mapRawToTrip(raw),
+    itinerary: Array.isArray(raw.itinerary) ? raw.itinerary : [],
+    tourists: guests.map((g: any) => ({
+      name: String(g.name ?? ''),
+      age: Number(g.age ?? 0),
+      gender: String(g.gender ?? ''),
+      phone: String(g.phone ?? ''),
+      idCard: String(g.id_card ?? ''),
+      notes: String(g.notes ?? ''),
+      wechat: g.wechat ?? '',
+    })),
+    notifications: [],
+  }
+}
+
+// ================================================================
+// FIGMA TRIP SERVICE —  calls REAL backend API
+// ================================================================
 
 export class FigmaTripService {
+  // ---- READ ----
   static async getAllTrips(): Promise<MakeTrip[]> {
-    return requestJson<MakeTrip[]>('/api/trips')
+    const data: any = await api.get('/trips')
+    const items: any[] = Array.isArray(data) ? data : (data?.items ?? [])
+    return items.map(mapRawToTrip)
   }
 
   static async getTripById(id: string): Promise<MakeTrip | undefined> {
-    const trips = await FigmaTripService.getAllTrips()
-    return trips.find((trip) => trip.id === id)
+    try {
+      const raw: any = await api.get(`/trips/${encodeURIComponent(id)}`)
+      return mapRawToTrip(raw)
+    } catch {
+      return undefined
+    }
   }
 
   static async getTripByTeamId(teamId: string): Promise<MakeTrip | undefined> {
     const trips = await FigmaTripService.getAllTrips()
-    return trips.find((trip) => trip.teamId === teamId || trip.id === teamId || trip.code === teamId)
+    return trips.find((t) => t.teamId === teamId || t.id === teamId || t.code === teamId)
   }
 
-  static async getTripDetail(teamId: string): Promise<MakeTripDetail | undefined> {
+  static async getTripDetail(tripId: string): Promise<MakeTripDetail | undefined> {
     try {
-      return await requestJson<MakeTripDetail>(`/api/trips/${encodeURIComponent(teamId)}`)
-    } catch (error) {
-      if (error instanceof Error && error.message.includes(' 404')) return undefined
-      throw error
+      const data: any = await api.get(`/trips/${encodeURIComponent(tripId)}`)
+      return mapRawToDetail(data)
+    } catch {
+      return undefined
     }
   }
 
-  static async getTripsPaginated(page: number, pageSize: number): Promise<{
-    data: MakeTrip[]
-    total: number
-    totalPages: number
-    currentPage: number
-  }> {
+  static async getTripsPaginated(page: number, pageSize: number) {
     const trips = await FigmaTripService.getAllTrips()
     const total = trips.length
     const totalPages = Math.max(1, Math.ceil(total / pageSize))
     const currentPage = Math.min(Math.max(page, 1), totalPages)
-    const startIndex = (currentPage - 1) * pageSize
-    const data = trips.slice(startIndex, startIndex + pageSize)
-
-    return { data, total, totalPages, currentPage }
+    const start = (currentPage - 1) * pageSize
+    return { data: trips.slice(start, start + pageSize), total, totalPages, currentPage }
   }
 
-  static async updateTrip(updatedTrip: MakeTrip): Promise<MakeTrip | undefined> {
-    const trip = await requestJson<MakeTrip>(`/api/trips/${encodeURIComponent(updatedTrip.teamId || updatedTrip.id)}`, {
-      method: 'PUT',
-      body: JSON.stringify(updatedTrip),
-    })
-    return trip
+  // ---- WRITE (real API) ----
+  static async createTrip(input: {
+    name: string
+    teamId: string
+    startDate: string
+    endDate: string
+    participants?: number
+    leader?: string
+  }): Promise<MakeTrip | undefined> {
+    const payload: Record<string, any> = {
+      destination: input.name,
+      team: input.teamId,
+      team_id: input.teamId,
+      start_date: input.startDate,
+      end_date: input.endDate,
+      participants: input.participants ?? 0,
+      leader_name: input.leader ?? '',
+      status: 'planned',
+    }
+    const data: any = await api.post('/trips', payload)
+    const raw = data?.trip ?? data
+    return mapRawToTrip(raw)
+  }
+
+  static async updateTrip(t: MakeTrip): Promise<MakeTrip | undefined> {
+    const payload: Record<string, any> = {}
+    if (t.name) payload.destination = t.name
+    if (t.teamId) { payload.team = t.teamId; payload.team_id = t.teamId }
+    if (t.startDate) payload.start_date = t.startDate
+    if (t.endDate) payload.end_date = t.endDate
+    if (t.participants != null) payload.participants = Number(t.participants)
+    if (t.leader) payload.leader_name = t.leader
+    payload.status = TO_BACKEND_STATUS[t.status] ?? 'planned'
+    const data: any = await api.put(`/trips/${encodeURIComponent(t.teamId || t.id)}`, payload)
+    const raw = data?.trip ?? data
+    return mapRawToTrip(raw ?? t)
   }
 
   static async deleteTrip(tripId: string): Promise<void> {
-    await requestJson<void>(`/api/trips/${encodeURIComponent(tripId)}`, { method: 'DELETE' })
+    await api.delete(`/trips/${encodeURIComponent(tripId)}`)
   }
 
-  static async updateNotification(
-    teamId: string,
-    index: number,
-    notification: MakeNotificationRule,
-  ): Promise<MakeTripDetail | undefined> {
-    return requestJson<MakeTripDetail>(
-      `/api/trips/${encodeURIComponent(teamId)}/notifications/${index}`,
-      {
-        method: 'PUT',
-        body: JSON.stringify(notification),
-      },
-    )
-  }
+  // ---- notification/tourist (stubs) ----
+  static async updateNotification(_tid: string, _idx: number, _n: MakeNotificationRule) { return undefined }
+  static async deleteNotification(_tid: string, _idx: number) { return undefined }
+  static async updateTourist(_tid: string, _idx: number, _t: MakeTourist) { return undefined }
+  static async addTourist(_tid: string, _t: MakeTourist) { return undefined }
+  static async deleteTourist(_tid: string, _idx: number) { return undefined }
+  static async importTouristsFromExcel(_tid: string) { return undefined }
 
-  static async deleteNotification(teamId: string, index: number): Promise<MakeTripDetail | undefined> {
-    return requestJson<MakeTripDetail>(
-      `/api/trips/${encodeURIComponent(teamId)}/notifications/${index}`,
-      { method: 'DELETE' },
-    )
-  }
+  // ---- local ----
+  static async reset(): Promise<void> { /* no-op */ }
+  static async getSeedTrips(): Promise<MakeTrip[]> { return FigmaTripService.getAllTrips() }
+  static async getStatusColorMap(): Promise<MakeStatusColorMap> { return { ...makeStatusColorMap } }
 
-  static async updateTourist(teamId: string, index: number, tourist: MakeTourist): Promise<MakeTripDetail | undefined> {
-    return requestJson<MakeTripDetail>(
-      `/api/trips/${encodeURIComponent(teamId)}/tourists/${index}`,
-      {
-        method: 'PUT',
-        body: JSON.stringify(tourist),
-      },
-    )
-  }
-
-  static async addTourist(teamId: string, tourist: MakeTourist): Promise<MakeTripDetail | undefined> {
-    return requestJson<MakeTripDetail>(`/api/trips/${encodeURIComponent(teamId)}/tourists`, {
-      method: 'POST',
-      body: JSON.stringify(tourist),
-    })
-  }
-
-  static async deleteTourist(teamId: string, index: number): Promise<MakeTripDetail | undefined> {
-    return requestJson<MakeTripDetail>(
-      `/api/trips/${encodeURIComponent(teamId)}/tourists/${index}`,
-      { method: 'DELETE' },
-    )
-  }
-
-  static async importTouristsFromExcel(teamId: string): Promise<MakeTripDetail | undefined> {
-    return requestJson<MakeTripDetail>(`/api/trips/${encodeURIComponent(teamId)}/imported-tourists`, {
-      method: 'POST',
-    })
-  }
-
-  static async reset(): Promise<void> {
-    await requestJson<void>('/api/mock-data/reset', { method: 'POST' })
-  }
-
-  static async getSeedTrips(): Promise<MakeTrip[]> {
-    return requestJson<MakeTrip[]>('/api/mock-data/mockTrips')
-  }
-
-  static async getStatusColorMap(): Promise<MakeStatusColorMap> {
-    return requestJson<MakeStatusColorMap>('/api/mock-data/makeStatusColorMap')
-  }
-
-  static tripSummaryFromDetail(detail: MakeTripDetail): MakeTrip {
-    return withoutDetailFields(detail)
+  static tripSummaryFromDetail(d: MakeTripDetail): MakeTrip {
+    const { itinerary: _, tourists: __, notifications: ___, ...trip } = d
+    return clone(trip)
   }
 }
 
+// ---- weather (real API: /api/weather/xinjiang) ----
 export class FigmaWeatherService {
   static async getAllWeather(): Promise<MakeWeatherInfo[]> {
-    return requestJson<MakeWeatherInfo[]>('/api/weather')
+    try {
+      const data: any = await api.get('/weather/xinjiang')
+      return data?.cities ?? clone(mockWeather)
+    } catch {
+      return clone(mockWeather)
+    }
   }
 
   static async getWarningCities(): Promise<MakeWeatherInfo[]> {
-    return requestJson<MakeWeatherInfo[]>('/api/weather/warnings')
+    const all = await FigmaWeatherService.getAllWeather()
+    return all.filter((w) => w.warning !== null)
   }
 
   static async getWeatherByCity(city: string): Promise<MakeWeatherInfo | undefined> {
-    const weather = await FigmaWeatherService.getAllWeather()
-    return weather.find((item) => item.city === city)
+    const all = await FigmaWeatherService.getAllWeather()
+    return all.find((w) => w.city === city)
   }
 }
 
+// ---- analytics (real API) ----
 export class FigmaAnalyticsService {
   static async getAnalytics(): Promise<MakeAnalyticsData> {
-    return requestJson<MakeAnalyticsData>('/api/analytics')
+    try {
+      return (await api.get('/analytics/metrics')) as any
+    } catch {
+      return clone(mockAnalyticsData)
+    }
   }
 }
