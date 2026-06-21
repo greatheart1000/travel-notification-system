@@ -215,6 +215,9 @@ class NotificationRuleRepository:
         elif not partial:
             normalized["conditions"] = {}
 
+        if "trip_id" in payload:
+            normalized["trip_id"] = str(payload.get("trip_id") or "")
+
         if not partial or "created_at" in payload:
             normalized["created_at"] = str(payload.get("created_at") or _now_iso())
         if not partial or "submitted_at" in payload:
@@ -247,6 +250,7 @@ class NotificationRuleRepository:
         stage: str | None = None,
         time_slot: str | None = None,
         scene: str | None = None,
+        trip_id: str | None = None,
     ) -> list[dict[str, Any]]:
         items = [item for item in self._rules.values() if item.get("tenant_id") == tenant_id]
         if enabled is not None:
@@ -260,6 +264,8 @@ class NotificationRuleRepository:
         if scene is not None:
             scene_value = normalize_scene(scene)
             items = [item for item in items if item.get("scene") == scene_value]
+        if trip_id is not None:
+            items = [item for item in items if item.get("trip_id") == trip_id]
 
         return sorted(
             items,

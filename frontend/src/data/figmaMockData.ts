@@ -1,4 +1,4 @@
-export type MakeTripStatus = '进行中' | '即将出发' | '招募中' | '已满员'
+export type MakeTripStatus = '招募中' | '进行中' | '已结束'
 
 export interface MakeTrip {
   id: string
@@ -66,23 +66,22 @@ export interface MakeTripDetail extends MakeTrip {
 }
 
 export const makeStatusColorMap: Record<MakeTripStatus, string> = {
+  招募中: 'bg-blue-100 text-blue-700',
   进行中: 'bg-green-100 text-green-700',
-  即将出发: 'bg-blue-100 text-blue-700',
-  招募中: 'bg-yellow-100 text-yellow-700',
-  已满员: 'bg-purple-100 text-purple-700',
+  已结束: 'bg-gray-100 text-gray-600',
 }
 
 export const mockTrips: MakeTrip[] = [
-  { id: 'trip-001', teamId: 'TEAM-DEMO-POST', name: '阿勒泰本地冬营团', code: 'TEAM-DEMO-POST', startDate: '2026-03-10', endDate: '2026-03-16', participants: 12, leader: '王美丽', status: '进行中', statusColor: makeStatusColorMap.进行中 },
-  { id: 'trip-002', teamId: 'TEAM-ETHIO-001', name: '埃塞俄比亚古文明探索团', code: 'TEAM-ETHIO-001', startDate: '2026-04-15', endDate: '2026-04-25', participants: 8, leader: '李强', status: '即将出发', statusColor: makeStatusColorMap.即将出发 },
-  { id: 'trip-003', teamId: 'TEAM-MY-FOOD', name: '马来半岛美食文化之旅', code: 'TEAM-MY-FOOD', startDate: '2026-05-01', endDate: '2026-05-08', participants: 15, leader: '张敏', status: '招募中', statusColor: makeStatusColorMap.招募中 },
-  { id: 'trip-004', teamId: 'TEAM-JP-SPRING', name: '北海道春季赏樱团', code: 'TEAM-JP-SPRING', startDate: '2026-04-20', endDate: '2026-04-27', participants: 20, leader: '赵刚', status: '已满员', statusColor: makeStatusColorMap.已满员 },
-  { id: 'trip-005', teamId: 'TEAM-TH-BEACH', name: '泰国海岛度假之旅', code: 'TEAM-TH-BEACH', startDate: '2026-05-10', endDate: '2026-05-17', participants: 18, leader: '陈晨', status: '招募中', statusColor: makeStatusColorMap.招募中 },
-  { id: 'trip-006', teamId: 'TEAM-EU-CLASSIC', name: '欧洲经典五国游', code: 'TEAM-EU-CLASSIC', startDate: '2026-06-01', endDate: '2026-06-15', participants: 25, leader: '刘洋', status: '已满员', statusColor: makeStatusColorMap.已满员 },
-  { id: 'trip-007', teamId: 'TEAM-NZ-NATURE', name: '新西兰南岛自然探索', code: 'TEAM-NZ-NATURE', startDate: '2026-05-20', endDate: '2026-05-30', participants: 10, leader: '周琳', status: '即将出发', statusColor: makeStatusColorMap.即将出发 },
+  { id: 'trip-001', teamId: 'TEAM-DEMO-POST', name: '阿勒泰本地冬营团', code: 'TEAM-DEMO-POST', startDate: '2026-03-10', endDate: '2026-03-16', participants: 12, leader: '王美丽', status: '已结束', statusColor: makeStatusColorMap.已结束 },
+  { id: 'trip-002', teamId: 'TEAM-ETHIO-001', name: '埃塞俄比亚古文明探索团', code: 'TEAM-ETHIO-001', startDate: '2026-04-15', endDate: '2026-04-25', participants: 8, leader: '李强', status: '已结束', statusColor: makeStatusColorMap.已结束 },
+  { id: 'trip-003', teamId: 'TEAM-MY-FOOD', name: '马来半岛美食文化之旅', code: 'TEAM-MY-FOOD', startDate: '2026-05-01', endDate: '2026-05-08', participants: 15, leader: '张敏', status: '已结束', statusColor: makeStatusColorMap.已结束 },
+  { id: 'trip-004', teamId: 'TEAM-JP-SPRING', name: '北海道春季赏樱团', code: 'TEAM-JP-SPRING', startDate: '2026-04-20', endDate: '2026-04-27', participants: 20, leader: '赵刚', status: '已结束', statusColor: makeStatusColorMap.已结束 },
+  { id: 'trip-005', teamId: 'TEAM-TH-BEACH', name: '泰国海岛度假之旅', code: 'TEAM-TH-BEACH', startDate: '2026-05-10', endDate: '2026-05-17', participants: 18, leader: '陈晨', status: '已结束', statusColor: makeStatusColorMap.已结束 },
+  { id: 'trip-006', teamId: 'TEAM-EU-CLASSIC', name: '欧洲经典五国游', code: 'TEAM-EU-CLASSIC', startDate: '2026-06-01', endDate: '2026-06-15', participants: 25, leader: '刘洋', status: '进行中', statusColor: makeStatusColorMap.进行中 },
+  { id: 'trip-007', teamId: 'TEAM-NZ-NATURE', name: '新西兰南岛自然探索', code: 'TEAM-NZ-NATURE', startDate: '2026-05-20', endDate: '2026-05-30', participants: 10, leader: '周琳', status: '已结束', statusColor: makeStatusColorMap.已结束 },
   { id: 'trip-008', teamId: 'TEAM-TIBET-HOLY', name: '西藏朝圣之旅', code: 'TEAM-TIBET-HOLY', startDate: '2026-07-05', endDate: '2026-07-12', participants: 16, leader: '孙伟', status: '招募中', statusColor: makeStatusColorMap.招募中 },
-  { id: 'trip-009', teamId: 'TEAM-DUBAI-LUXURY', name: '迪拜奢华购物团', code: 'TEAM-DUBAI-LUXURY', startDate: '2026-06-10', endDate: '2026-06-16', participants: 14, leader: '吴静', status: '即将出发', statusColor: makeStatusColorMap.即将出发 },
-  { id: 'trip-010', teamId: 'TEAM-YUNNAN-PHOTO', name: '云南摄影采风团', code: 'TEAM-YUNNAN-PHOTO', startDate: '2026-03-25', endDate: '2026-04-03', participants: 9, leader: '郑涛', status: '进行中', statusColor: makeStatusColorMap.进行中 },
+  { id: 'trip-009', teamId: 'TEAM-DUBAI-LUXURY', name: '迪拜奢华购物团', code: 'TEAM-DUBAI-LUXURY', startDate: '2026-06-10', endDate: '2026-06-16', participants: 14, leader: '吴静', status: '进行中', statusColor: makeStatusColorMap.进行中 },
+  { id: 'trip-010', teamId: 'TEAM-YUNNAN-PHOTO', name: '云南摄影采风团', code: 'TEAM-YUNNAN-PHOTO', startDate: '2026-03-25', endDate: '2026-04-03', participants: 9, leader: '郑涛', status: '已结束', statusColor: makeStatusColorMap.已结束 },
   { id: 'trip-011', teamId: 'TEAM-USA-WEST', name: '美国西海岸自驾游', code: 'TEAM-USA-WEST', startDate: '2026-07-15', endDate: '2026-07-28', participants: 12, leader: '许明', status: '招募中', statusColor: makeStatusColorMap.招募中 },
   { id: 'trip-012', teamId: 'TEAM-MALDIVES', name: '马尔代夫蜜月之旅', code: 'TEAM-MALDIVES', startDate: '2026-08-01', endDate: '2026-08-08', participants: 6, leader: '何静', status: '招募中', statusColor: makeStatusColorMap.招募中 },
 ]

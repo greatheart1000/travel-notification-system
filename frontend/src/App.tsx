@@ -4,14 +4,13 @@ import { parseAppRoute, type AppRoute } from './app/router'
 import { Button } from './components/Button'
 import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
-import { OngoingTripsPage } from './pages/dashboard/OngoingTripsPage'
-import { PendingNotificationsPage } from './pages/dashboard/PendingNotificationsPage'
-import { WorkflowDashboardPage } from './pages/dashboard/WorkflowDashboardPage'
 import { authApi, getErrorMessage } from './services/api'
 
 const Analytics = lazy(() => import('./pages/Analytics').then((module) => ({ default: module.Analytics })))
 const Trips = lazy(() => import('./pages/Trips').then((module) => ({ default: module.Trips })))
 const TripNotifications = lazy(() => import('./pages/TripNotifications').then((module) => ({ default: module.TripNotifications })))
+const TripWorkflowPage = lazy(() => import('./pages/TripWorkflowPage').then((module) => ({ default: module.TripWorkflowPage })))
+const Preferences = lazy(() => import('./pages/Preferences').then((module) => ({ default: module.Preferences })))
 
 function PageLoadingFallback() {
   return (
@@ -79,7 +78,7 @@ export default function App() {
       setIsAuthenticated(authenticated)
       setAuthError(null)
       if (!authenticated) {
-        navigate('/dashboard')
+        navigate('/trips')
       }
     }
 
@@ -104,7 +103,7 @@ export default function App() {
     try {
       await authApi.login(username.trim(), password)
       setIsAuthenticated(true)
-      navigate('/dashboard')
+      navigate('/trips')
     } catch (error) {
       setAuthError(getErrorMessage(error))
     } finally {
@@ -119,20 +118,14 @@ export default function App() {
   }, [])
 
   const sidebarPage = useMemo(() => {
-    if (route.page === 'analytics' || route.page === 'trips' || route.page === 'trip_notifications') {
-      return route.page === 'trip_notifications' ? 'trips' : route.page
+    if (route.page === 'analytics' || route.page === 'trips' || route.page === 'trip_notifications' || route.page === 'trip_workflow' || route.page === 'preferences') {
+      return route.page === 'trip_notifications' || route.page === 'trip_workflow' ? 'trips' : route.page === 'preferences' ? 'preferences' : route.page
     }
-    return 'dashboard'
+    return 'trips'
   }, [route.page])
 
   const pageNode = useMemo(() => {
     switch (route.page) {
-      case 'dashboard':
-        return <WorkflowDashboardPage onNavigate={navigate} />
-      case 'dashboard_ongoing_trips':
-        return <OngoingTripsPage onNavigate={navigate} />
-      case 'dashboard_pending_notifications':
-        return <PendingNotificationsPage onNavigate={navigate} />
       case 'trips':
         return (
           <Trips
@@ -148,10 +141,25 @@ export default function App() {
             onBackToTrip={() => navigate(`/trips/${encodeURIComponent(route.tripId ?? '')}`)}
           />
         )
+      case 'trip_workflow':
+        return (
+          <TripWorkflowPage
+            tripId={route.tripId ?? ''}
+            onBack={() => navigate(`/trips/${encodeURIComponent(route.tripId ?? '')}`)}
+          />
+        )
       case 'analytics':
         return <Analytics />
+      case 'preferences':
+        return <Preferences />
       default:
-        return <WorkflowDashboardPage onNavigate={navigate} />
+        return (
+          <Trips
+            tripId={null}
+            onOpenTrip={(tripId) => navigate(`/trips/${encodeURIComponent(tripId)}`)}
+            onBackToList={() => navigate('/trips')}
+          />
+        )
     }
   }, [navigate, route.page, route.tripId])
 
@@ -216,8 +224,7 @@ export default function App() {
         <Sidebar
           currentPage={sidebarPage}
           onPageChange={(page) => {
-            if (page === 'dashboard') navigate('/dashboard')
-            else navigate(`/${page}`)
+            navigate(`/${page}`)
           }}
         />
       </div>

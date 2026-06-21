@@ -45,30 +45,6 @@ export interface CurrentUser {
   created_at: string
 }
 
-export interface RawDashboardStats {
-  today_notifications?: number
-  active_trips?: number
-  total_travelers?: number
-  total_users?: number
-  pending_notifications?: number
-  pending_complaints?: number
-  notification_success_rate?: number
-  avg_response_time_ms?: number | string
-  channel_growth_rate?: number | string
-}
-
-export interface DashboardStats {
-  todayNotifications: number
-  activeTrips: number
-  totalTravelers: number
-  totalUsers: number
-  pendingNotifications: number
-  pendingComplaints: number
-  notificationSuccessRate: number
-  avgResponseTimeMs: number
-  channelGrowthRate: number
-}
-
 export interface RawTrip {
   id?: string
   destination?: string
@@ -82,6 +58,8 @@ export interface RawTrip {
   contact_phone?: string
   itinerary?: RawItineraryItem[]
   guests?: RawGuest[]
+  webhook_url?: string
+  wecom_chat_id?: string
 }
 
 export interface RawTripSchedule {
@@ -161,6 +139,8 @@ export interface Trip {
   contactPhone?: string
   itinerary: ItineraryItem[]
   guests: Guest[]
+  webhookUrl?: string
+  wecomChatId?: string
 }
 
 export interface TripSchedule {
@@ -783,6 +763,7 @@ export interface AnalyticsChannelPerformance {
 }
 
 export interface AnalyticsTopTrip {
+  tripId: string
   name: string
   notifications: number
   satisfaction: number

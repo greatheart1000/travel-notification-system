@@ -55,9 +55,23 @@ class AnalyticsService:
         self.trip_repository = trip_repository
 
     def ensure_seed_data(self) -> None:
-        if self.repository.list_notification_facts():
-            return
+        """Sync real notification facts and trip dimensions from existing data.
+        No seed/demo data — only real records are used."""
 
+        # Purge any old seed/demo data from previous versions
+        existing_facts = self.repository.list_notification_facts()
+        if existing_facts:
+            seed_fact_ids = {f"evt-seed-{i}" for i in range(1, 20)}
+            has_seed = any(f.get("event_id") in seed_fact_ids for f in existing_facts)
+            if has_seed:
+                # Clear all old seed data so we can rebuild from real data
+                self.repository.write_notification_facts([])
+                self.repository.write_trip_dimensions([])
+                self.repository.write_feedbacks([])
+            else:
+                return
+
+        # Build facts from REAL notification attempts only
         attempts = self.attempt_repository.list_history(limit=500)
         facts: list[dict[str, Any]] = []
         for item in attempts:
@@ -77,33 +91,9 @@ class AnalyticsService:
                 )
             )
 
-        if not facts:
-            now = datetime.now(UTC)
-            defaults = [
-                ("trip-seed-001", "sms", True, 780),
-                ("trip-seed-001", "wechat_work_group", True, 640),
-                ("trip-seed-002", "sms", False, 1800),
-                ("trip-seed-002", "wechat_work_group", True, 880),
-                ("trip-seed-003", "email", True, 1100),
-                ("trip-seed-003", "sms", True, 900),
-            ]
-            for index, (trip_id, channel, success, latency_ms) in enumerate(defaults):
-                facts.append(
-                    asdict(
-                        AnalyticsNotificationFact(
-                            event_id=f"evt-seed-{index + 1}",
-                            event_date=(now - timedelta(days=index % 7)).date(),
-                            trip_id=trip_id,
-                            team_id=f"TEAM-{index + 1:03d}",
-                            channel=channel,
-                            success=success,
-                            latency_ms=latency_ms,
-                        )
-                    )
-                )
-
         self.repository.write_notification_facts(facts)
 
+        # Build trip dimensions from REAL trips only
         if not self.repository.list_trip_dimensions():
             trips = self.trip_repository.list()
             dimensions: list[dict[str, Any]] = []
@@ -120,60 +110,9 @@ class AnalyticsService:
                         )
                     )
                 )
-            if not dimensions:
-                dimensions = [
-                    asdict(
-                        AnalyticsTripDimension(
-                            trip_id="trip-seed-001",
-                            trip_name="阿勒泰5日团",
-                            destination="阿勒泰",
-                        )
-                    ),
-                    asdict(
-                        AnalyticsTripDimension(
-                            trip_id="trip-seed-002",
-                            trip_name="成都亲子周末营",
-                            destination="成都",
-                        )
-                    ),
-                    asdict(
-                        AnalyticsTripDimension(
-                            trip_id="trip-seed-003",
-                            trip_name="西安历史文化线",
-                            destination="西安",
-                        )
-                    ),
-                ]
             self.repository.write_trip_dimensions(dimensions)
 
-        if not self.repository.list_feedbacks():
-            feedbacks = [
-                asdict(
-                    AnalyticsTripFeedback(
-                        feedback_id="fb-seed-001",
-                        trip_id="trip-seed-001",
-                        score=4.8,
-                        submitted_on=datetime.now(UTC).date(),
-                    )
-                ),
-                asdict(
-                    AnalyticsTripFeedback(
-                        feedback_id="fb-seed-002",
-                        trip_id="trip-seed-002",
-                        score=4.2,
-                        submitted_on=datetime.now(UTC).date(),
-                    )
-                ),
-                asdict(
-                    AnalyticsTripFeedback(
-                        feedback_id="fb-seed-003",
-                        trip_id="trip-seed-003",
-                        score=4.6,
-                        submitted_on=datetime.now(UTC).date(),
-                    )
-                ),
-            ]
-            self.repository.write_feedbacks(feedbacks)
+        # Only sync feedbacks from real data — no fake scores
 
     def build_metrics_snapshot(self) -> dict[str, Any]:
         self.ensure_seed_data()

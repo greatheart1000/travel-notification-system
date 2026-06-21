@@ -1,6 +1,6 @@
-import { BarChart3, Headphones, Home, MapPin, Plane } from 'lucide-react'
+import { BarChart3, Headphones, MapPin, Plane, Settings } from 'lucide-react'
 
-type Page = 'dashboard' | 'trips' | 'analytics'
+type Page = 'trips' | 'analytics' | 'preferences'
 
 interface SidebarProps {
   currentPage: Page
@@ -10,8 +10,8 @@ interface SidebarProps {
 export function Sidebar({ currentPage, onPageChange }: SidebarProps) {
   const menuItems = [
     { id: 'trips' as const, label: '行程管理', icon: Plane },
-    { id: 'dashboard' as const, label: '仪表盘', icon: Home },
     { id: 'analytics' as const, label: '数据分析', icon: BarChart3 },
+    { id: 'preferences' as const, label: '偏好设置', icon: Settings },
   ]
 
   return (

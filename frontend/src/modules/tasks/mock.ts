@@ -119,7 +119,7 @@ export const taskMockDataSource = {
     return markTaskRisk(taskId)
   },
 
-  async getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
+  async getWorkbenchCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
     const tasks = getDb().tasks
     const highRiskTeams = new Set(
       tasks.filter((task) => ['high', 'critical'].includes(task.riskLevel)).map((task) => task.teamId),

@@ -1,7 +1,4 @@
 export type AppPage =
-  | 'dashboard'
-  | 'dashboard_ongoing_trips'
-  | 'dashboard_pending_notifications'
   | 'tasks_todo'
   | 'tasks_overdue'
   | 'tasks_takeover'
@@ -11,7 +8,9 @@ export type AppPage =
   | 'group_detail'
   | 'trips'
   | 'trip_notifications'
+  | 'trip_workflow'
   | 'analytics'
+  | 'preferences'
 
 export interface AppRoute {
   page: AppPage
@@ -23,10 +22,11 @@ export interface AppRoute {
 export function parseAppRoute(pathname: string, search: string): AppRoute {
   const parts = pathname.split('/').filter(Boolean)
 
-  if (parts.length === 0 || parts[0] === 'dashboard') {
-    if (parts[1] === 'ongoing-trips') return { page: 'dashboard_ongoing_trips' }
-    if (parts[1] === 'pending-notifications') return { page: 'dashboard_pending_notifications' }
-    return { page: 'dashboard' }
+  if (parts.length === 0 || parts[0] === 'trips') {
+    if (parts[1] && parts[2] === 'workflow') return { page: 'trip_workflow', tripId: decodeURIComponent(parts[1]) }
+    if (parts[1] && parts[2] === 'notifications') return { page: 'trip_notifications', tripId: decodeURIComponent(parts[1]) }
+    if (parts[1]) return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
+    return { page: 'trips', tripId: null }
   }
 
   if (parts[0] === 'tasks' && parts[1] === 'todo') {
@@ -44,12 +44,6 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
   }
   if (parts[0] === 'groups' && parts[1] === 'high-risk') return { page: 'group_high_risk' }
 
-  if (parts[0] === 'trips' && parts[1] && parts[2] === 'notifications') {
-    return { page: 'trip_notifications', tripId: decodeURIComponent(parts[1]) }
-  }
-  if (parts[0] === 'trips' && parts[1]) return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
-  if (parts[0] === 'trips') return { page: 'trips', tripId: null }
-
   if (parts[0] === 'notifications') {
     if (parts[1] === 'team' && parts[2]) {
       return { page: 'trips', tripId: decodeURIComponent(parts[2]) }
@@ -59,18 +53,13 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
     return tripId ? { page: 'trips', tripId } : { page: 'trips', tripId: null }
   }
   if (parts[0] === 'analytics') return { page: 'analytics' }
+  if (parts[0] === 'preferences') return { page: 'preferences' }
 
-  return { page: 'dashboard' }
+  return { page: 'trips' }
 }
 
 export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: string; tripId?: string | null }): string {
   switch (page) {
-    case 'dashboard':
-      return '/dashboard'
-    case 'dashboard_ongoing_trips':
-      return '/dashboard/ongoing-trips'
-    case 'dashboard_pending_notifications':
-      return '/dashboard/pending-notifications'
     case 'tasks_todo':
       return '/tasks/todo'
     case 'tasks_overdue':
@@ -91,7 +80,11 @@ export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: 
       return params?.tripId ? `/trips/${encodeURIComponent(params.tripId)}` : '/trips'
     case 'trip_notifications':
       return `/trips/${encodeURIComponent(params?.tripId ?? '')}/notifications`
+    case 'trip_workflow':
+      return `/trips/${encodeURIComponent(params?.tripId ?? '')}/workflow`
+    case 'preferences':
+      return '/preferences'
     default:
-      return '/dashboard'
+      return '/trips'
   }
 }

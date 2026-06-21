@@ -16,8 +16,8 @@ export class TaskService {
     return this.repository.getStats(bucket)
   }
 
-  getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
-    return this.repository.getDashboardCards()
+  getWorkbenchCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
+    return this.repository.getWorkbenchCards()
   }
 
   getMyQueue(limit?: number): Promise<Task[]> {

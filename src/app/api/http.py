@@ -30,6 +30,7 @@ from app.modules.integration.persistence import (
     JsonFileStore,
     ProjectNotificationConfigRepository,
     TripRepository,
+    WorkflowExecutionRepository,
 )
 from app.modules.integration.rbac import PermissionDenied, assert_tenant_scope, require_permission
 from app.modules.integration.weather_provider import WeatherProvider
@@ -41,7 +42,6 @@ from app.modules.notification.service import NotificationAttemptRepository, Noti
 from app.modules.trigger.risk_alert_service import RiskAlertService
 from app.services.analytics_view_service import AnalyticsViewService
 from app.services.async_dispatch import AsyncDispatchService
-from app.services.dashboard_service import DashboardService
 from app.services.emergency_weather_service import EmergencyWeatherService
 from app.services.notification_agent_service import NotificationAgentService
 from app.services.preference_service import UserPreferenceService
@@ -121,12 +121,27 @@ class RefreshRequest(BaseModel):
 
 
 class PreferenceUpdateRequest(BaseModel):
-    channels: list[str] = Field(default_factory=list)
-    quiet_hours: list[int] | dict[str, Any] = Field(default_factory=lambda: [23, 7])
-    max_notifications_per_hour: int | None = None
+    channels: list[str] = Field(default_factory=list, max_length=5)
+    quiet_hours: list[int] = Field(default_factory=lambda: [23, 7], min_length=2, max_length=2)
+    max_notifications_per_hour: int | None = Field(default=None, ge=0, le=100)
     auto_escalation: bool | None = None
     aggregate_notifications: bool | None = None
     allow_marketing: bool | None = None
+
+    @field_validator("channels")
+    @classmethod
+    def check_channels(cls, v: list[str]) -> list[str]:
+        for c in v:
+            if c not in ("sms", "wechat_work_group", "email"):
+                raise ValueError(f"无效渠道: {c}，可选: sms, wechat_work_group, email")
+        return v
+
+    @field_validator("quiet_hours")
+    @classmethod
+    def check_quiet_hours(cls, v: list[int]) -> list[int]:
+        if not (0 <= v[0] <= 23 and 0 <= v[1] <= 23):
+            raise ValueError("静音时段必须在 0-23 之间")
+        return v
 
 
 class TemplateCreateRequest(BaseModel):
@@ -167,6 +182,7 @@ class NotificationRuleCreateRequest(BaseModel):
     enabled: bool = True
     priority: int = 100
     conditions: dict[str, Any] | None = None
+    trip_id: str | None = None
 
 
 class NotificationRuleUpdateRequest(BaseModel):
@@ -177,6 +193,7 @@ class NotificationRuleUpdateRequest(BaseModel):
     channels: list[str] | None = None
     template_id: str | None = None
     enabled: bool | None = None
+    trip_id: str | None = None
     priority: int | None = None
     conditions: dict[str, Any] | None = None
 
@@ -197,33 +214,52 @@ class RuleSimulationRequest(BaseModel):
 
 
 class TripCreateRequest(BaseModel):
-    destination: str
-    team: str | None = None
-    team_id: str | None = None
-    start_date: str
-    end_date: str
-    participants: int = 0
-    status: str = "计划中"
+    destination: str = Field(min_length=1, max_length=100)
+    team: str | None = Field(default=None, min_length=1, max_length=64)
+    team_id: str | None = Field(default=None, min_length=1, max_length=64)
+    start_date: str = Field(min_length=8, max_length=10)
+    end_date: str = Field(min_length=8, max_length=10)
+    participants: int = Field(default=1, ge=0, le=10000)
+    status: str = "planned"
+
+    @field_validator("participants")
+    @classmethod
+    def check_participants(cls, v: int) -> int:
+        if v < 0: raise ValueError("人数不能为负数")
+        return v
+
+    @field_validator("end_date")
+    @classmethod
+    def check_dates(cls, v: str, info) -> str:
+        start = info.data.get("start_date")
+        if start and v and v < start:
+            raise ValueError("结束日期不能早于开始日期")
+        return v
 
 
 class TripUpdateRequest(BaseModel):
-    destination: str | None = None
-    team: str | None = None
-    team_id: str | None = None
+    destination: str | None = Field(default=None, min_length=1, max_length=100)
+    team: str | None = Field(default=None, min_length=1, max_length=64)
+    team_id: str | None = Field(default=None, min_length=1, max_length=64)
     start_date: str | None = None
     end_date: str | None = None
-    participants: int | None = None
+    participants: int | None = Field(default=None, ge=0, le=10000)
     status: str | None = None
-    leader_name: str | None = None
-    contact_phone: str | None = None
+    leader_name: str | None = Field(default=None, max_length=64)
+    contact_phone: str | None = Field(default=None, max_length=20)
     itinerary: list[dict[str, Any]] | None = None
     guests: list[dict[str, Any]] | None = None
+
+    @field_validator("participants")
+    @classmethod
+    def check_participants(cls, v: int | None) -> int | None:
+        if v is not None and v < 0: raise ValueError("人数不能为负数")
+        return v
 
     @field_validator("team", "team_id", "leader_name", "contact_phone")
     @classmethod
     def validate_team_fields(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
+        if value is None: return value
         return value.strip()
 
 
@@ -334,35 +370,59 @@ class NotificationSendRequest(BaseModel):
     trip: str | None = None
     team: str | None = None
     team_id: str | None = None
-    customer_name: str | None = None
-    customer_phone: str | None = None
-    custom_content: str | None = None
+    customer_name: str | None = Field(default=None, max_length=64)
+    customer_phone: str | None = Field(default=None, max_length=20, min_length=7)
+    custom_content: str | None = Field(default=None, max_length=5000)
     destination: str | None = None
     channel: str = "sms"
     async_delivery: bool = False
 
 
 class EmergencyWeatherSendRequest(BaseModel):
-    alert_id: str
-    custom_content: str | None = None
+    alert_id: str = Field(min_length=1, max_length=64)
+    custom_content: str | None = Field(default=None, max_length=5000)
     channel: str = "sms"
 
+    @field_validator("channel")
+    @classmethod
+    def check_channel(cls, v: str) -> str:
+        if v not in ("sms", "wechat_work_group", "email"):
+            raise ValueError(f"无效渠道: {v}")
+        return v
+
+
+VALID_TIME_SLOTS = ("morning", "afternoon", "evening", "night", "all_day")
+VALID_CHANNELS = ("sms", "wechat_work_group", "email")
 
 class DispatchPreviewRequest(BaseModel):
-    trip_id: str
-    node_key: str
+    trip_id: str = Field(min_length=1)
+    node_key: str = Field(min_length=1, max_length=64)
     channel: str = "sms"
     channel_code: str | None = None
     template_id: str | None = None
+
+    @field_validator("channel")
+    @classmethod
+    def check_channel(cls, v: str) -> str:
+        if v not in VALID_CHANNELS:
+            raise ValueError(f"无效渠道: {v}")
+        return v
 
 
 class DispatchNowRequest(BaseModel):
-    trip_id: str
-    node_key: str
+    trip_id: str = Field(min_length=1)
+    node_key: str = Field(min_length=1, max_length=64)
     channel: str = "sms"
     channel_code: str | None = None
     template_id: str | None = None
-    content: str | None = None
+    content: str | None = Field(default=None, max_length=5000)
+
+    @field_validator("channel")
+    @classmethod
+    def check_channel(cls, v: str) -> str:
+        if v not in VALID_CHANNELS:
+            raise ValueError(f"无效渠道: {v}")
+        return v
 
 
 class RetryDispatchRequest(BaseModel):
@@ -937,8 +997,16 @@ def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
         "end_date": trip.get("end_date", ""),
         "participants": participants,
         "status": _normalize_trip_status(str(trip.get("status", "planned"))),
-        "leader_name": str(trip.get("leader_name") or ""),
+        "leader_name": str(trip.get("leader_name") or trip.get("trip_manager_name") or ""),
         "contact_phone": str(trip.get("contact_phone") or ""),
+        "trip_manager_name": str(trip.get("trip_manager_name") or ""),
+        "trip_manager_phone": str(trip.get("trip_manager_phone") or ""),
+        "concierge_name": str(trip.get("concierge_name") or ""),
+        "concierge_phone": str(trip.get("concierge_phone") or ""),
+        "driver_name": str(trip.get("driver_name") or ""),
+        "driver_phone": str(trip.get("driver_phone") or ""),
+        "webhook_url": str(trip.get("webhook_url") or ""),
+        "wecom_chat_id": str(trip.get("wecom_chat_id") or ""),
         "itinerary": itinerary,
         "guests": guests,
         "transfers": transfers,
@@ -1154,6 +1222,7 @@ def _compute_top_trips(
         destination = str(trip.get("destination", "")).strip()
         ranking.append(
             {
+                "trip_id": trip_id,
                 "name": destination or trip_id,
                 "notifications": notifications,
                 "satisfaction": 4.5,
@@ -1772,6 +1841,8 @@ def create_app() -> FastAPI:
         version="0.2.0",
         lifespan=lifespan,
     )
+    from fastapi.middleware.gzip import GZipMiddleware
+    fastapi_app.add_middleware(GZipMiddleware, minimum_size=500)
     cors_origins = [
         origin.strip()
         for origin in os.getenv("TRAVEL_NOTIFICATION_CORS_ORIGINS", "").split(",")
@@ -2499,7 +2570,7 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         _require_permission_or_403(user, "trip:read")
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -2558,8 +2629,13 @@ def create_app() -> FastAPI:
         items = [item for item in ctx.trip_repository.list() if item.get("tenant_id") == tenant_id]
         if user.get("role") != "admin":
             items = [item for item in items if item.get("user_id") == user.get("id")]
+        total = len(items)
+        page = int(kwargs.get("page", 1)) if "page" in str(locals().get("kwargs",{})) else 1
+        page_size = int(kwargs.get("page_size", 0)) if "page_size" in str(locals().get("kwargs",{})) else 0
+        if page_size > 0:
+            items = items[(page-1)*page_size : (page-1)*page_size + page_size]
         normalized_items = [_serialize_trip(item) for item in items]
-        return _ok({"total": len(normalized_items), "items": normalized_items})
+        return _ok({"total": total, "items": normalized_items})
 
     def create_trip_record(
         *,
@@ -2784,11 +2860,152 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            for t in ctx.trip_repository.list():
+                if str(t.get("team_id") or t.get("team") or "") == trip_id:
+                    trip = t; break
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
         return _ok(_serialize_trip(trip))
+
+    # ═══ 企业微信回调验证 ═══
+    @fastapi_app.api_route("/api/wecom/callback", methods=["GET", "POST"])
+    async def wecom_callback(request: Request):
+        """企业微信回调 URL 验证 + 接收消息。"""
+        import hashlib, base64, struct
+        params = dict(request.query_params)
+        msg_sig = params.get("msg_signature", "")
+        timestamp = params.get("timestamp", "")
+        nonce = params.get("nonce", "")
+        echostr = params.get("echostr", "")
+        from fastapi.responses import PlainTextResponse
+
+        if echostr:
+            try:
+                from Crypto.Cipher import AES
+                token = os.getenv("WECOM_TOKEN", "UKES")
+                aes_enc = os.getenv("WECOM_ENCODING_AES_KEY", "qG7yl4k2FKcmHydXlq6xNOh1faj262KJK7rRtc3tgY5")
+                aes_key = base64.b64decode(aes_enc + "=")
+                raw = "".join(sorted([token, timestamp, nonce, echostr]))
+                sig = hashlib.sha1(raw.encode()).hexdigest()
+                if sig == msg_sig:
+                    cipher = AES.new(aes_key, AES.MODE_CBC, aes_key[:16])
+                    dec = cipher.decrypt(base64.b64decode(echostr))
+                    pad = dec[-1]
+                    dec = dec[:-pad]
+                    length = struct.unpack(">I", dec[16:20])[0]
+                    result = dec[20:20+length].decode("utf-8")
+                    return PlainTextResponse(result)
+            except Exception:
+                pass
+            # 明文模式回退
+            return PlainTextResponse(echostr)
+
+        body = await request.body()
+        return {"code": 200}
+
+    # ═══ 企业微信群管理 ═══
+    @fastapi_app.put("/api/trips/{trip_id}/webhook")
+    def set_trip_webhook(trip_id: str, body: dict[str, Any], user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        ctx.trip_repository.update(str(trip.get("id","")), {"webhook_url": str(body.get("webhook_url",""))})
+        ctx.audit_service.record(operator_id=user["id"], action="webhook_updated", target=trip_id)
+        return _ok({"trip_id": trip_id, "message": "企业微信群已配置"})
+
+    @fastapi_app.post("/api/trips/{trip_id}/webhook/test")
+    def test_trip_webhook(trip_id: str, user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        """发送测试消息到行程配置的企业微信群。"""
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        webhook_url = str(trip.get("webhook_url", "")).strip()
+        if not webhook_url:
+            raise HTTPException(400, "请先配置企业微信群 webhook 地址")
+        from zoneinfo import ZoneInfo
+        now = datetime.now(tz=ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+        content = f"【{now}】\n✅ 企业微信群机器人连接测试成功！\n行程：{trip.get('destination', '')}\n团号：{trip.get('team_id') or trip.get('team', '')}\n\n您好，这是一条来自旅行通知系统的测试消息，如果您能收到此消息，说明群机器人配置正确，后续通知将正常推送。"
+        trip_webhook = trip.get("webhook_url", "")
+        provider = WeChatWorkWebhookProvider(webhook_url=trip_webhook) if trip_webhook else WeChatWorkWebhookProvider()
+        ok, msg = provider.send(f"test:{trip_id}", content)
+        if not ok:
+            raise HTTPException(502, f"测试发送失败: {msg}")
+        ctx.audit_service.record(operator_id=user["id"], action="webhook_tested", target=trip_id)
+        return _ok({"trip_id": trip_id, "message": "测试消息已发送，请查看企业微信群"})
+
+    @fastapi_app.post("/api/trips/{trip_id}/create-group")
+    def create_wecom_group(trip_id: str, user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        """为企业微信创建行程专属服务群，并自动拉入游客和工作人员。"""
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        try:
+            from app.modules.integration.wecom_api import create_group
+            # 生成群名
+            dest = trip.get("destination", "旅行团")
+            code = trip.get("team_id") or trip.get("team") or trip.get("id","")
+            group_name = f"{dest}-{code}-服务群"
+            # 收集游客 + 工作人员 userid（先用 phone 占位）
+            member_ids: list[str] = []
+            for g in trip.get("guests", [])[:50]:
+                phone = str(g.get("phone","")).strip()
+                if phone: member_ids.append(phone)
+            # 添加工作人员
+            for role_phone in [trip.get("trip_manager_phone",""), trip.get("concierge_phone",""), trip.get("driver_phone","")]:
+                if role_phone and role_phone not in member_ids:
+                    member_ids.insert(0, role_phone)
+            result = create_group(group_name, member_ids[:2000])
+            chat_id = result.get("chatid", "")
+            # 保存 chat_id 和 webhook_url 到行程
+            wh_url = result.get("webhook_url", "") or f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={chat_id}"
+            ctx.trip_repository.update(str(trip.get("id","")), {"wecom_chat_id": chat_id, "webhook_url": wh_url})
+            ctx.audit_service.record(operator_id=user["id"], action="wecom_group_created", target=trip_id, detail={"chat_id": chat_id, "members": len(member_ids)})
+            return _ok({"trip_id": trip_id, "chat_id": chat_id, "group_name": group_name, "members": len(member_ids), "message": f"企业微信群「{group_name}」已创建"})
+        except RuntimeError as e:
+            raise HTTPException(502, detail=f"企业微信 API 错误: {e}")
+
+    @fastapi_app.post("/api/trips/{trip_id}/add-members")
+    def add_group_members(trip_id: str, body: dict[str, Any], user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        """向企业微信群添加成员。body: {"user_ids": ["userid1","userid2"]}"""
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        chat_id = str(trip.get("wecom_chat_id", ""))
+        if not chat_id: raise HTTPException(400, "该行程尚未创建企业微信群")
+        try:
+            from app.modules.integration.wecom_api import update_group
+            user_ids = body.get("user_ids", [])[:100]
+            update_group(chat_id, add_users=user_ids)
+            ctx.audit_service.record(operator_id=user["id"], action="wecom_members_added", target=trip_id, detail={"chat_id": chat_id, "added": len(user_ids)})
+            return _ok({"trip_id": trip_id, "chat_id": chat_id, "added": len(user_ids), "message": f"已添加 {len(user_ids)} 人"})
+        except RuntimeError as e:
+            raise HTTPException(502, detail=f"企业微信 API 错误: {e}")
+
+    # ═══ 流程剧本 ═══
+    @fastapi_app.get("/api/lifecycle-playbook")
+    def lifecycle_playbook(user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        items = ctx.store.read_collection("lifecycle_playbook")
+        if not items:
+            items = [
+                {"stage":"pre_trip","time_node":"出发前3天","core_work":"游客沟通+行程单处理","action_detail":"1. 确认航班；2. 发送提示；3. 推送行程单给司导","sort_order":10},
+                {"stage":"pre_trip","time_node":"出发前","core_work":"资源&物资确认","action_detail":"1. 确认酒店；2. 确定用车；3. 核查物资","sort_order":20},
+                {"stage":"pre_trip","time_node":"出发前1天","core_work":"保险核查+群聊搭建","action_detail":"1. 检查保险；2. 建群；3. 司导交底+入群欢迎","sort_order":30},
+                {"stage":"in_trip","time_node":"落地当日","core_work":"本地指引+通用提示","action_detail":"1. 推荐景点；2. 发送通用提示","sort_order":40},
+                {"stage":"in_trip","time_node":"每日固定时段","core_work":"时段性温馨提示","action_detail":"早/中/晚按季节发送提示","sort_order":50},
+                {"stage":"in_trip","time_node":"特殊场景","core_work":"专项安全提示","action_detail":"骑马/滑雪/特殊地区提示","sort_order":60},
+                {"stage":"in_trip","time_node":"全程","core_work":"三方协调","action_detail":"协调游客/司导/旅行社问题","sort_order":70},
+                {"stage":"post_trip","time_node":"下团即时","core_work":"欢送+满意度调研","action_detail":"1. 发欢送词；2. 满意度调查","sort_order":80},
+                {"stage":"post_trip","time_node":"下团后短期","core_work":"售后跟进+客户存档","action_detail":"1. 售后跟进；2. VIP存档","sort_order":90},
+                {"stage":"post_trip","time_node":"售后末期","core_work":"群聊解散","action_detail":"发群解散通知并解散群","sort_order":100},
+            ]
+        return _ok({"playbook": sorted(items, key=lambda x: int(x.get("sort_order",100))), "total": len(items)})
 
     @fastapi_app.get("/api/trips/{trip_id}/import-snapshot")
     def get_trip_import_snapshot(
@@ -2796,7 +3013,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -2810,7 +3027,7 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         _require_permission_or_403(user, "trip:write")
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -2837,7 +3054,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -2917,7 +3134,7 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         _require_permission_or_403(user, "trip:write")
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -2962,7 +3179,159 @@ def create_app() -> FastAPI:
                     })
         return _ok({"vip_guests": vip_list, "total": len(vip_list)})
 
+    # ═══ 游客管理 ═══
+
+    @fastapi_app.get("/api/guests")
+    def list_guests(
+        is_vip: bool | None = None,
+        search: str | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        """列出所有行程中的游客，按手机号去重合并。"""
+        _require_permission_or_403(user, "trip:read")
+        tenant_id = _current_tenant_id(user)
+        # Collect guests from all trips, deduplicate by phone
+        seen: set[str] = set()
+        guests: list[dict[str, Any]] = []
+        for trip in ctx.trip_repository.list():
+            if str(trip.get("tenant_id", "")) != tenant_id:
+                continue
+            for idx, g in enumerate(trip.get("guests") or []):
+                phone = str(g.get("phone", "")).strip()
+                # Use trip_id + index as unique guest id
+                guest_id = f"{trip.get('id', '')}-{idx}"
+                if guest_id in seen:
+                    continue
+                seen.add(guest_id)
+                if is_vip and not g.get("is_vip"):
+                    continue
+                if search:
+                    s = search.strip().lower()
+                    if s not in str(g.get("name", "")).lower() and s not in phone:
+                        continue
+                guests.append({
+                    "id": guest_id,
+                    "name": str(g.get("name", "")),
+                    "phone": phone,
+                    "is_vip": bool(g.get("is_vip")),
+                    "vip_tagged_at": str(g.get("vip_tagged_at") or ""),
+                    "trip_id": str(trip.get("id", "")),
+                    "trip_name": str(trip.get("destination") or ""),
+                })
+        return _ok({"guests": guests, "total": len(guests)})
+
+    @fastapi_app.put("/api/guests/{guest_id}")
+    def update_guest(
+        guest_id: str,
+        body: dict[str, Any],
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        """更新游客信息（姓名/电话），同步到所有关联行程。"""
+        _require_permission_or_403(user, "trip:write")
+        tenant_id = _current_tenant_id(user)
+        name = str(body.get("name", "")).strip()
+        phone = str(body.get("phone", "")).strip()
+        updated_trips = 0
+        for trip in ctx.trip_repository.list():
+            if str(trip.get("tenant_id", "")) != tenant_id:
+                continue
+            guests = list(trip.get("guests") or [])
+            changed = False
+            for idx, g in enumerate(guests):
+                gid = f"{trip.get('id', '')}-{idx}"
+                if gid == guest_id:
+                    if name:
+                        g["name"] = name
+                        changed = True
+                    if phone:
+                        g["phone"] = phone
+                        changed = True
+                    break
+            if changed:
+                ctx.trip_repository.update(str(trip.get("id", "")), {"guests": guests})
+                updated_trips += 1
+        if updated_trips == 0:
+            raise HTTPException(404, "Guest not found")
+        return _ok({"guest": {"id": guest_id, "name": name, "phone": phone}, "updated_trips": updated_trips, "message": "游客信息已更新"})
+
+    @fastapi_app.delete("/api/guests/{guest_id}")
+    def delete_guest(
+        guest_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        """从所有关联行程中移除游客。"""
+        _require_permission_or_403(user, "trip:write")
+        tenant_id = _current_tenant_id(user)
+        unlinked = 0
+        for trip in ctx.trip_repository.list():
+            if str(trip.get("tenant_id", "")) != tenant_id:
+                continue
+            guests = list(trip.get("guests") or [])
+            new_guests = []
+            removed = False
+            for idx, g in enumerate(guests):
+                gid = f"{trip.get('id', '')}-{idx}"
+                if gid == guest_id:
+                    removed = True
+                else:
+                    new_guests.append(g)
+            if removed:
+                ctx.trip_repository.update(str(trip.get("id", "")), {"guests": new_guests})
+                unlinked += 1
+        if unlinked == 0:
+            raise HTTPException(404, "Guest not found")
+        return _ok({"deleted": True, "unlinked_trips": unlinked, "message": f"已从 {unlinked} 个行程中移除"})
+
     # ── 行程单推送给司导 ──────────────────────────────────────────────────────
+    # ── 工作流辅助函数 ──────────────────────────────────────────────────
+    def _append_notification_attempt(ctx: AppContext, record: dict[str, Any]) -> None:
+        """Append a notification attempt record to the store for analytics."""
+        existing = ctx.notification_attempt_repository.list_history(limit=None)
+        existing.insert(0, record)
+        ctx.store.write_collection("notification_attempts", existing)
+
+    def _send_workflow_template(trip, template_key, *, ctx, preview=False, extra=""):
+        from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
+        tpl = MESSAGE_TEMPLATES.get(template_key, "")
+        if not tpl: raise HTTPException(status_code=500, detail=f"Template not found: {template_key}")
+        vars_ = {"customer_name":trip.get("destination","贵宾"),"destination":trip.get("destination",""),
+                 "manager_name":trip.get("trip_manager_name") or trip.get("concierge_name","负责人"),
+                 "concierge_name":trip.get("concierge_name","管家"),"driver_name":trip.get("driver_name","司机")}
+        for k,v in vars_.items(): tpl = tpl.replace("{{"+k+"}}", str(v))
+        from zoneinfo import ZoneInfo
+        tpl = f"【{datetime.now(tz=ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')}】\n{tpl}"
+        if preview: return True, tpl
+        trip_webhook = trip.get("webhook_url", "")
+        provider = WeChatWorkWebhookProvider(webhook_url=trip_webhook) if trip_webhook else WeChatWorkWebhookProvider()
+        ok, msg = provider.send(f"wf:{template_key}:{trip.get('id','')}", tpl)
+        # Record notification attempt for analytics
+        now_iso = datetime.now(UTC).isoformat()
+        attempt_record = {
+            "attempt_id": f"wf-{uuid4().hex[:12]}",
+            "task_id": f"wf-{template_key}",
+            "tenant_id": str(trip.get("tenant_id", "")),
+            "trip_id": str(trip.get("id", "")),
+            "team_id": str(trip.get("team_id") or trip.get("team", "")),
+            "customer_id": "",
+            "attempt_no": 1,
+            "channel": "wechat_work_group",
+            "status": "sent" if ok else "failed",
+            "ok": ok,
+            "reason": "" if ok else msg,
+            "provider_message": msg,
+            "latency_ms": 0,
+            "attempted_at": now_iso,
+        }
+        _append_notification_attempt(ctx, attempt_record)
+        return ok, msg
+
+    def _update_workflow_status(trip, step, *, ctx, operator_id="", detail=None):
+        repo = WorkflowExecutionRepository(store=ctx.store)
+        repo.mark(str(trip.get("id","")), step, operator_id=operator_id, detail=detail or {})
+
     @fastapi_app.post("/api/trips/{trip_id}/notify-driver")
     def notify_driver(
         trip_id: str,
@@ -2970,7 +3339,7 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         _require_permission_or_403(user, "notification:write")
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -3007,6 +3376,199 @@ def create_app() -> FastAPI:
         if not ok:
             raise HTTPException(status_code=502, detail=f"WeChat push failed: {msg}")
         return _ok({"trip_id": trip_id, "driver_name": driver_name, "message": "行程单已推送"})
+
+    # ═══ 统一工作流执行 ═══
+    @fastapi_app.post("/api/trips/{trip_id}/workflow/execute")
+    def execute_workflow(
+        trip_id: str,
+        step: str = "pre_flight_notice",
+        preview: bool = False,
+        body: dict[str, Any] | None = None,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        """统一工作流入口。step=pre_flight_notice|resources_verified|insurance_verified|group_built|day1_guide_sent|farewell_sent|survey_sent|group_dismissed|trigger_scheduler"""
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        VALID = {"pre_flight_notice","resources_verified","insurance_verified","group_built","day1_guide_sent","farewell_sent","survey_sent","group_dismissed","trigger_scheduler","daily_reminder","scene_alert","issue_coordination","follow_up"}
+        if step not in VALID: raise HTTPException(status_code=400, detail=f"Invalid step: {step}")
+        if step == "trigger_scheduler":
+            slot = (body or {}).get("time_slot","morning")
+            if hasattr(ctx,"scheduler_service") and ctx.scheduler_service is not None:
+                import asyncio; asyncio.ensure_future(ctx.scheduler_service.check_and_send_notifications_for_slot(slot))
+            ctx.audit_service.record(operator_id=user["id"],action="scheduler_triggered",target=trip_id)
+            return _ok({"trip_id":trip_id,"step":step,"message":f"已触发{slot}调度"})
+        if step in ("resources_verified","insurance_verified"):
+            tpl_key = "resources_verified_notice" if step == "resources_verified" else "insurance_verified_notice"
+            ok,msg = _send_workflow_template(trip,tpl_key,ctx=ctx,preview=preview)
+            if preview: return _ok({"trip_id":trip_id,"step":step,"preview":True,"rendered_content":msg})
+            if not ok: raise HTTPException(status_code=502,detail=f"推送失败:{msg}")
+            _update_workflow_status(trip,step,ctx=ctx,operator_id=user["id"],detail=body or {})
+            ctx.audit_service.record(operator_id=user["id"],action=step,target=trip_id)
+            return _ok({"trip_id":trip_id,"step":step,"message":"已完成"})
+        # day1_guide_sent 需要发送2条消息
+        if step == "day1_guide_sent":
+            u_ok,u_msg = _send_workflow_template(trip,"urumqi_day1_recommendations",ctx=ctx,preview=preview)
+            t_ok,t_msg = _send_workflow_template(trip,"xinjiang_general_tips",ctx=ctx,preview=preview)
+            if preview: return _ok({"trip_id":trip_id,"step":step,"preview":True,"rendered_content":f"{u_msg}\n\n---\n\n{t_msg}"})
+            if not (u_ok and t_ok): raise HTTPException(status_code=502,detail="推送失败")
+            _update_workflow_status(trip,step,ctx=ctx,operator_id=user["id"])
+            ctx.audit_service.record(operator_id=user["id"],action=step,target=trip_id)
+            return _ok({"trip_id":trip_id,"step":step,"message":"落地首日指引已发送"})
+
+        tpls = {"pre_flight_notice":"pre_flight_notice","farewell_sent":"farewell_message","survey_sent":"post_trip_survey_notice","group_dismissed":"group_close_message","group_built":"group_welcome","resources_verified":"resources_verified_notice","insurance_verified":"insurance_verified_notice","daily_reminder":"daily_reminder_generic","scene_alert":"scene_alert_generic","issue_coordination":"issue_coordination_notice","follow_up":"follow_up_notice"}
+        tpl_key = tpls.get(step,step)
+        ok,msg = _send_workflow_template(trip,tpl_key,ctx=ctx,preview=preview)
+        if preview: return _ok({"trip_id":trip_id,"step":step,"preview":True,"rendered_content":msg})
+        if not ok: raise HTTPException(status_code=502,detail=f"推送失败:{msg}")
+        _update_workflow_status(trip,step,ctx=ctx,operator_id=user["id"])
+        ctx.audit_service.record(operator_id=user["id"],action=step,target=trip_id)
+        return _ok({"trip_id":trip_id,"step":step,"message":"已发送"})
+
+    # ── 辅助：按 id 或 team_id 查找行程 ──
+    def _find_trip(trip_id: str, ctx) -> dict | None:
+        trip = ctx.trip_repository.get(trip_id)
+        if trip is None:
+            for t in ctx.trip_repository.list():
+                if str(t.get("team_id") or t.get("team") or "") == trip_id:
+                    return t
+        return trip
+
+    # ═══ 工作流状态总览 ═══
+    @fastapi_app.get("/api/trips/{trip_id}/workflow-status")
+    def workflow_status(trip_id: str, user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "trip:read")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        now = datetime.now(tz=UTC).date()
+        sd = str(trip.get("start_date","")); ed = str(trip.get("end_date",""))
+        stage = "unknown"
+        if sd:
+            ts = datetime.strptime(sd,"%Y-%m-%d").date()
+            if (ts-now).days>1: stage="pre_trip"
+            elif (ts-now).days>=0: stage="in_trip"
+        if ed and stage!="pre_trip":
+            te = datetime.strptime(ed,"%Y-%m-%d").date()
+            if (now-te).days>=0: stage="post_trip"
+        steps = [
+            {"key":"pre_flight_notice","label":"发送行前提示","time_node":"出发前3天","stage":"pre_trip"},
+            {"key":"resources_verified","label":"资源核验确认","time_node":"出发前","stage":"pre_trip"},
+            {"key":"insurance_verified","label":"保险核查确认","time_node":"出发前1天","stage":"pre_trip"},
+            {"key":"group_built","label":"建群&司导交底","time_node":"出发前1天","stage":"pre_trip"},
+            {"key":"day1_guide_sent","label":"落地首日指引","time_node":"落地当日","stage":"in_trip"},
+            {"key":"farewell_sent","label":"发送欢送词","time_node":"下团即时","stage":"post_trip"},
+            {"key":"survey_sent","label":"发送满意度调研","time_node":"下团即时","stage":"post_trip"},
+            {"key":"group_dismissed","label":"群解散通知","time_node":"售后末期","stage":"post_trip"},
+        ]
+        wf_repo = WorkflowExecutionRepository(store=ctx.store)
+        status_map = wf_repo.get_status_map(trip_id)
+        for s in steps:
+            st = status_map.get(s["key"])
+            s["completed"] = bool(st.get("completed")) if st else False
+            s["completed_at"] = st.get("completed_at") if st else None
+        result = {"pre_trip":[],"in_trip":[],"post_trip":[]}
+        for s in steps: result[s["stage"]].append(s)
+        done = sum(1 for s in steps if s["completed"])
+        return _ok({"trip_id":trip_id,"current_stage":stage,"start_date":sd,"end_date":ed,
+                     "progress":{"completed":done,"total":len(steps)},
+                     "pre_trip":result["pre_trip"],"in_trip":result["in_trip"],"post_trip":result["post_trip"]})
+
+    # ═══ 游客 & 行程表 & 人员配置 API ═══
+
+    @fastapi_app.get("/api/trips/{trip_id}/guests")
+    def list_trip_guests(trip_id: str, user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "trip:read")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        guests = trip.get("guests", [])
+        return _ok({"trip_id": trip_id, "guests": guests, "total": len(guests)})
+
+    @fastapi_app.post("/api/trips/{trip_id}/guests")
+    def add_trip_guest(trip_id: str, body: dict[str, Any], user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "trip:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        guests = list(trip.get("guests", []))
+        new_guest = {"name": str(body.get("name","")), "phone": str(body.get("phone","")), "notes": str(body.get("notes",""))}
+        guests.append(new_guest)
+        ctx.trip_repository.update(str(trip.get("id","")), {"guests": guests})
+        ctx.audit_service.record(operator_id=user["id"], action="guest_added", target=trip_id, detail={"name": new_guest["name"]})
+        return _ok({"trip_id": trip_id, "guest": new_guest, "message": "游客已添加"})
+
+    @fastapi_app.delete("/api/trips/{trip_id}/guests/{guest_index}")
+    def remove_trip_guest(trip_id: str, guest_index: int, user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "trip:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        guests = list(trip.get("guests", []))
+        if guest_index < 0 or guest_index >= len(guests):
+            raise HTTPException(400, "Invalid guest index")
+        removed = guests.pop(guest_index)
+        ctx.trip_repository.update(str(trip.get("id","")), {"guests": guests})
+        return _ok({"trip_id": trip_id, "removed": removed, "message": "游客已移除"})
+
+    @fastapi_app.get("/api/trips/{trip_id}/staff")
+    def get_trip_staff(trip_id: str, user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "trip:read")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        staff = [
+            {"role": "manager", "name": trip.get("trip_manager_name", ""), "phone": trip.get("trip_manager_phone", "")},
+            {"role": "concierge", "name": trip.get("concierge_name", ""), "phone": trip.get("concierge_phone", "")},
+            {"role": "driver", "name": trip.get("driver_name", ""), "phone": trip.get("driver_phone", "")},
+        ]
+        return _ok({"trip_id": trip_id, "staff": staff})
+
+    @fastapi_app.put("/api/trips/{trip_id}/staff")
+    def update_trip_staff(trip_id: str, body: dict[str, Any], user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "trip:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        staff_list: list[dict[str, str]] = body.get("staff", [])
+        role_field_map = {
+            "manager": ("trip_manager_name", "trip_manager_phone"),
+            "concierge": ("concierge_name", "concierge_phone"),
+            "driver": ("driver_name", "driver_phone"),
+        }
+        updates: dict[str, str] = {}
+        for item in staff_list:
+            role = str(item.get("role", "")).strip()
+            if role not in role_field_map:
+                continue
+            name_field, phone_field = role_field_map[role]
+            updates[name_field] = str(item.get("name", "")).strip()
+            updates[phone_field] = str(item.get("phone", "")).strip()
+        ctx.trip_repository.update(str(trip.get("id", "")), updates)
+        ctx.audit_service.record(operator_id=user["id"], action="staff_updated", target=trip_id, detail={"roles": list(updates.keys())})
+        return _ok({"trip_id": trip_id, "staff": staff_list, "message": "人员配置已保存"})
+
+    @fastapi_app.get("/api/trips/{trip_id}/itinerary")
+    def get_trip_itinerary(trip_id: str, user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "trip:read")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        days = trip.get("itinerary", [])
+        return _ok({"trip_id": trip_id, "days": days, "total": len(days)})
+
+    @fastapi_app.put("/api/trips/{trip_id}/itinerary")
+    def update_trip_itinerary(trip_id: str, body: dict[str, Any], user=Depends(get_current_user), ctx=Depends(get_ctx)):
+        _require_permission_or_403(user, "trip:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None: raise HTTPException(404, "Trip not found")
+        assert_trip_access(user, trip)
+        days = body.get("days", [])
+        ctx.trip_repository.update(str(trip.get("id","")), {"itinerary": days})
+        ctx.audit_service.record(operator_id=user["id"], action="itinerary_updated", target=trip_id, detail={"days": len(days)})
+        return _ok({"trip_id": trip_id, "days": days, "message": f"行程表已更新，共 {len(days)} 天"})
 
     @fastapi_app.post("/api/notifications/generate-daily")
     def generate_daily_notifications(
@@ -3190,7 +3752,7 @@ def create_app() -> FastAPI:
         if matched is None:
             raise HTTPException(status_code=404, detail="Dispatch not found")
         trip_id = str(matched.get("trip_id") or "")
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -3444,11 +4006,6 @@ def create_app() -> FastAPI:
         customer_id = None if user.get("role") == "admin" else user["id"]
         tenant_id = _current_tenant_id(user)
         resolved_team_id = _resolve_team_id(team, team_id)
-        dashboard_service = DashboardService(
-            trip_repository=ctx.trip_repository,
-            notification_attempt_repository=ctx.notification_attempt_repository,
-            template_service=ctx.template_service,
-        )
         if trip_id or resolved_team_id or customer_id or channel or status:
             items = _query_notification_items(
                 repository=ctx.notification_attempt_repository,
@@ -3462,7 +4019,7 @@ def create_app() -> FastAPI:
             )
             recent = [_to_recent_item(item) for item in items]
         else:
-            recent = dashboard_service.get_recent_items(tenant_id=tenant_id, limit=limit)
+            recent = ctx.notification_attempt_repository.get_recent_items(tenant_id=tenant_id, limit=limit)
         return _ok({"total": len(recent), "items": recent})
 
     @fastapi_app.get("/api/trips/{trip_id}/timeline")
@@ -3471,7 +4028,7 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        trip = ctx.trip_repository.get(trip_id)
+        trip = _find_trip(trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -3488,35 +4045,6 @@ def create_app() -> FastAPI:
         return _ok(
             {"trip": _serialize_trip(trip), "notification_attempts": attempts, "audit_logs": logs}
         )
-
-    @fastapi_app.get("/api/dashboard/stats")
-    def dashboard_stats(
-        user: dict[str, str] = Depends(get_current_user),
-        ctx: AppContext = Depends(get_ctx),
-    ) -> dict[str, Any]:
-        tenant_id = _current_tenant_id(user)
-        dashboard_service = DashboardService(
-            trip_repository=ctx.trip_repository,
-            notification_attempt_repository=ctx.notification_attempt_repository,
-            template_service=ctx.template_service,
-        )
-        return _ok(
-            dashboard_service.get_stats(
-                tenant_id=tenant_id, total_users=len(ctx.auth_service.users)
-            )
-        )
-
-    @fastapi_app.get("/api/dashboard/smart-suggestions")
-    def dashboard_smart_suggestions(
-        user: dict[str, str] = Depends(get_current_user),
-        ctx: AppContext = Depends(get_ctx),
-    ) -> dict[str, Any]:
-        dashboard_service = DashboardService(
-            trip_repository=ctx.trip_repository,
-            notification_attempt_repository=ctx.notification_attempt_repository,
-            template_service=ctx.template_service,
-        )
-        return _ok(dashboard_service.get_smart_suggestions(tenant_id=_current_tenant_id(user)))
 
     @fastapi_app.post("/api/admin/run-automation-scan")
     def run_automation_scan(
@@ -3666,6 +4194,7 @@ def create_app() -> FastAPI:
         stage: str | None = None,
         time_slot: str | None = None,
         scene: str | None = None,
+        trip_id: str | None = None,
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
@@ -3675,6 +4204,7 @@ def create_app() -> FastAPI:
             stage=stage,
             time_slot=time_slot,
             scene=scene,
+            trip_id=trip_id,
         )
         return _ok({"total": len(rules), "items": rules})
 

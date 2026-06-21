@@ -1,6 +1,6 @@
 import type { Task, TaskBucket, TaskListFilters, TaskListStats, TaskStatus } from './types'
 import { taskMockDataSource } from './mock'
-import { dashboardApi, notificationsApi, tripsApi } from '../../services/api'
+import { workbenchApi, notificationsApi, tripsApi } from '../../services/api'
 import { adaptTaskFromExecutionTask, adaptTaskFromWorkbenchTask } from './adapters'
 
 export interface TaskRepository {
@@ -12,7 +12,7 @@ export interface TaskRepository {
   complete(taskId: string): Promise<Task | null>
   defer(taskId: string): Promise<Task | null>
   markRisk(taskId: string): Promise<Task | null>
-  getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }>
+  getWorkbenchCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }>
   getMyQueue(limit?: number): Promise<Task[]>
 }
 
@@ -46,8 +46,8 @@ export class MockTaskRepository implements TaskRepository {
     return taskMockDataSource.markRisk(taskId)
   }
 
-  getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
-    return taskMockDataSource.getDashboardCards()
+  getWorkbenchCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
+    return taskMockDataSource.getWorkbenchCards()
   }
 
   getMyQueue(limit?: number): Promise<Task[]> {
@@ -57,7 +57,7 @@ export class MockTaskRepository implements TaskRepository {
 
 export class RealTaskRepository implements TaskRepository {
   private async fetchTasksFromApi(): Promise<Task[]> {
-    const actionItems = await dashboardApi.getWorkbenchActionItems({ limit: 200, ownerScope: 'all' })
+    const actionItems = await workbenchApi.getWorkbenchActionItems({ limit: 200, ownerScope: 'all' })
     return actionItems.map((item) => adaptTaskFromWorkbenchTask(item))
   }
 
@@ -139,8 +139,8 @@ export class RealTaskRepository implements TaskRepository {
     return this.getById(taskId)
   }
 
-  async getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
-    const overview = await dashboardApi.getWorkbenchOverview({ ownerScope: 'all' })
+  async getWorkbenchCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
+    const overview = await workbenchApi.getWorkbenchOverview({ ownerScope: 'all' })
     return {
       todo: overview.pendingTasks,
       overdue: overview.overdueTasks,
@@ -149,7 +149,7 @@ export class RealTaskRepository implements TaskRepository {
     }
   }
   async getMyQueue(limit = 5): Promise<Task[]> {
-    const items = await dashboardApi.getWorkbenchActionItems({ limit, ownerScope: 'mine' })
+    const items = await workbenchApi.getWorkbenchActionItems({ limit, ownerScope: 'mine' })
     return items.map((item) => adaptTaskFromWorkbenchTask(item))
   }
 
@@ -224,11 +224,11 @@ class AutoTaskRepository implements TaskRepository {
       return this.mock.markRisk(taskId)
     }
   }
-  async getDashboardCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
+  async getWorkbenchCards(): Promise<{ todo: number; overdue: number; highRisk: number; takeover: number }> {
     try {
-      return await this.real.getDashboardCards()
+      return await this.real.getWorkbenchCards()
     } catch {
-      return this.mock.getDashboardCards()
+      return this.mock.getWorkbenchCards()
     }
   }
   async getMyQueue(limit?: number): Promise<Task[]> {

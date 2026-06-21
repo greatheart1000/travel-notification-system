@@ -4,10 +4,17 @@ import type { MakeTrip, MakeTripStatus, MakeWeatherInfo } from '../data/figmaMoc
 import { makeStatusColorMap } from '../data/figmaMockData'
 import { TripDetail } from './TripDetail'
 
+function computeDisplayStatus(startDate: string, endDate: string): MakeTripStatus {
+  if (!startDate || !endDate) return '招募中'
+  const today = new Date().toISOString().slice(0, 10)
+  if (today < startDate) return '招募中'
+  if (today <= endDate) return '进行中'
+  return '已结束'
+}
+
 // Module-level cache — persists across navigations within the same session
 let cachedTrips: MakeTrip[] | null = null
 let cachedWeather: MakeWeatherInfo[] | null = null
-let cachedStatusColorMap: Partial<Record<MakeTripStatus, string>> | null = null
 
 interface TripsProps {
   tripId?: string | null
@@ -35,7 +42,6 @@ export function Trips({
   const [selectedTripsForWarning, setSelectedTripsForWarning] = useState<string[]>([])
   const [warningMessageContent, setWarningMessageContent] = useState('')
   const [editableWarnings, setEditableWarnings] = useState<MakeWeatherInfo[]>([])
-  const [statusColorMap, setStatusColorMap] = useState<Partial<Record<MakeTripStatus, string>>>({})
   const [isLoading, setIsLoading] = useState(!cachedTrips)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
@@ -57,23 +63,19 @@ export function Trips({
       if (cachedTrips) {
         setTrips(cachedTrips)
         if (cachedWeather) setWeatherData(cachedWeather)
-        if (cachedStatusColorMap) setStatusColorMap(cachedStatusColorMap)
       }
       setIsLoading(!cachedTrips)
       setLoadError(null)
       try {
-        const [apiTrips, apiWeather, apiStatusColorMap] = await Promise.all([
+        const [apiTrips, apiWeather] = await Promise.all([
           FigmaTripService.getAllTrips(),
           FigmaWeatherService.getAllWeather(),
-          FigmaTripService.getStatusColorMap(),
         ])
         if (!active) return
         cachedTrips = apiTrips
         cachedWeather = apiWeather
-        cachedStatusColorMap = apiStatusColorMap
         setTrips(apiTrips)
         setWeatherData(apiWeather)
-        setStatusColorMap(apiStatusColorMap)
       } catch (error) {
         if (!active) return
         setLoadError(error instanceof Error ? error.message : 'API 数据加载失败')
@@ -122,13 +124,10 @@ export function Trips({
 
   const handleSaveTrip = async () => {
     if (!editedTrip) return
-    const status = editedTrip.status as MakeTripStatus
     try {
       await FigmaTripService.updateTrip({
         ...editedTrip,
         participants: Number(editedTrip.participants) || 0,
-        status,
-        statusColor: statusColorMap[status] ?? editedTrip.statusColor,
       })
       await refreshTrips()
       setToast(`保存成功：${editedTrip.name}`)
@@ -258,22 +257,6 @@ export function Trips({
   }
 
 
-  if (isLoading) {
-    return (
-      <div className="p-6">
-        <div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-gray-600">正在通过 API 加载行程数据...</div>
-      </div>
-    )
-  }
-
-  if (loadError) {
-    return (
-      <div className="p-6">
-        <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">{loadError}</div>
-      </div>
-    )
-  }
-
   const totalPages = Math.max(1, Math.ceil(trips.length / itemsPerPage))
   const startIndex = (currentPage - 1) * itemsPerPage
   const currentTrips = trips.slice(startIndex, startIndex + itemsPerPage)
@@ -284,6 +267,16 @@ export function Trips({
         <h1 className="text-2xl font-bold text-gray-900 mb-2">行程管理</h1>
         <p className="text-gray-600">管理所有旅行团，查看详情和数据分析，配置通知提醒</p>
       </div>
+
+      {loadError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">{loadError}</div>
+      ) : isLoading && trips.length === 0 ? (
+        <div className="rounded-lg border border-gray-200 bg-white p-12 text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-cyan-500" />
+          <p className="mt-4 text-sm text-gray-400">加载中...</p>
+        </div>
+      ) : (
+        <>
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
         <div className="flex items-center justify-between gap-4">
@@ -369,16 +362,12 @@ export function Trips({
                   <td className="px-3 py-3">
                     <input value={newTrip.leader} onChange={(e) => setNewTrip({ ...newTrip, leader: e.target.value })} placeholder="领队" className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500" />
                   </td>
-                  <td className="px-3 py-3">
-                    <select value={newTrip.status} onChange={(e) => {
-                      const s = e.target.value as MakeTripStatus
-                      setNewTrip({ ...newTrip, status: s, statusColor: statusColorMap[s] ?? newTrip.statusColor })
-                    }} className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500">
-                      <option value="进行中">进行中</option>
-                      <option value="即将出发">即将出发</option>
-                      <option value="招募中">招募中</option>
-                      <option value="已满员">已满员</option>
-                    </select>
+                  <td className="px-3 py-3 text-xs text-gray-400">
+                    {newTrip.startDate && newTrip.endDate ? (
+                      <span className={`px-2 py-1 rounded-full text-xs ${makeStatusColorMap[computeDisplayStatus(newTrip.startDate, newTrip.endDate)]}`}>
+                        {computeDisplayStatus(newTrip.startDate, newTrip.endDate)}
+                      </span>
+                    ) : '—'}
                   </td>
                   <td className="px-3 py-3">
                     <div className="flex gap-2">
@@ -437,23 +426,10 @@ export function Trips({
                       ) : <span className="text-sm text-gray-600">{displayTrip.leader}</span>}
                     </td>
                     <td className="px-3 py-3">
-                      {isEditing ? (
-                        <select
-                          value={displayTrip.status}
-                          onChange={(event) => {
-                            const status = event.target.value as MakeTripStatus
-                            setEditedTrip({ ...editedTrip!, status, statusColor: statusColorMap[status] ?? displayTrip.statusColor })
-                          }}
-                          className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                        >
-                          <option value="进行中">进行中</option>
-                          <option value="即将出发">即将出发</option>
-                          <option value="招募中">招募中</option>
-                          <option value="已满员">已满员</option>
-                        </select>
-                      ) : (
-                        <span className={`px-2 py-1 rounded-full text-xs ${displayTrip.statusColor}`}>{displayTrip.status}</span>
-                      )}
+                      {(() => {
+                        const s = computeDisplayStatus(displayTrip.startDate, displayTrip.endDate)
+                        return <span className={`px-2 py-1 rounded-full text-xs ${makeStatusColorMap[s]}`}>{s}</span>
+                      })()}
                     </td>
                     <td className="px-3 py-3">
                       {isEditing ? (
@@ -635,7 +611,7 @@ export function Trips({
                             <td className="px-4 py-3 text-gray-600">{trip.startDate} 至 {trip.endDate}</td>
                             <td className="px-4 py-3 text-gray-600">{trip.participants} 人</td>
                             <td className="px-4 py-3">
-                              <span className={`rounded-full px-2 py-1 text-xs ${trip.statusColor}`}>{trip.status}</span>
+                              {(() => { const s = computeDisplayStatus(trip.startDate, trip.endDate); return <span className={`rounded-full px-2 py-1 text-xs ${makeStatusColorMap[s]}`}>{s}</span> })()}
                             </td>
                           </tr>
                         )
@@ -667,6 +643,8 @@ export function Trips({
           </div>
         </div>
       ) : null}
+      </>
+    )}
     </div>
   )
 }

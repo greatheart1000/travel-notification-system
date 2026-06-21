@@ -1,7 +1,6 @@
 import axios, { AxiosError, type AxiosResponse } from 'axios'
 import {
   channelCodeForSend,
-  mapDashboardStats,
   mapRawEmergencyWeatherSummary,
   mapRawAnalytics,
   mapRawNotificationRule,
@@ -34,7 +33,6 @@ import {
   type AuthLoginResponse,
   type CreateTemplateInput,
   type CurrentUser,
-  type DashboardStats,
   type ChannelCode,
   type CompleteTaskInput,
   type DispatchNowInput,
@@ -48,7 +46,6 @@ import {
   type ProjectNotificationConfig,
   type RawActionResult,
   type RawAnalyticsResponse,
-  type RawDashboardStats,
   type RawDispatchPreview,
   type RawEmergencyWeatherSummary,
   type RawNotificationRule,
@@ -522,19 +519,7 @@ export const authApi = {
   },
 }
 
-export interface SmartSuggestion {
-  id: string
-  tripId: string
-  tripName: string
-  type: string
-  title: string
-  reason: string
-  suggestedContent: string
-  targetCount: number
-  channel: ChannelCode
-}
-
-export const dashboardApi = {
+export const workbenchApi = {
   async getWorkbenchOverview(params?: { date?: string; ownerScope?: 'mine' | 'all' }): Promise<WorkbenchOverview> {
     const raw = await unwrapData<RawWorkbenchOverview>(
       client.get('/workbench/today/overview', {
@@ -558,16 +543,6 @@ export const dashboardApi = {
     )
     const items = Array.isArray(raw) ? raw : asArray<RawWorkbenchTask>(raw.items)
     return items.map((item) => mapRawWorkbenchTask(item))
-  },
-
-  async getSmartSuggestions(): Promise<SmartSuggestion[]> {
-    const raw = await unwrapData<{ items: SmartSuggestion[] }>(client.get('/dashboard/smart-suggestions'))
-    return raw.items
-  },
-
-  async getStats(): Promise<DashboardStats> {
-    const raw = await unwrapData<RawDashboardStats>(client.get('/dashboard/stats'))
-    return mapDashboardStats(raw)
   },
 
   async getRecentNotifications(limit = 10): Promise<RecentNotification[]> {
@@ -1068,6 +1043,168 @@ export const notificationsApi = {
       },
       '后端未开放通知规则启停接口',
     )
+  },
+}
+
+// ── Workflow Execution API ─────────────────────────────────────────────
+
+export interface WorkflowStatus {
+  trip_id: string
+  current_stage: string
+  start_date: string
+  end_date: string
+  progress: { completed: number; total: number }
+  pre_trip: WorkflowStep[]
+  in_trip: WorkflowStep[]
+  post_trip: WorkflowStep[]
+}
+
+export interface WorkflowStep {
+  key: string
+  label: string
+  time_node: string
+  completed: boolean
+  completed_at: string | null
+}
+
+export interface WorkflowActionResult {
+  trip_id: string
+  message: string
+  idempotent?: boolean
+  preview?: boolean
+  rendered_content?: string
+  results?: any[]
+  detail?: Record<string, unknown>
+}
+
+export const workflowApi = {
+  async getStatus(tripId: string): Promise<WorkflowStatus> {
+    return unwrapData<WorkflowStatus>(client.get(`/trips/${tripId}/workflow-status`))
+  },
+
+  async sendPreFlightNotice(tripId: string, preview = false): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/pre-trip/send-pre-flight-notice${preview ? '?preview=true' : ''}`))
+  },
+
+  async verifyResources(tripId: string, detail?: Record<string, unknown>): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/pre-trip/verify-resources`, detail || {}))
+  },
+
+  async verifyInsurance(tripId: string, detail?: Record<string, unknown>): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/pre-trip/verify-insurance`, detail || {}))
+  },
+
+  async buildGroup(tripId: string, steps?: string[]): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/pre-trip/build-group`, { steps }))
+  },
+
+  async sendDay1Guide(tripId: string, preview = false): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/in-trip/send-day1-guide${preview ? '?preview=true' : ''}`))
+  },
+
+  async sendFarewell(tripId: string, preview = false): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/post-trip/send-farewell${preview ? '?preview=true' : ''}`))
+  },
+
+  async sendSurvey(tripId: string, preview = false): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/post-trip/send-survey${preview ? '?preview=true' : ''}`))
+  },
+
+  async dismissGroup(tripId: string, preview = false): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/post-trip/dismiss-group${preview ? '?preview=true' : ''}`))
+  },
+
+  async triggerScheduler(tripId: string, timeSlot = 'morning'): Promise<WorkflowActionResult> {
+    return unwrapData<WorkflowActionResult>(client.post(`/trips/${tripId}/trigger-scheduler`, { time_slot: timeSlot }))
+  },
+
+  async getLifecyclePlaybook(): Promise<any[]> {
+    return unwrapData<any[]>(client.get('/lifecycle-playbook'))
+  },
+}
+
+// ── Staff API ──────────────────────────────────────────────────────────
+
+export interface StaffMember {
+  role: string
+  name: string
+  phone: string
+}
+
+export const staffApi = {
+  async getByTrip(tripId: string): Promise<StaffMember[]> {
+    const raw = await unwrapData<{ staff: StaffMember[] }>(client.get(`/trips/${tripId}/staff`))
+    return raw.staff || []
+  },
+
+  async updateTripStaff(tripId: string, staff: StaffMember[]): Promise<{ staff: StaffMember[] }> {
+    return unwrapData<{ staff: StaffMember[] }>(client.put(`/trips/${tripId}/staff`, { staff }))
+  },
+
+  async deleteStaffRole(tripId: string, role: string): Promise<{ message: string }> {
+    return unwrapData<{ message: string }>(client.delete(`/trips/${tripId}/staff/${role}`))
+  },
+}
+
+// ── WeCom API ──────────────────────────────────────────────────────────
+
+export const wecomApi = {
+  async setWebhook(tripId: string, webhookUrl: string): Promise<{ message: string }> {
+    return unwrapData<{ message: string }>(client.put(`/trips/${tripId}/webhook`, { webhook_url: webhookUrl }))
+  },
+
+  async testWebhook(tripId: string): Promise<{ message: string }> {
+    return unwrapData<{ message: string }>(client.post(`/trips/${tripId}/webhook/test`))
+  },
+}
+
+// ── Guest API ───────────────────────────────────────────────────────────
+
+export interface GuestRecord {
+  id: string
+  name: string
+  phone: string
+  is_vip?: boolean
+  vip_tagged_at?: string
+  trip_id?: string
+  trip_name?: string
+}
+
+export const guestApi = {
+  async list(isVip?: boolean, search?: string): Promise<GuestRecord[]> {
+    const params = new URLSearchParams()
+    if (isVip !== undefined) params.set('is_vip', String(isVip))
+    if (search) params.set('search', search)
+    const qs = params.toString()
+    const raw = await unwrapData<{ guests: GuestRecord[] }>(client.get(`/guests${qs ? '?' + qs : ''}`))
+    return raw.guests || []
+  },
+
+  async updateGuest(guestId: string, patch: { name?: string; phone?: string }): Promise<{ guest: GuestRecord }> {
+    return unwrapData<{ guest: GuestRecord }>(client.put(`/guests/${guestId}`, patch))
+  },
+
+  async deleteGuest(guestId: string): Promise<{ deleted: boolean; unlinked_trips: number }> {
+    return unwrapData<{ deleted: boolean; unlinked_trips: number }>(client.delete(`/guests/${guestId}`))
+  },
+}
+
+// ── Itinerary API ───────────────────────────────────────────────────────
+
+export interface ItineraryDay {
+  title: string
+  location: string
+  description: string
+}
+
+export const itineraryApi = {
+  async getByTrip(tripId: string): Promise<ItineraryDay[]> {
+    const raw = await unwrapData<{ days: ItineraryDay[] }>(client.get(`/trips/${tripId}/itinerary`))
+    return raw.days || []
+  },
+
+  async updateTripItinerary(tripId: string, days: ItineraryDay[]): Promise<{ days: ItineraryDay[]; message: string }> {
+    return unwrapData<{ days: ItineraryDay[]; message: string }>(client.put(`/trips/${tripId}/itinerary`, { days }))
   },
 }
 

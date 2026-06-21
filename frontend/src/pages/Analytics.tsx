@@ -106,7 +106,19 @@ export function Analytics() {
                 ) : (
                   topTrips.map((trip: AnalyticsTopTrip) => (
                     <tr key={trip.name} className="hover:bg-gray-50">
-                      <td className="px-4 py-4 text-gray-900">{trip.name}</td>
+                      <td className="px-4 py-4">
+                        {trip.tripId ? (
+                          <a
+                            href={`/trips/${encodeURIComponent(trip.tripId)}`}
+                            onClick={(e) => { e.preventDefault(); window.history.pushState({}, '', `/trips/${encodeURIComponent(trip.tripId)}`); window.dispatchEvent(new PopStateEvent('popstate')) }}
+                            className="text-cyan-600 hover:text-cyan-700 hover:underline"
+                          >
+                            {trip.name}
+                          </a>
+                        ) : (
+                          <span className="text-gray-900">{trip.name}</span>
+                        )}
+                      </td>
                       <td className="px-4 py-4 text-right text-gray-700">{trip.notifications}</td>
                       <td className="px-4 py-4 text-right">
                         <span className="text-yellow-600 font-medium">{trip.satisfaction} ⭐</span>

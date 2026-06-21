@@ -2,7 +2,6 @@ import {
   type AnalyticsData,
   type AnalyticsMetrics,
   type ChannelCode,
-  type DashboardStats,
   type EmergencyWeatherSummary,
   type RawEmergencyWeatherSummary,
   type NotificationRule,
@@ -12,7 +11,6 @@ import {
   type NotificationStatusCode,
   type NotificationTemplate,
   type RawAnalyticsResponse,
-  type RawDashboardStats,
   type RawNotificationRule,
   type RawNotificationTemplate,
   type RawRecentNotification,
@@ -76,9 +74,9 @@ const TRIP_STATUS_ALIASES_NORMALIZED: Record<string, TripStatusCode> = {
 }
 
 const TRIP_STATUS_LABELS: Record<TripStatusCode, string> = {
-  planned: '计划中',
+  planned: '招募中',
   in_progress: '进行中',
-  completed: '已完成',
+  completed: '已结束',
   cancelled: '已取消',
   unknown: '未知',
 }
@@ -277,27 +275,25 @@ export function notificationStatusLabel(status: NotificationStatusCode): string 
   return NOTIFICATION_STATUS_LABELS[status]
 }
 
-export function mapDashboardStats(raw: RawDashboardStats): DashboardStats {
-  return {
-    todayNotifications: asNumber(raw.today_notifications, 0),
-    activeTrips: asNumber(raw.active_trips, 0),
-    totalTravelers: asNumber(raw.total_travelers, 0),
-    totalUsers: asNumber(raw.total_users, 0),
-    pendingNotifications: asNumber(raw.pending_notifications, 0),
-    pendingComplaints: asNumber(raw.pending_complaints, 0),
-    notificationSuccessRate: asNumber(raw.notification_success_rate, 0),
-    avgResponseTimeMs: asNumber(raw.avg_response_time_ms, 0),
-    channelGrowthRate: asNumber(raw.channel_growth_rate, 0),
-  }
+export function computeTripStatus(startDate: string, endDate: string): TripStatusCode {
+  if (!startDate || !endDate) return 'planned'
+  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  if (today < startDate) return 'planned'       // 招募中
+  if (today <= endDate) return 'in_progress'    // 进行中
+  return 'completed'                             // 已结束
+}
+
+export function computeTripStatusLabel(startDate: string, endDate: string): string {
+  return tripStatusLabel(computeTripStatus(startDate, endDate))
 }
 
 export function mapRawTrip(raw: RawTrip): Trip {
-  const status = normalizeTripStatus(raw.status)
   const destination = safeText(raw.destination, '未命名行程')
   const teamId = safeText(raw.team_id ?? raw.team, '')
   const startDate = safeText(raw.start_date, '')
   const endDate = safeText(raw.end_date, '')
   const id = safeText(raw.id, fallbackId('trip', [teamId, destination, startDate, endDate]))
+  const status = computeTripStatus(startDate, endDate)
 
   const itinerary = (raw.itinerary || []).map(item => ({
     date: safeText(item.date),
@@ -325,6 +321,8 @@ export function mapRawTrip(raw: RawTrip): Trip {
     contactPhone: safeText(raw.contact_phone),
     itinerary,
     guests,
+    webhookUrl: raw.webhook_url || '',
+    wecomChatId: raw.wecom_chat_id || '',
   }
 }
 

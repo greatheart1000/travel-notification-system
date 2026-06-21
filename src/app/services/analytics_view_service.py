@@ -58,19 +58,7 @@ class AnalyticsViewService:
             if rows:
                 break
 
-        if rows:
-            return rows
-
-        return [
-            {
-                "date": "2026-04-18",
-                "transport": "Transport",
-                "route": "Suram Hotel to Climate Parian",
-                "hotel": "TEAM-DEMO-ON",
-                "trip_id": "seed-itinerary",
-                "trip_name": "默认演示行程",
-            }
-        ]
+        return rows
 
     def build_metrics_payload(
         self, base_payload: dict[str, Any], *, tenant_id: str

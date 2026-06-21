@@ -210,6 +210,8 @@ class JsonFileStore:
     _lock: RLock = field(default_factory=RLock, init=False, repr=False)
     _mysql_enabled: bool = field(default=False, init=False, repr=False)
     _mysql_config: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _indexes: dict[str, dict[str, list[int]]] = field(default_factory=dict, init=False, repr=False)
+    _collection_cache: dict[str, list[dict]] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         backend = os.getenv("TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND", "mysql").strip().lower()
@@ -226,6 +228,26 @@ class JsonFileStore:
             self.base_dir = os.getenv("TRAVEL_NOTIFICATION_DB_DIR", DEFAULT_DB_DIR)
         self.base_dir = Path(self.base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    def _build_index(self, collection: str, field: str, items: list[dict]) -> None:
+        """为集合的指定字段构建内存索引（O(1) 查找）。"""
+        if collection not in self._indexes:
+            self._indexes[collection] = {}
+        idx: dict[str, list[int]] = {}
+        for i, item in enumerate(items):
+            val = str(item.get(field, ""))
+            idx.setdefault(val, []).append(i)
+        self._indexes[collection][field] = idx
+
+    def find_by_index(self, collection: str, field: str, value: str) -> list[dict]:
+        """使用索引 O(1) 查找（如果索引存在），否则回退到扫描。"""
+        items = self.read_collection(collection)
+        if collection in self._indexes and field in self._indexes[collection]:
+            indices = self._indexes[collection][field].get(value, [])
+            return [items[i] for i in indices if i < len(items)]
+        # 回退：扫描 + 自动建索引
+        self._build_index(collection, field, items)
+        return [item for item in items if str(item.get(field, "")) == value]
 
     def _init_mysql_backend(self) -> None:
         host = os.getenv("TRAVEL_NOTIFICATION_MYSQL_HOST", DEFAULT_MYSQL_HOST).strip()
@@ -466,7 +488,7 @@ class JsonFileStore:
                         UNIQUE KEY uk_rule_code (rule_code),
                         KEY idx_rule_match (stage, time_slot, scene, enabled, priority),
                         CONSTRAINT fk_rule_template FOREIGN KEY (template_id)
-                            REFERENCES t_notification_template(id)
+                            REFERENCES t_notification_template(id) ON DELETE SET NULL
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
                     """
                 )
@@ -513,7 +535,7 @@ class JsonFileStore:
                         UNIQUE KEY uk_task_code (task_code),
                         UNIQUE KEY uk_idempotency_key (idempotency_key),
                         KEY idx_task_trip_status (trip_id, status, created_at),
-                        CONSTRAINT fk_task_trip FOREIGN KEY (trip_id) REFERENCES t_trip(id)
+                        CONSTRAINT fk_task_trip FOREIGN KEY (trip_id) REFERENCES t_trip(id) ON DELETE SET NULL
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
                     """
                 )
@@ -606,23 +628,144 @@ class JsonFileStore:
                         (DEFAULT_TENANT_ID,),
                     )
 
-                if has_table("t_notification_rule"):
-                    if not has_column("t_notification_rule", "tenant_id"):
-                        cursor.execute(
-                            f"""
-                            ALTER TABLE t_notification_rule
-                            ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}'
-                            AFTER rule_name
-                            """
-                        )
-                    cursor.execute(
-                        """
-                        UPDATE t_notification_rule
-                        SET tenant_id = %s
-                        WHERE tenant_id IS NULL OR tenant_id = ''
-                        """,
-                        (DEFAULT_TENANT_ID,),
-                    )
+                # ── 新增: 拆分 trip ext_data，建立独立结构化表 ─────────────────
+
+                # t_trip 扩展列
+                if has_table("t_trip"):
+                    for col_name, col_def in [
+                        ("scene_tags", "JSON NULL COMMENT '特殊场景标签'"),
+                    ]:
+                        if not has_column("t_trip", col_name):
+                            cursor.execute(
+                                f"ALTER TABLE t_trip ADD COLUMN {col_name} {col_def}"
+                            )
+
+                # t_trip_staff: 行程人员（团期负责人/管家/司机）
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS t_trip_staff (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        trip_id BIGINT UNSIGNED NOT NULL,
+                        tenant_id VARCHAR(64) NOT NULL DEFAULT '',
+                        role ENUM('manager','concierge','driver') NOT NULL,
+                        name VARCHAR(64) NOT NULL DEFAULT '',
+                        phone VARCHAR(20) NOT NULL DEFAULT '',
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_trip_role (trip_id, role),
+                        KEY idx_staff_tenant (tenant_id),
+                        CONSTRAINT fk_staff_trip FOREIGN KEY (trip_id) REFERENCES t_trip(id) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                # t_guest: 游客独立实体
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS t_guest (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}',
+                        name VARCHAR(64) NOT NULL DEFAULT '',
+                        phone VARCHAR(20) NOT NULL DEFAULT '',
+                        is_vip TINYINT(1) NOT NULL DEFAULT 0,
+                        vip_tagged_at DATETIME NULL,
+                        vip_tagged_by VARCHAR(64) NOT NULL DEFAULT '',
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_guest_phone (tenant_id, phone)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                # t_trip_guest: 行程-游客多对多
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_trip_guest (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        trip_id BIGINT UNSIGNED NOT NULL,
+                        guest_id BIGINT UNSIGNED NOT NULL,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_trip_guest (trip_id, guest_id),
+                        CONSTRAINT fk_tg_trip FOREIGN KEY (trip_id) REFERENCES t_trip(id) ON DELETE CASCADE,
+                        CONSTRAINT fk_tg_guest FOREIGN KEY (guest_id) REFERENCES t_guest(id) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                # t_trip_itinerary: 每日行程表
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_trip_itinerary (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        trip_id BIGINT UNSIGNED NOT NULL,
+                        day_number TINYINT UNSIGNED NOT NULL DEFAULT 1,
+                        title VARCHAR(128) NOT NULL DEFAULT '',
+                        location VARCHAR(128) NOT NULL DEFAULT '',
+                        description TEXT,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_trip_day (trip_id, day_number),
+                        CONSTRAINT fk_itinerary_trip FOREIGN KEY (trip_id) REFERENCES t_trip(id) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                # t_workflow_execution: 工作流执行记录
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_workflow_execution (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        trip_id BIGINT UNSIGNED NOT NULL,
+                        step_key VARCHAR(64) NOT NULL,
+                        completed TINYINT(1) NOT NULL DEFAULT 0,
+                        completed_at DATETIME NULL,
+                        operator_id VARCHAR(64) NOT NULL DEFAULT '',
+                        detail JSON NULL,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_trip_step (trip_id, step_key),
+                        CONSTRAINT fk_wf_trip FOREIGN KEY (trip_id) REFERENCES t_trip(id) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                # t_audit_log: 独立审计日志表
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS t_audit_log (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        tenant_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_TENANT_ID}',
+                        operator_id VARCHAR(64) NOT NULL DEFAULT '',
+                        action VARCHAR(64) NOT NULL DEFAULT '',
+                        target VARCHAR(128) NOT NULL DEFAULT '',
+                        detail JSON NULL,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        KEY idx_audit_tenant (tenant_id, created_at),
+                        KEY idx_audit_operator (operator_id, created_at),
+                        KEY idx_audit_target (target, created_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                # t_lifecycle_playbook: 流程剧本（已有 seed SQL，这里确保表存在）
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_lifecycle_playbook (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        stage ENUM('pre_trip','in_trip','post_trip') NOT NULL,
+                        time_node VARCHAR(64) NOT NULL DEFAULT '',
+                        core_work VARCHAR(128) NOT NULL DEFAULT '',
+                        action_detail TEXT NOT NULL,
+                        sort_order INT UNSIGNED NOT NULL DEFAULT 100,
+                        is_active TINYINT(1) NOT NULL DEFAULT 1,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        KEY idx_stage_sort (stage, sort_order)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
         finally:
             connection.close()
 
@@ -634,13 +777,33 @@ class JsonFileStore:
     def read_collection(self, collection: str) -> list[dict[str, Any]]:
         if self._mysql_enabled:
             return self._read_collection_mysql(collection)
-        return self._read_collection_json(collection)
+        # 使用缓存避免重复读文件
+        if collection in self._collection_cache:
+            return self._collection_cache[collection]
+        items = self._read_collection_json(collection)
+        self._collection_cache[collection] = items
+        # 自动为常用字段建索引
+        if items and collection not in self._indexes:
+            if collection == "trips":
+                self._build_index(collection, "id", items)
+                self._build_index(collection, "status", items)
+                self._build_index(collection, "team_id", items)
+            elif collection == "guests":
+                self._build_index(collection, "id", items)
+                self._build_index(collection, "phone", items)
+            elif collection in ("trip_staff", "workflow_executions"):
+                self._build_index(collection, "trip_id", items)
+        return items
 
     def write_collection(self, collection: str, items: list[dict[str, Any]]) -> None:
         if self._mysql_enabled:
             self._write_collection_mysql(collection, items)
             return
         self._write_collection_json(collection, items)
+        # 更新缓存和索引
+        self._collection_cache[collection] = items
+        if collection in self._indexes:
+            del self._indexes[collection]  # 下次读取时重建索引
 
     def upsert(self, collection: str, item: dict[str, Any], key: str = "id") -> dict[str, Any]:
         if self._mysql_enabled:
@@ -707,6 +870,20 @@ class JsonFileStore:
             return self._read_mysql_notification_rules()
         if collection == "notification_attempts":
             return self._read_mysql_notification_attempts()
+        if collection == "guests":
+            return self._read_mysql_guests()
+        if collection == "trip_guests":
+            return self._read_mysql_trip_guests()
+        if collection == "trip_staff":
+            return self._read_mysql_trip_staff()
+        if collection == "trip_itineraries":
+            return self._read_mysql_trip_itineraries()
+        if collection == "workflow_executions":
+            return self._read_mysql_workflow_executions()
+        if collection == "audit_logs":
+            return self._read_mysql_audit_logs()
+        if collection == "lifecycle_playbook":
+            return self._read_mysql_lifecycle_playbook()
         return self._read_mysql_generic_collection(collection)
 
     def _write_collection_mysql(self, collection: str, items: list[dict[str, Any]]) -> None:
@@ -725,6 +902,24 @@ class JsonFileStore:
         if collection == "trips":
             for item in items:
                 self._upsert_mysql_trip(item, key="id")
+            return
+        if collection == "guests":
+            self._write_mysql_guests(items)
+            return
+        if collection == "trip_guests":
+            self._write_mysql_trip_guests(items)
+            return
+        if collection == "trip_staff":
+            self._write_mysql_trip_staff(items)
+            return
+        if collection == "trip_itineraries":
+            self._write_mysql_trip_itineraries(items)
+            return
+        if collection == "workflow_executions":
+            self._write_mysql_workflow_executions(items)
+            return
+        if collection == "lifecycle_playbook":
+            self._write_mysql_lifecycle_playbook(items)
             return
         self._write_mysql_generic_collection(collection, items)
 
@@ -1604,6 +1799,292 @@ class JsonFileStore:
             )
         return items
 
+    # ── 新增表 MySQL 读写方法 ────────────────────────────────────────────────
+
+    def _read_mysql_guests(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM t_guest ORDER BY id")
+                rows = cursor.fetchall() or []
+        finally:
+            connection.close()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            items.append({
+                "id": str(row.get("id")),
+                "tenant_id": row.get("tenant_id", ""),
+                "name": row.get("name", ""),
+                "phone": row.get("phone", ""),
+                "is_vip": bool(row.get("is_vip")),
+                "vip_tagged_at": _to_iso_datetime(row.get("vip_tagged_at")),
+                "vip_tagged_by": row.get("vip_tagged_by", ""),
+                "created_at": _to_iso_datetime(row.get("created_at")),
+                "updated_at": _to_iso_datetime(row.get("updated_at")),
+            })
+        return items
+
+    def _write_mysql_guests(self, items: list[dict[str, Any]]) -> None:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                for item in items:
+                    guest_id = str(item.get("id") or "")
+                    cursor.execute(
+                        """
+                        INSERT INTO t_guest (id, tenant_id, name, phone, is_vip, vip_tagged_at, vip_tagged_by)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            name = VALUES(name), phone = VALUES(phone),
+                            is_vip = VALUES(is_vip), vip_tagged_at = VALUES(vip_tagged_at),
+                            vip_tagged_by = VALUES(vip_tagged_by)
+                        """,
+                        (
+                            int(guest_id) if guest_id.isdigit() else 0,
+                            item.get("tenant_id", "tenant-a"),
+                            item.get("name", ""),
+                            item.get("phone", ""),
+                            1 if item.get("is_vip") else 0,
+                            _to_mysql_datetime(item.get("vip_tagged_at")),
+                            item.get("vip_tagged_by", ""),
+                        ),
+                    )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _read_mysql_trip_guests(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM t_trip_guest ORDER BY id")
+                rows = cursor.fetchall() or []
+        finally:
+            connection.close()
+        return [{"id": str(r["id"]), "trip_id": str(r["trip_id"]), "guest_id": str(r["guest_id"])} for r in rows]
+
+    def _write_mysql_trip_guests(self, items: list[dict[str, Any]]) -> None:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                for item in items:
+                    tid = int(str(item.get("trip_id") or "0"))
+                    gid = int(str(item.get("guest_id") or "0"))
+                    if not tid or not gid:
+                        continue
+                    cursor.execute(
+                        """
+                        INSERT IGNORE INTO t_trip_guest (trip_id, guest_id) VALUES (%s, %s)
+                        """,
+                        (tid, gid),
+                    )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _read_mysql_trip_staff(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM t_trip_staff ORDER BY id")
+                rows = cursor.fetchall() or []
+        finally:
+            connection.close()
+        return [
+            {
+                "id": str(r["id"]),
+                "trip_id": str(r["trip_id"]),
+                "role": r["role"],
+                "name": r.get("name", ""),
+                "phone": r.get("phone", ""),
+            }
+            for r in rows
+        ]
+
+    def _write_mysql_trip_staff(self, items: list[dict[str, Any]]) -> None:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                for item in items:
+                    tid = int(str(item.get("trip_id") or "0"))
+                    role = item.get("role", "")
+                    if not tid or not role:
+                        continue
+                    cursor.execute(
+                        """
+                        INSERT INTO t_trip_staff (trip_id, role, name, phone)
+                        VALUES (%s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE name = VALUES(name), phone = VALUES(phone)
+                        """,
+                        (tid, role, item.get("name", ""), item.get("phone", "")),
+                    )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _read_mysql_trip_itineraries(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM t_trip_itinerary ORDER BY trip_id, day_number")
+                rows = cursor.fetchall() or []
+        finally:
+            connection.close()
+        return [
+            {
+                "id": str(r["id"]),
+                "trip_id": str(r["trip_id"]),
+                "day_number": int(r.get("day_number", 1)),
+                "title": r.get("title", ""),
+                "location": r.get("location", ""),
+                "description": r.get("description", ""),
+            }
+            for r in rows
+        ]
+
+    def _write_mysql_trip_itineraries(self, items: list[dict[str, Any]]) -> None:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                for item in items:
+                    tid = int(str(item.get("trip_id") or "0"))
+                    day = int(item.get("day_number", 1))
+                    if not tid:
+                        continue
+                    cursor.execute(
+                        """
+                        INSERT INTO t_trip_itinerary (trip_id, day_number, title, location, description)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            title = VALUES(title), location = VALUES(location), description = VALUES(description)
+                        """,
+                        (tid, day, item.get("title", ""), item.get("location", ""), item.get("description", "")),
+                    )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _read_mysql_workflow_executions(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM t_workflow_execution ORDER BY id")
+                rows = cursor.fetchall() or []
+        finally:
+            connection.close()
+        return [
+            {
+                "id": str(r["id"]),
+                "trip_id": str(r["trip_id"]),
+                "step_key": r.get("step_key", ""),
+                "completed": bool(r.get("completed")),
+                "completed_at": _to_iso_datetime(r.get("completed_at")),
+                "operator_id": r.get("operator_id", ""),
+                "detail": _parse_json_object(r.get("detail")),
+            }
+            for r in rows
+        ]
+
+    def _write_mysql_workflow_executions(self, items: list[dict[str, Any]]) -> None:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                for item in items:
+                    tid = int(str(item.get("trip_id") or "0"))
+                    step_key = item.get("step_key", "")
+                    if not tid or not step_key:
+                        continue
+                    detail = json.dumps(item.get("detail") or {}, ensure_ascii=False)
+                    cursor.execute(
+                        """
+                        INSERT INTO t_workflow_execution (trip_id, step_key, completed, completed_at, operator_id, detail)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            completed = VALUES(completed), completed_at = VALUES(completed_at),
+                            operator_id = VALUES(operator_id), detail = VALUES(detail)
+                        """,
+                        (
+                            tid, step_key,
+                            1 if item.get("completed") else 0,
+                            _to_mysql_datetime(item.get("completed_at")),
+                            item.get("operator_id", ""),
+                            detail,
+                        ),
+                    )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _read_mysql_audit_logs(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM t_audit_log ORDER BY created_at DESC LIMIT 500")
+                rows = cursor.fetchall() or []
+        finally:
+            connection.close()
+        return [
+            {
+                "id": str(r["id"]),
+                "tenant_id": r.get("tenant_id", ""),
+                "operator_id": r.get("operator_id", ""),
+                "action": r.get("action", ""),
+                "target": r.get("target", ""),
+                "detail": _parse_json_object(r.get("detail")),
+                "created_at": _to_iso_datetime(r.get("created_at")),
+            }
+            for r in rows
+        ]
+
+    def _read_mysql_lifecycle_playbook(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM t_lifecycle_playbook WHERE is_active = 1 ORDER BY sort_order")
+                rows = cursor.fetchall() or []
+        finally:
+            connection.close()
+        return [
+            {
+                "id": str(r["id"]),
+                "stage": r.get("stage", ""),
+                "time_node": r.get("time_node", ""),
+                "core_work": r.get("core_work", ""),
+                "action_detail": r.get("action_detail", ""),
+                "sort_order": int(r.get("sort_order", 100)),
+                "is_active": bool(r.get("is_active", True)),
+                "created_at": _to_iso_datetime(r.get("created_at")),
+                "updated_at": _to_iso_datetime(r.get("updated_at")),
+            }
+            for r in rows
+        ]
+
+    def _write_mysql_lifecycle_playbook(self, items: list[dict[str, Any]]) -> None:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                for item in items:
+                    rid = int(str(item.get("id") or "0"))
+                    cursor.execute(
+                        """
+                        INSERT INTO t_lifecycle_playbook (id, stage, time_node, core_work, action_detail, sort_order, is_active)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            stage = VALUES(stage), time_node = VALUES(time_node),
+                            core_work = VALUES(core_work), action_detail = VALUES(action_detail),
+                            sort_order = VALUES(sort_order), is_active = VALUES(is_active)
+                        """,
+                        (
+                            rid, item.get("stage", ""), item.get("time_node", ""),
+                            item.get("core_work", ""), item.get("action_detail", ""),
+                            int(item.get("sort_order", 100)),
+                            1 if item.get("is_active", True) else 0,
+                        ),
+                    )
+            connection.commit()
+        finally:
+            connection.close()
+
     def _read_mysql_generic_collection(self, collection: str) -> list[dict[str, Any]]:
         connection = self._mysql_connect()
         try:
@@ -1743,6 +2224,229 @@ class TripRepository:
 
     def delete(self, trip_id: str) -> bool:
         return self.store.delete(self.collection, trip_id)
+
+
+@dataclass(slots=True)
+class TripStaffRepository:
+    """行程人员仓库（团期负责人/管家/司机）。"""
+    store: JsonFileStore
+    collection: str = "trip_staff"
+
+    def get_by_trip(self, trip_id: str) -> list[dict[str, Any]]:
+        rows = self.store.read_collection(self.collection)
+        return [r for r in rows if str(r.get("trip_id")) == trip_id]
+
+    def upsert(self, trip_id: str, role: str, name: str, phone: str) -> dict[str, Any]:
+        rows = self.store.read_collection(self.collection)
+        existing = next((r for r in rows if str(r.get("trip_id")) == trip_id and r.get("role") == role), None)
+        item = {"trip_id": trip_id, "role": role, "name": name, "phone": phone}
+        if existing:
+            existing.update(item)
+        else:
+            item["id"] = f"staff-{trip_id}-{role}"
+            rows.append(item)
+        self.store.write_collection(self.collection, rows)
+        return existing or item
+
+    def put_staff_batch(self, trip_id: str, staff_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = self.store.read_collection(self.collection)
+        rows = [r for r in rows if str(r.get("trip_id")) != trip_id]
+        results = []
+        for s in staff_list:
+            item = {
+                "id": f"staff-{trip_id}-{s.get('role','')}",
+                "trip_id": trip_id,
+                "role": s.get("role", ""),
+                "name": s.get("name", ""),
+                "phone": s.get("phone", ""),
+            }
+            rows.append(item)
+            results.append(item)
+        self.store.write_collection(self.collection, rows)
+        return results
+
+
+@dataclass(slots=True)
+class GuestRepository:
+    """游客仓库（独立实体）。"""
+    store: JsonFileStore
+    collection: str = "guests"
+
+    def list(self, tenant_id: str = "tenant-a") -> list[dict[str, Any]]:
+        return [r for r in self.store.read_collection(self.collection) if r.get("tenant_id") == tenant_id]
+
+    def get(self, guest_id: str) -> dict[str, Any] | None:
+        for r in self.store.read_collection(self.collection):
+            if str(r.get("id")) == guest_id:
+                return r
+        return None
+
+    def get_by_phone(self, phone: str, tenant_id: str = "tenant-a") -> dict[str, Any] | None:
+        for r in self.store.read_collection(self.collection):
+            if r.get("phone") == phone and r.get("tenant_id") == tenant_id:
+                return r
+        return None
+
+    def create(self, item: dict[str, Any]) -> dict[str, Any]:
+        import uuid
+        item["id"] = str(item.get("id") or f"guest-{uuid.uuid4().hex[:10]}")
+        item.setdefault("tenant_id", "tenant-a")
+        item.setdefault("is_vip", False)
+        rows = self.store.read_collection(self.collection)
+        rows.append(item)
+        self.store.write_collection(self.collection, rows)
+        return item
+
+    def update(self, guest_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+        rows = self.store.read_collection(self.collection)
+        for r in rows:
+            if str(r.get("id")) == guest_id:
+                r.update(patch)
+                self.store.write_collection(self.collection, rows)
+                return r
+        return None
+
+    def delete(self, guest_id: str) -> bool:
+        rows = self.store.read_collection(self.collection)
+        new_rows = [r for r in rows if str(r.get("id")) != guest_id]
+        if len(new_rows) == len(rows):
+            return False
+        self.store.write_collection(self.collection, new_rows)
+        return True
+
+
+@dataclass(slots=True)
+class TripGuestRepository:
+    """行程-游客关联仓库。"""
+    store: JsonFileStore
+    collection: str = "trip_guests"
+
+    def get_guest_ids(self, trip_id: str) -> list[str]:
+        rows = self.store.read_collection(self.collection)
+        return [str(r["guest_id"]) for r in rows if str(r.get("trip_id")) == trip_id]
+
+    def get_trip_ids(self, guest_id: str) -> list[str]:
+        rows = self.store.read_collection(self.collection)
+        return [str(r["trip_id"]) for r in rows if str(r.get("guest_id")) == guest_id]
+
+    def link(self, trip_id: str, guest_id: str) -> dict[str, Any]:
+        rows = self.store.read_collection(self.collection)
+        existing = next((r for r in rows if str(r.get("trip_id")) == trip_id and str(r.get("guest_id")) == guest_id), None)
+        if existing:
+            return existing
+        item = {"id": f"tg-{trip_id}-{guest_id}", "trip_id": trip_id, "guest_id": guest_id}
+        rows.append(item)
+        self.store.write_collection(self.collection, rows)
+        return item
+
+    def unlink(self, trip_id: str, guest_id: str) -> bool:
+        rows = self.store.read_collection(self.collection)
+        new_rows = [r for r in rows if not (str(r.get("trip_id")) == trip_id and str(r.get("guest_id")) == guest_id)]
+        if len(new_rows) == len(rows):
+            return False
+        self.store.write_collection(self.collection, new_rows)
+        return True
+
+
+@dataclass(slots=True)
+class TripItineraryRepository:
+    """每日行程表仓库。"""
+    store: JsonFileStore
+    collection: str = "trip_itineraries"
+
+    def get_by_trip(self, trip_id: str) -> list[dict[str, Any]]:
+        rows = self.store.read_collection(self.collection)
+        return sorted(
+            [r for r in rows if str(r.get("trip_id")) == trip_id],
+            key=lambda r: int(r.get("day_number", 1)),
+        )
+
+    def upsert(self, trip_id: str, day_number: int, item: dict[str, Any]) -> dict[str, Any]:
+        rows = self.store.read_collection(self.collection)
+        existing = next(
+            (r for r in rows if str(r.get("trip_id")) == trip_id and int(r.get("day_number", 1)) == day_number),
+            None,
+        )
+        item["trip_id"] = trip_id
+        item["day_number"] = day_number
+        if existing:
+            existing.update(item)
+        else:
+            item["id"] = f"itin-{trip_id}-d{day_number}"
+            rows.append(item)
+        self.store.write_collection(self.collection, rows)
+        return existing or item
+
+    def replace_all(self, trip_id: str, days: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = self.store.read_collection(self.collection)
+        rows = [r for r in rows if str(r.get("trip_id")) != trip_id]
+        results = []
+        for i, d in enumerate(days, 1):
+            item = {
+                "id": f"itin-{trip_id}-d{i}",
+                "trip_id": trip_id,
+                "day_number": i,
+                "title": d.get("title", ""),
+                "location": d.get("location", ""),
+                "description": d.get("description", ""),
+            }
+            rows.append(item)
+            results.append(item)
+        self.store.write_collection(self.collection, rows)
+        return results
+
+
+@dataclass(slots=True)
+class WorkflowExecutionRepository:
+    """工作流执行记录仓库（替代 trip.workflow_status JSON）。"""
+    store: JsonFileStore
+    collection: str = "workflow_executions"
+
+    def get_by_trip(self, trip_id: str) -> list[dict[str, Any]]:
+        return [r for r in self.store.read_collection(self.collection) if str(r.get("trip_id")) == trip_id]
+
+    def mark(self, trip_id: str, step_key: str, operator_id: str = "", detail: dict | None = None) -> dict[str, Any]:
+        rows = self.store.read_collection(self.collection)
+        existing = next(
+            (r for r in rows if str(r.get("trip_id")) == trip_id and r.get("step_key") == step_key),
+            None,
+        )
+        now = datetime.now(tz=UTC).isoformat()
+        item = {
+            "trip_id": trip_id,
+            "step_key": step_key,
+            "completed": True,
+            "completed_at": now,
+            "operator_id": operator_id,
+            "detail": detail or {},
+        }
+        if existing:
+            existing.update(item)
+        else:
+            item["id"] = f"wf-{trip_id}-{step_key}"
+            rows.append(item)
+        self.store.write_collection(self.collection, rows)
+        return existing or item
+
+    def get_status_map(self, trip_id: str) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for r in self.get_by_trip(trip_id):
+            result[r["step_key"]] = r
+        return result
+
+
+@dataclass(slots=True)
+class LifecyclePlaybookRepository:
+    """流程剧本仓库。"""
+    store: JsonFileStore
+    collection: str = "lifecycle_playbook"
+
+    def list_all(self) -> list[dict[str, Any]]:
+        rows = self.store.read_collection(self.collection)
+        return sorted(rows, key=lambda r: int(r.get("sort_order", 100)))
+
+    def list_by_stage(self, stage: str) -> list[dict[str, Any]]:
+        return [r for r in self.list_all() if r.get("stage") == stage]
 
 
 @dataclass(slots=True)

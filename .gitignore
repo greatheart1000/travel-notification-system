@@ -9,3 +9,7 @@ __pycache__/
 # local embedded repositories
 /everything-claude-code/
 /skills/
+
+# deploy build artifacts
+deploy/fc/build/
+*.zip

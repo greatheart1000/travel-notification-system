@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, ClipboardList, Users, Calendar, MessageSquare } from 'lucide-react'
 import { FigmaTripService } from '../services/figmaTripService'
 import type { MakeNotificationRule, MakeTourist } from '../data/figmaMockData'
+import { TripWorkflowPanel } from '../components/trip/TripWorkflowPanel'
+import { TripStaffForm } from '../components/trip/TripStaffForm'
+import { TripWecomConfig } from '../components/trip/TripWecomConfig'
 
 interface TripDetailProps {
   tripId: string | null
   onBack: () => void
 }
+
+const TABS = [
+  { key: 'detail', label: '行程详情', icon: Calendar },
+  { key: 'workflow', label: '执行流程', icon: ClipboardList },
+  { key: 'staff', label: '人员配置', icon: Users },
+  { key: 'wecom', label: '群配置', icon: MessageSquare },
+] as const
 
 function buildNewTourist(index: number): MakeTourist {
   return {
@@ -33,6 +43,7 @@ export function TripDetail({ tripId, onBack }: TripDetailProps) {
   const [toast, setToast] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(Boolean(tripId))
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<string>('workflow')
 
   useEffect(() => {
     if (!tripId) {
@@ -181,6 +192,47 @@ export function TripDetail({ tripId, onBack }: TripDetailProps) {
         </button>
       </div>
 
+      {/* Tab 导航 */}
+      <div className="flex gap-1 mb-4 border-b">
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm border-b-2 -mb-px transition-colors ${
+              activeTab === key
+                ? 'border-cyan-500 text-cyan-600 font-medium'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* 执行流程 Tab */}
+      {activeTab === 'workflow' && tripId && (
+        <div className="rounded-lg border border-gray-200 bg-white p-4">
+          <TripWorkflowPanel tripId={tripId} currentStage="in_trip" />
+        </div>
+      )}
+
+      {/* 人员配置 Tab */}
+      {activeTab === 'staff' && tripId && (
+        <div className="rounded-lg border border-gray-200 bg-white p-4 max-w-lg">
+          <TripStaffForm tripId={tripId} />
+        </div>
+      )}
+
+      {/* 群配置 Tab */}
+      {activeTab === 'wecom' && tripId && (
+        <div className="rounded-lg border border-gray-200 bg-white p-4 max-w-lg">
+          <TripWecomConfig tripId={tripId} />
+        </div>
+      )}
+
+      {/* 行程详情 Tab */}
+      {activeTab === 'detail' && (
       <div className="max-w-none space-y-6">
         <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
           <div className="bg-gradient-to-r from-cyan-500 to-blue-600 px-6 py-4 text-white">
@@ -438,6 +490,7 @@ export function TripDetail({ tripId, onBack }: TripDetailProps) {
           </button>
         </div>
       </div>
+      )}
     </div>
   )
 }

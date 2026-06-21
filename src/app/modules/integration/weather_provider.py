@@ -130,23 +130,32 @@ def _normalize_daily_forecast(item: dict[str, Any]) -> dict[str, Any]:
 def _default_qweather_transport(
     host: str, path: str, params: dict[str, str], headers: dict[str, str]
 ) -> dict[str, Any]:
+    import gzip as gzip_module
+    host = os.getenv("QWEATHER_API_HOST", "").strip().rstrip("/")
     if not host:
         raise RuntimeError("QWEATHER_API_HOST is not configured")
 
-    query = urlencode(params)
+    from urllib.parse import quote
+    encoded_pairs = [(k, quote(str(v), safe='')) for k, v in params.items()]
+    query = urlencode(encoded_pairs)
     url = f"{host}{path}"
     if query:
         url = f"{url}?{query}"
     request = Request(url=url, headers=headers, method="GET")
     with urlopen(request, timeout=5) as response:
-        body = response.read()
-        if str(response.headers.get("Content-Encoding", "")).lower() == "gzip":
-            body = decompress(body)
-        return json.loads(body.decode("utf-8"))
+        raw = response.read()
+        # 处理 gzip 压缩响应
+        if raw[:2] == b'\x1f\x8b':
+            raw = gzip_module.decompress(raw)
+        return json.loads(raw.decode("utf-8"))
 
 
 def _load_local_env_file() -> None:
-    env_path = Path.cwd() / ".env.local"
+    # 从项目根目录加载
+    env_path = Path(__file__).resolve().parent.parent.parent.parent.parent / ".env.local"
+    if not env_path.exists():
+        # 兼容旧路径
+        env_path = Path.cwd() / ".env.local"
     if not env_path.exists():
         return
     for line in env_path.read_text(encoding="utf-8").splitlines():

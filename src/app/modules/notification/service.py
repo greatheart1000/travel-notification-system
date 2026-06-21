@@ -143,6 +143,32 @@ class NotificationAttemptRepository:
             return items
         return items[: max(limit, 0)]
 
+    def get_recent_items(self, *, tenant_id: str, limit: int) -> list[dict[str, Any]]:
+        """Return recent notification items for the workbench feed."""
+        from datetime import UTC, datetime
+
+        items = [item for item in self._records if item.get("tenant_id") == tenant_id]
+        items.sort(
+            key=lambda item: (
+                str(item.get("attempted_at") or datetime.now(tz=UTC).isoformat()),
+                str(item.get("attempt_id") or ""),
+            ),
+            reverse=True,
+        )
+        recent: list[dict[str, Any]] = []
+        for item in items[: max(limit, 0)]:
+            recent.append(
+                {
+                    "id": str(item.get("attempt_id") or ""),
+                    "customer_name": str(item.get("customer_name") or item.get("customer_id") or ""),
+                    "trip": str(item.get("trip_label") or item.get("trip_id") or ""),
+                    "channel": str(item.get("channel") or "sms"),
+                    "status": str(item.get("status") or ("sent" if item.get("ok") else "failed")),
+                    "created_at": str(item.get("attempted_at") or ""),
+                }
+            )
+        return recent
+
 
 class NotificationService:
     """通知模块服务：模板渲染 + 重试 + 兜底 + 幂等。"""
