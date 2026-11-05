@@ -131,7 +131,8 @@ def _default_qweather_transport(
     host: str, path: str, params: dict[str, str], headers: dict[str, str]
 ) -> dict[str, Any]:
     import gzip as gzip_module
-    host = os.getenv("QWEATHER_API_HOST", "").strip().rstrip("/")
+    raw_host = host or os.getenv("QWEATHER_API_HOST", "")
+    host = _normalize_qweather_host(raw_host)
     if not host:
         raise RuntimeError("QWEATHER_API_HOST is not configured")
 

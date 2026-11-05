@@ -7,7 +7,6 @@ Scope: frontend handoff readiness based on current code and smoke results.
 
 | Page | Status | Notes |
 |---|---|---|
-| Dashboard | ready | Uses typed API + adapter; supports `loading/error/empty/retry`. |
 | Trips | ready | List/create/update/delete wired to typed API; supports `loading/error/empty/retry`. |
 | Notifications | partial | Template list + send are wired; template creation is not persisted (backend endpoint not available in current flow). |
 | Analytics | ready | Metrics/channels/top-trips wired to typed API; supports `loading/error/empty/retry`. |
@@ -20,8 +19,6 @@ Scope: frontend handoff readiness based on current code and smoke results.
 | Auth | `/api/auth/login` | POST | Login gate in app shell |
 | Auth | `/api/auth/logout` | POST | Logout cleanup |
 | Auth | `/api/users/me` | GET | Login-state validation |
-| Dashboard | `/api/dashboard/stats` | GET | KPI cards |
-| Dashboard | `/api/notifications/recent?limit=10` | GET | Recent notification table |
 | Trips | `/api/trips` | GET | Trip list |
 | Trips | `/api/trips` | POST | Create trip |
 | Trips | `/api/trips/{id}` | PUT | Update trip status/details |
@@ -36,12 +33,11 @@ Scope: frontend handoff readiness based on current code and smoke results.
 
 1. Open app: unauthenticated users should see login gate.
 2. Login with valid credentials (`admin/123456` in current dev data).
-3. Dashboard loads stats and recent notifications; retry works when in error state.
-4. Trips page: create one trip, mark one as completed, delete one; state feedback should be visible.
-5. Notifications page: template list loads; click send on one template and verify success/failure message is visible.
-6. Analytics page: metrics table/cards render; retry and empty states are recoverable.
-7. Preferences page: load from backend, change values, save, reload page, verify values are mapped back from API.
-8. Logout from header: token is cleared and app returns to login gate.
+3. Trips page: create one trip, mark one as completed, delete one; state feedback should be visible.
+4. Notifications page: template list loads; click send on one template and verify success/failure message is visible.
+5. Analytics page: metrics table/cards render; retry and empty states are recoverable.
+6. Preferences page: load from backend, change values, save, reload page, verify values are mapped back from API.
+7. Logout from header: token is cleared and app returns to login gate.
 
 ## 4) Known Limits and User Impact
 

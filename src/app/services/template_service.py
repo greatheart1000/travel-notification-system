@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-
 from app.core.entities import EventName
 from app.core.entities import Template as RuleTemplate
 from app.core.models import Channel, NotificationType
@@ -304,9 +303,13 @@ class TemplateService:
         return template
 
     def ensure_default_template(self, tenant_id: str = "") -> NotificationTemplate:
-        existing = self.list_notification_templates(tenant_id=tenant_id)
-        if existing:
-            return existing[0]
+        existing_sms = [
+            item
+            for item in self.list_notification_templates(tenant_id=tenant_id)
+            if item.is_active and item.channel == Channel.SMS
+        ]
+        if existing_sms:
+            return sorted(existing_sms, key=lambda item: item.updated_at, reverse=True)[0]
 
         # 预置高质量的默认行程提醒模板
         content = (

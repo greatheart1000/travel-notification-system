@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import importlib
 import json
 import os
@@ -212,6 +213,8 @@ class JsonFileStore:
     _mysql_config: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _indexes: dict[str, dict[str, list[int]]] = field(default_factory=dict, init=False, repr=False)
     _collection_cache: dict[str, list[dict]] = field(default_factory=dict, init=False, repr=False)
+    _advisory_held: set[str] = field(default_factory=set, init=False, repr=False)
+    _advisory_handles: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         backend = os.getenv("TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND", "mysql").strip().lower()
@@ -805,14 +808,30 @@ class JsonFileStore:
         if collection in self._indexes:
             del self._indexes[collection]  # 下次读取时重建索引
 
-    def upsert(self, collection: str, item: dict[str, Any], key: str = "id") -> dict[str, Any]:
+    def upsert(
+        self,
+        collection: str,
+        item: dict[str, Any],
+        key: str = "id",
+        key_fields: tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
         if self._mysql_enabled:
             return self._upsert_mysql(collection, item, key)
 
         items = self.read_collection(collection)
-        existing_index = next(
-            (idx for idx, row in enumerate(items) if row.get(key) == item.get(key)), None
-        )
+        if key_fields:
+            existing_index = next(
+                (
+                    idx
+                    for idx, row in enumerate(items)
+                    if all(row.get(field) == item.get(field) for field in key_fields)
+                ),
+                None,
+            )
+        else:
+            existing_index = next(
+                (idx for idx, row in enumerate(items) if row.get(key) == item.get(key)), None
+            )
         if existing_index is None:
             items.append(item)
         else:
@@ -837,6 +856,60 @@ class JsonFileStore:
             return
         for path in self._collection_path(".").parent.glob("*.json"):
             path.unlink(missing_ok=True)
+
+    def acquire_advisory_lock(self, name: str, timeout_seconds: int = 0) -> bool:
+        """Acquire a cross-process lock for background workers.
+
+        MySQL uses ``GET_LOCK`` (connection-scoped). The JSON backend uses
+        ``flock`` so local multi-process deployments are also protected.
+        """
+        if name in self._advisory_held:
+            return False
+        if self._mysql_enabled:
+            connection = self._mysql_connect()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT GET_LOCK(%s, %s) AS acquired", (name, timeout_seconds))
+                    row = cursor.fetchone() or {}
+                acquired = int(row.get("acquired") or 0) == 1
+            except Exception:
+                connection.close()
+                raise
+            if not acquired:
+                connection.close()
+                return False
+            self._advisory_held.add(name)
+            self._advisory_handles[name] = connection
+            return True
+
+        lock_path = Path(self.base_dir or ".") / f".{name}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            return False
+        self._advisory_held.add(name)
+        self._advisory_handles[name] = handle
+        return True
+
+    def release_advisory_lock(self, name: str) -> None:
+        handle = self._advisory_handles.pop(name, None)
+        self._advisory_held.discard(name)
+        if handle is None:
+            return
+        if self._mysql_enabled:
+            try:
+                with handle.cursor() as cursor:
+                    cursor.execute("SELECT RELEASE_LOCK(%s)", (name,))
+            finally:
+                handle.close()
+            return
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
     def _read_collection_json(self, collection: str) -> list[dict[str, Any]]:
         path = self._collection_path(collection)
@@ -2201,11 +2274,14 @@ class TripRepository:
     store: JsonFileStore
     collection: str = "trips"
 
-    def list(self) -> list[dict[str, Any]]:
-        return self.store.read_collection(self.collection)
+    def list(self, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        items = self.store.read_collection(self.collection)
+        if tenant_id is None:
+            return items
+        return [item for item in items if str(item.get("tenant_id") or "") == tenant_id]
 
-    def get(self, trip_id: str) -> dict[str, Any] | None:
-        for item in self.list():
+    def get(self, trip_id: str, tenant_id: str | None = None) -> dict[str, Any] | None:
+        for item in self.list(tenant_id=tenant_id):
             if item.get("id") == trip_id:
                 return item
         return None
@@ -2489,4 +2565,9 @@ class ProjectNotificationConfigRepository:
         if not item.get("created_at"):
             item["created_at"] = datetime.now(tz=UTC).isoformat()
         item["updated_at"] = datetime.now(tz=UTC).isoformat()
-        return self.store.upsert(self.collection, item, key="project_id")
+        return self.store.upsert(
+            self.collection,
+            item,
+            key="project_id",
+            key_fields=("tenant_id", "project_id"),
+        )

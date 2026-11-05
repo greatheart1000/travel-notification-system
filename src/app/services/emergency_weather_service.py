@@ -272,26 +272,57 @@ class EmergencyWeatherService:
     ) -> dict[str, Any]:
         summary = self.get_summary(tenant_id)
         content = (custom_content or summary["generated_notification"]).strip()
-        first_trip = summary["affected_trips"][0] if summary["affected_trips"] else {}
-        task = NotificationTask(
-            tenant_id=tenant_id,
-            team_id=str(first_trip.get("team_id") or ""),
-            trip_id=str(first_trip.get("trip_id") or summary["alert_id"]),
-            customer_id=operator_id,
-            rendered_content=content,
-            idempotency_key=f"emergency:{summary['alert_id']}:{datetime.now(tz=UTC).isoformat()}",
-            primary_channel=Channel.SMS if channel == "sms" else Channel.WECHAT_WORK_GROUP,
-            fallback_channel=Channel.WECHAT_WORK_GROUP,
-            provider_context={
-                "trip_label": str(first_trip.get("destination") or summary["title"]),
-                "customer_name": "值班管家",
-            },
+        primary_channel = Channel.SMS if channel == "sms" else Channel.WECHAT_WORK_GROUP
+        fallback_channel = (
+            Channel.WECHAT_WORK_GROUP if primary_channel == Channel.SMS else Channel.SMS
         )
-        result = self.notification_service.dispatch(task)
+        sent_count = 0
+        first_notification_id = ""
+        recipients_count = 0
+
+        for trip in self._target_trips(tenant_id):
+            recipients: list[tuple[str, str]] = []
+            for guest in trip.get("guests") or []:
+                phone = str(guest.get("phone") or "").strip()
+                if phone:
+                    recipients.append((phone, str(guest.get("name") or "贵宾")))
+            if not recipients:
+                for field in ("trip_manager_phone", "concierge_phone", "contact_phone"):
+                    phone = str(trip.get(field) or "").strip()
+                    if phone:
+                        recipients.append((phone, "值班管家"))
+                        break
+
+            for phone, customer_name in recipients:
+                recipients_count += 1
+                task = NotificationTask(
+                    tenant_id=tenant_id,
+                    team_id=str(trip.get("team_id") or ""),
+                    trip_id=str(trip.get("id") or summary["alert_id"]),
+                    customer_id=phone,
+                    rendered_content=content,
+                    idempotency_key=(
+                        f"emergency:{tenant_id}:{summary['alert_id']}:{phone}:"
+                        f"{datetime.now(tz=UTC).date().isoformat()}"
+                    ),
+                    primary_channel=primary_channel,
+                    fallback_channel=fallback_channel,
+                    provider_context={
+                        "trip_label": str(trip.get("destination") or summary["title"]),
+                        "customer_name": customer_name,
+                        "webhook_url": str(trip.get("webhook_url") or ""),
+                    },
+                )
+                first_notification_id = first_notification_id or task.id
+                result = self.notification_service.dispatch(task)
+                if result.get("ok") and result.get("reason") != "idempotent_skip":
+                    sent_count += 1
+
         return {
-            "ok": bool(result.get("ok")),
-            "status": task.status.value,
-            "notification_id": task.id,
-            "sent_count": max(summary["affected_trip_count"], 1),
+            "ok": sent_count > 0,
+            "status": "sent" if sent_count > 0 else "manual_intervention",
+            "notification_id": first_notification_id,
+            "sent_count": sent_count,
+            "recipients_count": recipients_count,
             "content": content,
         }

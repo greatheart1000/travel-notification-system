@@ -2,6 +2,77 @@
 
 本仓库是“行程通知与管家流程”项目的 MVP 后端与前端联调工程。
 
+## 商用化配置（必须显式设置）
+
+生产环境不会回退到硬编码企微 webhook 或模拟短信：
+
+| 变量 | 说明 |
+|---|---|
+| `APP_ENV` | `production` / `staging` / `dev` / `test`；非 dev/test 下未配置短信 provider 会失败关闭 |
+| `WECHAT_WEBHOOK_URL` | 默认企微群机器人地址；也可在行程上配置 `webhook_url` 覆盖 |
+| `SMS_PROVIDER` | `aliyun` 或 `mock`；生产必须显式配置 |
+| `ALIYUN_SMS_AK` / `ALIYUN_SMS_SK` | 阿里云短信凭证 |
+| `ALIYUN_SMS_TEMPLATE_CODE` | 默认短信模板 ID |
+| `QWEATHER_API_HOST` / `QWEATHER_API_KEY` | 和风天气凭证；未配置时天气告警会安全降级 |
+| `TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND` | `mysql`（生产默认）或 `json`（本地/FC 演示） |
+| `TRAVEL_NOTIFICATION_MYSQL_*` | MySQL 连接信息 |
+| `NOTIFICATION_QUEUE_INTERVAL_SECONDS` | 异步发送队列扫描间隔，默认 5 秒 |
+| `NOTIFICATION_TIMEZONE` | 定时调度时区，默认 `Asia/Shanghai` |
+
+安全说明：仓库历史中曾出现企微 webhook key，升级后请立即在企微后台轮换该 key，并检查 `WECHAT_WEBHOOK_URL` 是否只配置在环境变量/密钥管理服务中。
+
+可观测性：
+- 所有 HTTP 响应带 `X-Trace-Id`；请求可传入同名 header。
+- `GET /api/health/metrics` 返回发送尝试、成功、失败、重试、死信计数与延迟直方图。
+- `GET /api/health/detail` 返回队列积压、最近失败与组件状态。
+
+测试命令：
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q --cov=app --cov-report=term-missing
+npm -C frontend test
+npm -C frontend run build
+```
+
+测试会通过 socket 级 guard 阻止任何真实外呼；如新增外部 provider，必须注入 fake，不能在测试中访问真实网络。
+
+### 分岗位接收人配置
+
+默认情况下，团期负责人/旅行管家/司机三类话术会发送到行程群 webhook。若需要私发到不同接收人，可在行程或项目配置中增加：
+
+```json
+{
+  "role_recipients": {
+    "manager": {"channel": "sms", "address": "13800000001"},
+    "concierge": {"channel": "sms", "address": "13800000002"},
+    "driver": {"channel": "wechat_work_group", "address": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."}
+  }
+}
+```
+
+一旦配置了 `role_recipients`，缺失某个岗位的接收人时该岗位会被跳过并写日志，**不会回退到公共群**，避免把岗位专属内容发给错误的人。
+
+### 超时与“结果未知”策略
+
+企微群机器人不支持幂等键。对于超时/连接中断这类“请求可能已到达 provider”的情况，系统会：
+
+1. 记录 `delivery_unknown`，不自动重试；
+2. 将幂等状态置为 `unknown`；
+3. 将任务标记为 `manual_intervention`，由人工核对后处理。
+
+普通 5xx/限流仍会按退避策略重试；配置错误、空内容、非法手机号等属于永久失败，不重试。
+
+### 数据库迁移
+
+商用 MySQL 环境上线前执行：
+
+```bash
+mysql -u <user> -p <database> < docs/migrations/2026-11-05-commercial-notification.sql
+```
+
+迁移包含 `trace_id`、异步 outbox、持久化幂等状态、角色接收人表和租户唯一索引。
+
 ## 模块概览
 
 - `notification`：通知编排与发送任务（短信主渠道、企业微信群兜底）

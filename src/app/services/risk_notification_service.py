@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Iterable
+from typing import Any
 from uuid import uuid4
 
 from app.core.models import Channel, NotificationType
@@ -214,28 +215,53 @@ class RiskNotificationWorkflow:
         sent: list[dict[str, Any]] = []
         for trigger in self.build_triggers(tenant_id=tenant_id, now=current):
             idempotency_key = f"risk:{trigger.trigger_id}:{current.date().isoformat()}"
-            if any(item.get("trigger_id") == trigger.trigger_id for item in self.evidence_repository.list(tenant_id=tenant_id)):
+            existing = next(
+                (
+                    item
+                    for item in self.evidence_repository.list(tenant_id=tenant_id)
+                    if item.get("trigger_id") == trigger.trigger_id
+                ),
+                None,
+            )
+            if existing is not None and str(existing.get("status") or "") == "sent":
                 continue
             task = self._build_task(trigger, idempotency_key)
             result = self.notification_service.dispatch(task)
             latest_attempt = task.attempts[-1] if task.attempts else None
-            evidence = RiskNotificationEvidence(
-                evidence_id=f"evidence-{uuid4().hex[:10]}",
-                trigger_id=trigger.trigger_id,
-                task_id=task.id,
-                tenant_id=trigger.tenant_id,
-                trip_id=trigger.trip_id,
-                team_id=trigger.team_id,
-                channel=task.primary_channel.value,
-                content=task.rendered_content,
-                status="sent" if result.get("ok") else "manual_intervention",
-                provider_message=latest_attempt.provider_message if latest_attempt else str(result.get("reason") or ""),
-                sent_at=current.isoformat(),
-                receipt_status="provider_accepted" if result.get("ok") else "send_failed",
-                risk_tags=trigger.risk_tags,
-                hit_rules=trigger.hit_rules,
+            status = "sent" if result.get("ok") else "manual_intervention"
+            provider_message = (
+                latest_attempt.provider_message
+                if latest_attempt
+                else str(result.get("reason") or "")
             )
-            sent.append(self.evidence_repository.add(evidence))
+            evidence_patch = {
+                "task_id": task.id,
+                "channel": task.primary_channel.value,
+                "content": task.rendered_content,
+                "status": status,
+                "provider_message": provider_message,
+                "sent_at": current.isoformat(),
+                "receipt_status": "provider_accepted" if result.get("ok") else "send_failed",
+                "risk_tags": trigger.risk_tags,
+                "hit_rules": trigger.hit_rules,
+            }
+            if existing is not None:
+                updated = self.evidence_repository.update(
+                    str(existing["evidence_id"]), evidence_patch
+                )
+                evidence = updated or existing
+            else:
+                evidence = self.evidence_repository.add(
+                    RiskNotificationEvidence(
+                        evidence_id=f"evidence-{uuid4().hex[:10]}",
+                        trigger_id=trigger.trigger_id,
+                        tenant_id=trigger.tenant_id,
+                        trip_id=trigger.trip_id,
+                        team_id=trigger.team_id,
+                        **evidence_patch,
+                    )
+                )
+            sent.append(evidence)
             self._audit(
                 "risk_notification_sent",
                 trigger.trip_id,
@@ -245,7 +271,7 @@ class RiskNotificationWorkflow:
                     "risk_type": trigger.risk_type,
                     "risk_tags": trigger.risk_tags,
                     "channel": task.primary_channel.value,
-                    "status": evidence.status,
+                    "status": status,
                 },
             )
         return {"sent_count": len(sent), "items": sent}

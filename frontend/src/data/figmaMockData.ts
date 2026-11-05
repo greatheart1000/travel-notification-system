@@ -246,32 +246,3 @@ export const mockTripDetails: MakeTripDetail[] = mockTrips.map((trip, index) => 
 }))
 
 export const mockImportedTourists = excelImportedTourists
-
-export const mockAnalyticsData = {
-  overview: [
-    { label: '总旅行团数', value: '24', trend: '+3', trendType: 'up' },
-    { label: '总游客数', value: '286', trend: '+45', trendType: 'up' },
-    { label: '平均满意度', value: '4.8/5.0', trend: '+0.2', trendType: 'up' },
-    { label: '通知发送总数', value: '1,234', trend: '+156', trendType: 'up' },
-  ],
-  tripStats: [
-    { status: '进行中', count: 3, percentage: 12.5, color: 'bg-green-500' },
-    { status: '即将出发', count: 5, percentage: 20.8, color: 'bg-blue-500' },
-    { status: '招募中', count: 8, percentage: 33.3, color: 'bg-yellow-500' },
-    { status: '已完成', count: 8, percentage: 33.3, color: 'bg-gray-500' },
-  ],
-  notificationStats: [
-    { type: '早安问候', sent: 245, success: 242, rate: 98.8 },
-    { type: '午间提醒', sent: 120, success: 118, rate: 98.3 },
-    { type: '晚安问候', sent: 238, success: 235, rate: 98.7 },
-    { type: '出发提醒', sent: 24, success: 24, rate: 100 },
-    { type: '行程更新', sent: 56, success: 55, rate: 98.2 },
-    { type: '天气预警', sent: 18, success: 18, rate: 100 },
-  ],
-  recentTrips: [
-    { name: '阿勒泰本地冬营团', participants: 12, revenue: 38000, satisfaction: 4.9 },
-    { name: '埃塞俄比亚古文明探索团', participants: 8, revenue: 52000, satisfaction: 4.7 },
-    { name: '马来半岛美食文化之旅', participants: 15, revenue: 28000, satisfaction: 4.8 },
-    { name: '北海道春季赏樱团', participants: 20, revenue: 65000, satisfaction: 5.0 },
-  ],
-}

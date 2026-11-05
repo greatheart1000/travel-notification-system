@@ -21,11 +21,12 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.routing import Router as StarletteRouter
 
 from app.core.entities import Channel as PreferenceChannel
-from app.core.models import Channel
+from app.core.models import Channel, NotificationType
+from app.core.observability import metrics, new_trace_id, reset_trace_id, set_trace_context
 from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
 from app.modules.integration.auth import AuthService
-from app.modules.integration.wechat_provider import WeChatWorkWebhookProvider
+from app.modules.integration.wechat_provider import get_wechat_provider_for_trip
 from app.modules.integration.persistence import (
     JsonFileStore,
     ProjectNotificationConfigRepository,
@@ -103,12 +104,14 @@ class AppContext:
     notification_attempt_repository: NotificationAttemptRepository
     notification_rule_repository: NotificationRuleRepository
     notification_service: NotificationService
+    idempotency_store: IdempotencyStore
     async_dispatch_service: AsyncDispatchService
     audit_service: AuditService
     analytics_service: AnalyticsService
     weather_provider: WeatherProvider
     risk_evidence_repository: RiskEvidenceRepository
     notification_tasks: dict[str, NotificationTask]
+    scheduler_service: Any | None = None
 
 
 class LoginRequest(BaseModel):
@@ -1782,7 +1785,10 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         idempotency_store=IdempotencyStore(store=persistence),
         attempt_repository=notification_attempt_repository,
     )
-    async_dispatch_service = AsyncDispatchService(notification_service=notification_service)
+    async_dispatch_service = AsyncDispatchService(
+        notification_service=notification_service,
+        store=persistence,
+    )
     audit_service = AuditService(repository=AuditLogRepository(store=persistence))
     analytics_service = AnalyticsService(
         repository=AnalyticsRepository(store=persistence),
@@ -1792,7 +1798,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     auth_service = AuthService()
     weather_provider = WeatherProvider()
     risk_evidence_repository = RiskEvidenceRepository(store=persistence)
-    return AppContext(
+    context = AppContext(
         store=persistence,
         auth_service=auth_service,
         trip_repository=trip_repository,
@@ -1802,6 +1808,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         notification_attempt_repository=notification_attempt_repository,
         notification_rule_repository=notification_rule_repository,
         notification_service=notification_service,
+        idempotency_store=notification_service.idempotency_store,
         async_dispatch_service=async_dispatch_service,
         audit_service=audit_service,
         analytics_service=analytics_service,
@@ -1809,6 +1816,8 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         risk_evidence_repository=risk_evidence_repository,
         notification_tasks={},
     )
+    context.scheduler_service = init_scheduler(context)
+    return context
 
 
 
@@ -1831,7 +1840,8 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         ctx = app.state.ctx
-        scheduler = init_scheduler(ctx)
+        scheduler = ctx.scheduler_service or init_scheduler(ctx)
+        ctx.scheduler_service = scheduler
         scheduler.start()
         yield
         scheduler.stop()
@@ -1841,6 +1851,18 @@ def create_app() -> FastAPI:
         version="0.2.0",
         lifespan=lifespan,
     )
+
+    @fastapi_app.middleware("http")
+    async def trace_middleware(request: Request, call_next):
+        incoming = request.headers.get("X-Trace-Id") or new_trace_id()
+        trace_id, token = set_trace_context(incoming)
+        try:
+            response = await call_next(request)
+        finally:
+            reset_trace_id(token)
+        response.headers["X-Trace-Id"] = trace_id
+        return response
+
     from fastapi.middleware.gzip import GZipMiddleware
     fastapi_app.add_middleware(GZipMiddleware, minimum_size=500)
     cors_origins = [
@@ -2022,6 +2044,10 @@ def create_app() -> FastAPI:
                 },
             }
         )
+
+    @fastapi_app.get("/api/health/metrics")
+    def get_metrics() -> dict[str, Any]:
+        return _ok(metrics.snapshot())
 
     @fastapi_app.post("/api/auth/login")
     def login(payload: LoginRequest, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
@@ -2664,53 +2690,22 @@ def create_app() -> FastAPI:
         }
         ctx.trip_repository.create(trip)
 
-        template = next(
-            (
-                item
-                for item in ctx.template_service.list_notification_templates(
-                    tenant_id=_current_tenant_id(user)
-                )
-                if item.is_active
-            ),
-            ctx.template_service.ensure_default_template(tenant_id=_current_tenant_id(user)),
-        )
-        rendered = ctx.template_service.render_notification(
-            template,
-            {
-                "customer_name": user.get("username", user["id"]),
-                "destination": payload.destination,
-            },
-        )
-        task = NotificationTask(
-            tenant_id=_current_tenant_id(user),
-            team_id=team_id,
-            trip_id=trip_id,
-            customer_id=user["id"],
-            rendered_content=rendered,
-            idempotency_key=f"{trip_id}:created",
-            primary_channel=Channel.SMS,
-            fallback_channel=Channel.WECHAT_WORK_GROUP,
-        )
-        ctx.notification_tasks[task.id] = task
-        dispatch_result = ctx.notification_service.dispatch(task)
+        # Trip creation has no guest recipient yet. Do not send an SMS to the
+        # operator's user id; notifications are dispatched later from the trip
+        # notification rules once guests/phones are known.
         ctx.audit_service.record(
             operator_id=user["id"],
             action="trip_created",
             target=trip_id,
             detail={"destination": payload.destination, "team_id": team_id},
         )
-        ctx.audit_service.record(
-            operator_id=user["id"],
-            action="notification_dispatched",
-            target=trip_id,
-            detail={"ok": dispatch_result["ok"], "attempts": len(task.attempts)},
-        )
         return {
             "trip": _serialize_trip(trip),
             "notification": {
-                "ok": dispatch_result["ok"],
-                "status": task.status.value,
-                "attempt_count": len(task.attempts),
+                "ok": True,
+                "status": "skipped",
+                "attempt_count": 0,
+                "reason": "trip_created_without_recipient",
             },
         }
 
@@ -2930,8 +2925,7 @@ def create_app() -> FastAPI:
         from zoneinfo import ZoneInfo
         now = datetime.now(tz=ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
         content = f"【{now}】\n✅ 企业微信群机器人连接测试成功！\n行程：{trip.get('destination', '')}\n团号：{trip.get('team_id') or trip.get('team', '')}\n\n您好，这是一条来自旅行通知系统的测试消息，如果您能收到此消息，说明群机器人配置正确，后续通知将正常推送。"
-        trip_webhook = trip.get("webhook_url", "")
-        provider = WeChatWorkWebhookProvider(webhook_url=trip_webhook) if trip_webhook else WeChatWorkWebhookProvider()
+        provider = get_wechat_provider_for_trip(trip)
         ok, msg = provider.send(f"test:{trip_id}", content)
         if not ok:
             raise HTTPException(502, f"测试发送失败: {msg}")
@@ -3304,8 +3298,7 @@ def create_app() -> FastAPI:
         from zoneinfo import ZoneInfo
         tpl = f"【{datetime.now(tz=ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')}】\n{tpl}"
         if preview: return True, tpl
-        trip_webhook = trip.get("webhook_url", "")
-        provider = WeChatWorkWebhookProvider(webhook_url=trip_webhook) if trip_webhook else WeChatWorkWebhookProvider()
+        provider = get_wechat_provider_for_trip(trip)
         ok, msg = provider.send(f"wf:{template_key}:{trip.get('id','')}", tpl)
         # Record notification attempt for analytics
         now_iso = datetime.now(UTC).isoformat()
@@ -3365,7 +3358,7 @@ def create_app() -> FastAPI:
             f"（{str(trip.get('contact_phone') or '')}）\n"
             f"请提前检查车辆，准时就位，谢谢！"
         )
-        webhook = WeChatWorkWebhookProvider()
+        webhook = get_wechat_provider_for_trip(trip)
         ok, msg = webhook.send(f"driver:{trip_id}", content)
         ctx.audit_service.record(
             operator_id=user["id"],
@@ -4064,7 +4057,12 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        active_trips = [t for t in ctx.trip_repository.list() if t.get("status") == "in_progress"]
+        tenant_id = _current_tenant_id(user)
+        active_trips = [
+            trip
+            for trip in ctx.trip_repository.list(tenant_id=tenant_id)
+            if trip.get("status") == "in_progress"
+        ]
         triggered_count = 0
 
         for trip in active_trips:
@@ -4073,7 +4071,7 @@ def create_app() -> FastAPI:
             )
             project_config = ctx.project_notification_config_repository.get(
                 project_id,
-                tenant_id=_current_tenant_id(user),
+                tenant_id=tenant_id,
             )
             weather_context = dict(project_config or {})
             weather_context.update(trip)
@@ -4081,23 +4079,61 @@ def create_app() -> FastAPI:
                 str(trip.get("destination", "")),
                 location_context=weather_context,
             )
-            if info.warning_level:
-                # 命中恶劣天气，触发通知
-                rendered = f"【天气预警】您在 {info.destination} 的行程受 {info.condition} 影响，当前气温 {info.temperature}C，请注意安全。"
+            if not info.warning_level:
+                continue
+
+            rendered = (
+                f"【天气预警】您在 {info.destination} 的行程受 {info.condition} 影响，"
+                f"当前气温 {info.temperature}C，请注意安全。"
+            )
+            recipients: list[tuple[str, str]] = []
+            for guest in trip.get("guests") or []:
+                phone = str(guest.get("phone") or "").strip()
+                if phone:
+                    recipients.append((phone, str(guest.get("name") or "贵宾")))
+            if not recipients:
+                for field in ("trip_manager_phone", "concierge_phone", "contact_phone"):
+                    phone = str(trip.get(field) or "").strip()
+                    if phone:
+                        recipients.append((phone, "值班管家"))
+                        break
+
+            for phone, customer_name in recipients:
                 task = NotificationTask(
-                    tenant_id=_current_tenant_id(user),
+                    tenant_id=tenant_id,
                     project_id=project_id,
                     team_id=str(trip.get("team_id", "")),
                     trip_id=str(trip.get("id", "")),
-                    customer_id="system",
+                    customer_id=phone,
                     rendered_content=rendered,
-                    idempotency_key=f"weather:{trip.get('id')}:{datetime.now().date()}",
+                    idempotency_key=(
+                        f"weather:{tenant_id}:{trip.get('id')}:{phone}:"
+                        f"{datetime.now(tz=UTC).date().isoformat()}"
+                    ),
+                    notification_type=NotificationType.RISK_ALERT,
                     primary_channel=Channel.SMS,
+                    fallback_channel=Channel.WECHAT_WORK_GROUP,
+                    provider_context={
+                        "customer_name": customer_name,
+                        "trip_label": str(trip.get("destination") or trip.get("id", "")),
+                        "webhook_url": str(trip.get("webhook_url") or ""),
+                    },
                 )
                 ctx.notification_tasks[task.id] = task
-                ctx.notification_service.dispatch(task)
-                triggered_count += 1
+                result = ctx.notification_service.dispatch(task)
+                if result.get("ok") and result.get("reason") != "idempotent_skip":
+                    triggered_count += 1
 
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="weather_check_triggered",
+            target="",
+            detail={
+                "tenant_id": tenant_id,
+                "active_trips_checked": len(active_trips),
+                "triggered_notifications": triggered_count,
+            },
+        )
         return _ok(
             {"active_trips_checked": len(active_trips), "triggered_notifications": triggered_count}
         )
@@ -4279,14 +4315,29 @@ def create_app() -> FastAPI:
     return fastapi_app
 
 
-app = create_app()
+_APP: FastAPI | None = None
+
+
+def get_app() -> FastAPI:
+    """Create the ASGI app lazily so importing this module has no DB side effects."""
+    global _APP
+    if _APP is None:
+        _APP = create_app()
+    return _APP
+
+
+def __getattr__(name: str) -> Any:
+    # Preserve ``uvicorn app.api.http:app`` while keeping import side-effect free.
+    if name == "app":
+        return get_app()
+    raise AttributeError(name)
 
 
 def reset_state(purge_persistence: bool = False) -> None:
     store = JsonFileStore()
     if purge_persistence:
         store.clear_all()
-    app.state.ctx = _build_context(store=store)
+    get_app().state.ctx = _build_context(store=store)
 
 
 def dispatch_request(
@@ -4294,7 +4345,7 @@ def dispatch_request(
 ) -> Response:
     from fastapi.testclient import TestClient
 
-    client = TestClient(app)
+    client = TestClient(get_app())
     response = client.request(method, path, headers=headers or {}, data=body)
     payload: dict[str, Any]
     if response.content:
@@ -4305,4 +4356,4 @@ def dispatch_request(
 
 
 def run_http_server(host: str = "0.0.0.0", port: int = 8000) -> None:
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(get_app(), host=host, port=port)

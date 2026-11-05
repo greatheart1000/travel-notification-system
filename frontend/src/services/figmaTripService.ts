@@ -6,15 +6,15 @@ import type {
   MakeTripDetail,
   MakeTripStatus,
   MakeWeatherInfo,
-  mockAnalyticsData,
 } from '../data/figmaMockData'
 import {
   makeStatusColorMap,
   mockWeather,
 } from '../data/figmaMockData'
 
-export type MakeAnalyticsData = typeof mockAnalyticsData
 export type MakeStatusColorMap = Record<MakeTripStatus, string>
+
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -179,9 +179,13 @@ export class FigmaWeatherService {
   static async getAllWeather(): Promise<MakeWeatherInfo[]> {
     try {
       const data: any = await api.get('/weather/xinjiang')
-      return data?.cities ?? clone(mockWeather)
-    } catch {
-      return clone(mockWeather)
+      const cities = data?.cities
+      if (Array.isArray(cities)) return cities
+      if (DEMO_MODE) return clone(mockWeather)
+      throw new Error('天气服务返回空数据')
+    } catch (error) {
+      if (DEMO_MODE) return clone(mockWeather)
+      throw error
     }
   }
 
@@ -193,16 +197,5 @@ export class FigmaWeatherService {
   static async getWeatherByCity(city: string): Promise<MakeWeatherInfo | undefined> {
     const all = await FigmaWeatherService.getAllWeather()
     return all.find((w) => w.city === city)
-  }
-}
-
-// ---- analytics (real API) ----
-export class FigmaAnalyticsService {
-  static async getAnalytics(): Promise<MakeAnalyticsData> {
-    try {
-      return (await api.get('/analytics/metrics')) as any
-    } catch {
-      return clone(mockAnalyticsData)
-    }
   }
 }

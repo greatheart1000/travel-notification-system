@@ -1,13 +1,6 @@
 # Workbench API Blueprint (Mock-first -> Real API)
 
-## 1) Dashboard
-- GET `/api/workbench/dashboard`
-  - query: `owner_scope=mine`
-  - response: `{ todo_count, overdue_count, high_risk_group_count, pending_takeover_count, my_queue: TaskSummary[] }`
-  - consumed fields: card counts + my queue list
-  - mock-only now: `ai_hint_cards`
-
-## 2) Tasks
+## 1) Tasks
 - GET `/api/workbench/tasks`
   - query: `bucket`, `keyword`, `risk_level`, `overdue_window`
   - response: `{ items: TaskDTO[], stats: { total, urgent, due_soon, high_risk } }`

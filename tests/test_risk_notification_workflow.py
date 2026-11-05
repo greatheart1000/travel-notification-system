@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.core.models import Channel
 from app.modules.integration.weather_provider import WeatherInfo
 from app.modules.notification.service import NotificationService
 from app.services.risk_notification_service import (
@@ -11,6 +12,7 @@ from app.services.risk_notification_service import (
     RiskNotificationWorkflow,
 )
 from app.services.template_service import TemplateService
+from tests.fakes import FakeChannelProvider, fake_providers
 
 
 class _TripRepo:
@@ -81,7 +83,7 @@ def _build_workflow(trips: list[dict[str, Any]]) -> tuple[RiskNotificationWorkfl
     workflow = RiskNotificationWorkflow(
         trip_repository=_TripRepo(trips),
         template_service=template_service,
-        notification_service=NotificationService(),
+        notification_service=NotificationService(providers=fake_providers()),
         weather_provider=_WeatherProvider(),  # type: ignore[arg-type]
         evidence_repository=RiskEvidenceRepository(),
         audit_service=audit,
@@ -263,3 +265,42 @@ def test_confirm_requires_matching_tenant_scope() -> None:
     stored = workflow.evidence_repository.get(evidence["evidence_id"])
     assert stored is not None
     assert stored["concierge_confirmation_status"] == "pending"
+
+
+def test_failed_risk_send_is_retried_instead_of_being_permanently_skipped() -> None:
+    workflow, _ = _build_workflow(
+        [
+            {
+                "id": "trip-1",
+                "tenant_id": "tenant-a",
+                "team_id": "TEAM-1",
+                "project_id": "proj-xj",
+                "destination": "阿勒泰",
+                "status": "in_progress",
+                "start_date": "2026-05-10",
+                "itinerary": [
+                    {"date": "2026-05-11", "title": "骑马滑雪", "description": "骑马后前往雪场"},
+                ],
+            }
+        ]
+    )
+    provider = workflow.notification_service.providers[Channel.WECHAT_WORK_GROUP]
+    assert isinstance(provider, FakeChannelProvider)
+    provider.default = (False, "http_500")
+    now = datetime(2026, 5, 10, 8, 0, tzinfo=UTC)
+
+    first = workflow.send_due_risks(tenant_id="tenant-a", now=now)
+    assert first["sent_count"] >= 1
+    assert all(item["status"] == "manual_intervention" for item in first["items"])
+
+    provider.default = (True, "ok")
+    second = workflow.send_due_risks(tenant_id="tenant-a", now=now)
+
+    assert second["sent_count"] >= 1
+    assert provider.call_count >= 2
+    evidence = workflow.evidence_repository.list(tenant_id="tenant-a")
+    failed_trigger_ids = {item["trigger_id"] for item in first["items"]}
+    retried = [item for item in evidence if item["trigger_id"] in failed_trigger_ids]
+    assert retried
+    assert all(item["status"] == "sent" for item in retried)
+    assert len(retried) == len(failed_trigger_ids)

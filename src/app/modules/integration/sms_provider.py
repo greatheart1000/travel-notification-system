@@ -9,6 +9,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _mask_phone(phone: str) -> str:
+    if len(phone) >= 7:
+        return f"{phone[:3]}****{phone[-4:]}"
+    return "***"
+
+
 class SMSProvider(ABC):
     @abstractmethod
     def send_sms(
@@ -32,14 +38,14 @@ class MockSMSProvider(SMSProvider):
         template_code: str = "",
         template_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        # MVP 阶段模拟发送，直接在控制台输出
-        print(f"\n[MOCK SMS] >>> SENDING TO: {phone}")
-        print(f"[MOCK SMS] >>> SIGN: 【{sign_name}】")
-        if template_code:
-            print(f"[MOCK SMS] >>> TEMPLATE_CODE: {template_code}")
-        if template_params:
-            print(f"[MOCK SMS] >>> TEMPLATE_PARAMS: {template_params}")
-        print(f"[MOCK SMS] >>> CONTENT: {content}\n")
+        # MVP 阶段模拟发送：只记录脱敏信息，避免控制台/日志泄露 PII。
+        logger.info(
+            "[MockSMS] phone=%s sign=%s content_len=%d template_code=%s",
+            _mask_phone(phone),
+            sign_name,
+            len(content),
+            template_code or "-",
+        )
 
         return {"ok": True, "msg_id": f"mock-msg-{phone[-4:]}", "status": "sent"}
 
@@ -98,8 +104,36 @@ class AliyunSMSProvider(SMSProvider):
             return {"ok": False, "error": str(e)}
 
 
+class MisconfiguredSMSProvider(SMSProvider):
+    """Fails closed when no SMS provider is explicitly configured."""
+
+    def __init__(self, reason: str = "sms_provider_not_configured") -> None:
+        self.reason = reason
+
+    def send_sms(
+        self,
+        phone: str,
+        content: str,
+        sign_name: str = "TravelHub",
+        template_code: str = "",
+        template_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        logger.error("[SMS] provider not configured; refusing to send to %s", _mask_phone(phone))
+        return {"ok": False, "error": self.reason}
+
+
 def get_sms_provider() -> SMSProvider:
-    provider_type = os.getenv("SMS_PROVIDER", "mock").lower()
+    provider_type = os.getenv("SMS_PROVIDER", "").strip().lower()
     if provider_type == "aliyun":
         return AliyunSMSProvider()
-    return MockSMSProvider()
+    if provider_type == "mock":
+        return MockSMSProvider()
+    if not provider_type and os.getenv("APP_ENV", "").strip().lower() in {
+        "test",
+        "dev",
+        "local",
+    }:
+        return MockSMSProvider()
+    return MisconfiguredSMSProvider(
+        reason=f"unknown_sms_provider:{provider_type}" if provider_type else "sms_provider_not_configured"
+    )

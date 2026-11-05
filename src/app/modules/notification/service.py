@@ -8,6 +8,7 @@ from time import monotonic
 from typing import Any, Protocol
 
 from app.core.models import Channel
+from app.core.observability import get_trace_id, metrics, new_trace_id
 from app.modules.integration.persistence import JsonFileStore
 from app.modules.integration.sms_provider import SMSProvider, get_sms_provider
 from app.modules.integration.wechat_provider import WeChatWorkWebhookProvider
@@ -35,6 +36,8 @@ class ChannelProvider(Protocol):
 class RealWorldSMSProvider:
     """适配 SMSProvider 接口到 NotificationService 的 ChannelProvider 协议。"""
 
+    _PHONE_PATTERN = re.compile(r"^\+?\d{7,20}$")
+
     def __init__(self, provider: SMSProvider):
         self.provider = provider
 
@@ -44,8 +47,9 @@ class RealWorldSMSProvider:
         content: str,
         provider_context: dict[str, str] | None = None,
     ) -> tuple[bool, str]:
-        # 假设 customer_id 就是手机号，实际场景需要从 Repository 查询
-        phone = customer_id if customer_id.isdigit() else "13800000000"
+        phone = customer_id.strip()
+        if not self._PHONE_PATTERN.fullmatch(phone):
+            return False, "invalid_phone"
         metadata = provider_context or {}
         result = self.provider.send_sms(
             phone,
@@ -117,6 +121,7 @@ class NotificationAttemptRepository:
             "provider_message": attempt.provider_message,
             "latency_ms": attempt.latency_ms,
             "status": task.status.value,
+            "trace_id": attempt.trace_id or task.trace_id,
             "attempted_at": attempt.attempted_at.isoformat(),
         }
         self._records.insert(0, payload)
@@ -192,12 +197,17 @@ class NotificationService:
         missing_fields = [name for name in sorted(placeholders) if name not in variables]
         if missing_fields:
             raise ValueError(f"missing_template_variables:{','.join(missing_fields)}")
-        content = template.content
-        for key, value in variables.items():
-            content = content.replace("{{" + key + "}}", value)
-        return content
+        return re.sub(
+            r"{{\s*([a-zA-Z0-9_]+)\s*}}",
+            lambda match: str(variables.get(match.group(1), "")),
+            template.content,
+        )
 
     def _is_retryable_error(self, provider_message: str) -> bool:
+        return self._classify_provider_message(provider_message) == "retryable"
+
+    def _classify_provider_message(self, provider_message: str) -> str:
+        """Classify a provider result as sent/retryable/permanent/unknown."""
         raw = provider_message.strip().lower()
         non_retryable_prefixes = (
             "invalid_",
@@ -205,17 +215,49 @@ class NotificationService:
             "unauthorized_",
             "missing_",
             "bad_request",
+            "empty_content",
+            "configuration_error",
+            "not_configured",
         )
         if raw.startswith(non_retryable_prefixes):
-            return False
+            return "permanent"
+        if raw.endswith("_not_configured"):
+            return "permanent"
         if "permanent" in raw:
-            return False
-        return True
+            return "permanent"
+        if any(
+            token in raw
+            for token in (
+                "timeout",
+                "timed out",
+                "connection reset",
+                "connection aborted",
+                "eof occurred",
+            )
+        ):
+            return "unknown"
+        return "retryable"
 
     def dispatch(self, task: NotificationTask) -> dict:
-        if task.idempotency_key and self.idempotency_store.seen(task.idempotency_key):
-            task.status = DispatchStatus.SKIPPED
-            return {"ok": True, "reason": "idempotent_skip", "task": asdict(task)}
+        trace_id = task.trace_id or get_trace_id() or new_trace_id()
+        task.trace_id = trace_id
+        if task.idempotency_key:
+            state = self.idempotency_store.state(task.idempotency_key)
+            if state == "sent":
+                task.status = DispatchStatus.SKIPPED
+                metrics.inc(
+                    "notification_send_skipped_total",
+                    tenant_id=task.tenant_id,
+                )
+                return {"ok": True, "reason": "idempotent_skip", "task": asdict(task)}
+            if state == "unknown":
+                task.status = DispatchStatus.MANUAL_INTERVENTION
+                task.manual_intervention_required = True
+                return {
+                    "ok": False,
+                    "reason": "delivery_unknown_manual_review",
+                    "task": asdict(task),
+                }
 
         channels = [task.primary_channel]
         if task.fallback_channel and task.fallback_channel != task.primary_channel:
@@ -235,9 +277,31 @@ class NotificationService:
                         task.provider_context,
                     )
                 except TypeError:
-                    ok, provider_message = provider.send(task.customer_id, task.rendered_content)
+                    # Backward compatibility for providers without provider_context.
+                    try:
+                        ok, provider_message = provider.send(
+                            task.customer_id, task.rendered_content
+                        )
+                    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+                        ok = False
+                        provider_message = (
+                            f"provider_exception:{type(exc).__name__}:{exc}"
+                        )
+                except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+                    ok = False
+                    provider_message = f"provider_exception:{type(exc).__name__}:{exc}"
                 latency_ms = int((monotonic() - start) * 1000)
                 task.retry_count += 1
+                metrics.inc(
+                    "notification_send_attempts_total",
+                    channel=channel.value,
+                    tenant_id=task.tenant_id,
+                )
+                metrics.observe(
+                    "notification_send_latency_ms",
+                    latency_ms,
+                    channel=channel.value,
+                )
                 task.attempts.append(
                     NotificationAttempt(
                         task_id=task.id,
@@ -247,6 +311,7 @@ class NotificationService:
                         provider_message=provider_message,
                         reason="ok" if ok else "send_failed",
                         latency_ms=latency_ms,
+                        trace_id=trace_id,
                     )
                 )
                 if self.attempt_repository is not None:
@@ -254,11 +319,45 @@ class NotificationService:
                 if ok:
                     task.status = DispatchStatus.SENT
                     self.idempotency_store.mark(task.idempotency_key)
+                    metrics.inc(
+                        "notification_send_success_total",
+                        channel=channel.value,
+                        tenant_id=task.tenant_id,
+                    )
                     return {"ok": True, "task": asdict(task)}
-                if not self._is_retryable_error(provider_message):
+                metrics.inc(
+                    "notification_send_failure_total",
+                    channel=channel.value,
+                    tenant_id=task.tenant_id,
+                )
+                outcome = self._classify_provider_message(provider_message)
+                if outcome == "unknown":
+                    # The request may have reached the provider. Auto-retrying
+                    # here risks a duplicate; stop and route to manual review.
+                    self.idempotency_store.mark(task.idempotency_key, status="unknown")
+                    task.manual_intervention_required = True
+                    task.status = DispatchStatus.MANUAL_INTERVENTION
+                    metrics.inc(
+                        "notification_delivery_unknown_total",
+                        channel=channel.value,
+                        tenant_id=task.tenant_id,
+                    )
+                    return {"ok": False, "reason": "delivery_unknown", "task": asdict(task)}
+                if outcome == "permanent":
                     break
+                if attempt < task.max_retry:
+                    metrics.inc(
+                        "notification_retry_total",
+                        channel=channel.value,
+                        tenant_id=task.tenant_id,
+                    )
 
         task.manual_intervention_required = True
         task.status = DispatchStatus.MANUAL_INTERVENTION
-        self.idempotency_store.mark(task.idempotency_key)
+        metrics.inc(
+            "notification_dead_letter_total",
+            tenant_id=task.tenant_id,
+        )
+        # Deliberately do NOT mark the idempotency key on failure. A failed
+        # attempt must remain retryable by the scheduler/outbox.
         return {"ok": False, "reason": "retry_exhausted", "task": asdict(task)}
