@@ -12,7 +12,7 @@ from app.modules.integration.weather_provider import WeatherInfo, WeatherProvide
 from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
-from app.modules.notification.policy import NotificationPolicy
+from app.modules.notification.policy import NotificationPolicy, PolicyDecision
 
 logger = logging.getLogger(__name__)
 
@@ -184,16 +184,33 @@ class AutoNotificationScheduler:
 
             scene = self._resolve_scene(weather_info, project_config, trip)
             scene_for_audit = scene
-            if not self._policy_allows(trip, stage, time_slot, scene, today, current_time):
+            policy_decision = self._policy_decision(
+                trip, stage, time_slot, scene, today, current_time
+            )
+            if (
+                policy_decision is not None
+                and policy_decision.configured
+                and not policy_decision.allowed
+            ):
                 return
+            primary_channel = self._policy_channel(policy_decision)
             template = self.ctx.template_service.pick_notification_template(
                 tenant_id=str(trip.get("tenant_id", "tenant-a")),
                 project_id=self._resolve_project_id(trip),
                 stage=stage,
                 time_slot=time_slot,
                 scene=scene,
-                channel=Channel.SMS.value,
+                channel=primary_channel.value,
             )
+            if template is None and primary_channel is not Channel.SMS:
+                template = self.ctx.template_service.pick_notification_template(
+                    tenant_id=str(trip.get("tenant_id", "tenant-a")),
+                    project_id=self._resolve_project_id(trip),
+                    stage=stage,
+                    time_slot=time_slot,
+                    scene=scene,
+                    channel=Channel.SMS.value,
+                )
             if template is None:
                 template = self.ctx.template_service.ensure_default_template(
                     tenant_id=str(trip.get("tenant_id", "tenant-a"))
@@ -232,8 +249,12 @@ class AutoNotificationScheduler:
                     rendered_content=rendered,
                     idempotency_key=idempotency_key,
                     notification_type=notification_type,
-                    primary_channel=template.channel,
-                    fallback_channel=Channel.WECHAT_WORK_GROUP,
+                    primary_channel=primary_channel,
+                    fallback_channel=(
+                        Channel.SMS
+                        if primary_channel is Channel.WECHAT_WORK_GROUP
+                        else Channel.WECHAT_WORK_GROUP
+                    ),
                     provider_context={
                         "sms_sign_name": template.sms_sign_name
                         or str((project_config or {}).get("sms_sign_name") or ""),
@@ -262,7 +283,7 @@ class AutoNotificationScheduler:
             detail={"stage": stage, "time_slot": time_slot, "scene": scene_for_audit},
         )
 
-    def _policy_allows(
+    def _policy_decision(
         self,
         trip: dict,
         stage: str,
@@ -270,10 +291,10 @@ class AutoNotificationScheduler:
         scene: str,
         today,
         current_time: datetime,
-    ) -> bool:  # noqa: ANN001
+    ) -> PolicyDecision | None:  # noqa: ANN001
         rule_repository = getattr(self.ctx, "notification_rule_repository", None)
         if rule_repository is None:
-            return True
+            return None
         policy = NotificationPolicy(rule_repository)
         decision = policy.resolve(
             tenant_id=str(trip.get("tenant_id", "tenant-a")),
@@ -294,8 +315,17 @@ class AutoNotificationScheduler:
                 target=str(trip.get("id", "")),
                 detail={"stage": stage, "time_slot": time_slot, "scene": scene},
             )
-            return False
-        return True
+        return decision
+
+    @staticmethod
+    def _policy_channel(decision: PolicyDecision | None) -> Channel:
+        if decision is not None and decision.channels:
+            for code in decision.channels:
+                if code == Channel.WECHAT_WORK_GROUP.value:
+                    return Channel.WECHAT_WORK_GROUP
+                if code == Channel.SMS.value:
+                    return Channel.SMS
+        return Channel.SMS
 
     def _resolve_time_node(self, trip: dict, stage: str, today) -> str:  # noqa: ANN001
         if stage == "pre_trip":

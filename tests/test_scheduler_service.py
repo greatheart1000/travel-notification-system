@@ -434,3 +434,32 @@ def test_notification_rule_allows_matching_trip(json_store) -> None:
     )
 
     assert sms.call_count == 1
+
+
+def test_notification_rule_channel_selects_wechat(json_store) -> None:
+    repo = NotificationRuleRepository(store=json_store)
+    repo.create_rule(
+        {
+            "tenant_id": "tenant-a",
+            "name": "仅企微",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "channels": ["wechat_work_group"],
+            "conditions": {"destination": "阿勒泰"},
+            "enabled": True,
+        }
+    )
+    scheduler, sms, wechat, _ = _build_scheduler(
+        [_trip(start_offset_days=3)],
+        rule_repository=repo,
+    )
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert sms.call_count == 0
+    assert wechat.call_count == 1
