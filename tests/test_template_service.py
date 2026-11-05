@@ -123,3 +123,78 @@ def test_ensure_default_template_always_returns_sms_channel() -> None:
     template = service.ensure_default_template(tenant_id="tenant-a")
 
     assert template.channel is Channel.SMS
+
+
+def test_template_crud_and_tenant_filters(json_store) -> None:
+    service = TemplateService(store=json_store)
+    created = service.create_notification_template(
+        tenant_id="tenant-a",
+        name="提醒",
+        content="你好 {{customer_name}}",
+        channel="短信",
+        notification_type="daily_reminder",
+        is_active=True,
+        project_id="proj-1",
+        stage="in_trip",
+        time_slot="morning",
+        scene="normal",
+    )
+
+    assert service.get_notification_template(created.id, tenant_id="tenant-a") is not None
+    assert service.get_notification_template(created.id, tenant_id="tenant-b") is None
+    assert len(service.list_notification_templates(tenant_id="tenant-a")) == 1
+    assert service.list_notification_templates(tenant_id="tenant-b") == []
+
+    updated = service.update_notification_template(
+        created.id,
+        name="新提醒",
+        content="更新 {{customer_name}}",
+        channel="wechat",
+        is_active=False,
+    )
+    assert updated is not None
+    assert updated.name == "新提醒"
+    assert updated.channel is Channel.WECHAT_WORK_GROUP
+    assert updated.is_active is False
+
+    assert service.delete_notification_template(created.id) is True
+    assert service.get_notification_template(created.id) is None
+    assert service.delete_notification_template("missing") is False
+
+
+def test_pick_notification_template_returns_none_when_no_match() -> None:
+    service = _service()
+
+    assert (
+        service.pick_notification_template(
+            tenant_id="tenant-a",
+            project_id="proj-1",
+            stage="in_trip",
+            time_slot="morning",
+            scene="normal",
+            channel="sms",
+        )
+        is None
+    )
+
+
+def test_legacy_template_helpers_still_work() -> None:
+    from app.core.entities import EventName
+    from app.core.entities import Template as RuleTemplate
+
+    service = _service()
+    service.upsert_template(
+        RuleTemplate(
+            template_id="legacy-1",
+            event_name=EventName.TRIP_CREATED,
+            locale="zh",
+            version=1,
+            content="你好 {{name}}",
+        )
+    )
+
+    picked = service.pick_template(EventName.TRIP_CREATED, "zh")
+    rendered = service.render(picked, {"name": "张三"})
+
+    assert picked.template_id == "legacy-1"
+    assert rendered == "你好 张三"

@@ -564,6 +564,52 @@ class JsonFileStore:
                     """
                 )
 
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_notification_job (
+                        job_id VARCHAR(64) NOT NULL,
+                        tenant_id VARCHAR(64) NOT NULL,
+                        team_id VARCHAR(64) NOT NULL DEFAULT '',
+                        trip_id VARCHAR(64) NOT NULL DEFAULT '',
+                        task_id VARCHAR(64) NOT NULL,
+                        channel VARCHAR(32) NOT NULL DEFAULT 'sms',
+                        status ENUM('pending','processing','retrying','sent','failed','manual_intervention')
+                            NOT NULL DEFAULT 'pending',
+                        attempt INT UNSIGNED NOT NULL DEFAULT 0,
+                        max_attempt INT UNSIGNED NOT NULL DEFAULT 3,
+                        next_run_at DATETIME(6) NOT NULL,
+                        lease_until DATETIME(6) NULL,
+                        worker_id VARCHAR(128) NOT NULL DEFAULT '',
+                        last_error VARCHAR(512) NOT NULL DEFAULT '',
+                        payload JSON NOT NULL,
+                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                        updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                            ON UPDATE CURRENT_TIMESTAMP(6),
+                        PRIMARY KEY (job_id),
+                        KEY idx_job_due (status, next_run_at),
+                        KEY idx_job_tenant_status (tenant_id, status),
+                        KEY idx_job_task (task_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS t_tenant_notification_config (
+                        tenant_id VARCHAR(64) NOT NULL,
+                        wechat_webhook_url VARCHAR(512) NOT NULL DEFAULT '',
+                        sms_provider VARCHAR(32) NOT NULL DEFAULT '',
+                        sms_sign_name VARCHAR(64) NOT NULL DEFAULT '',
+                        sms_template_code VARCHAR(64) NOT NULL DEFAULT '',
+                        sms_credential_id VARCHAR(64) NOT NULL DEFAULT '',
+                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                        updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                            ON UPDATE CURRENT_TIMESTAMP(6),
+                        PRIMARY KEY (tenant_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                    """
+                )
+
                 if has_table("t_notification_task"):
                     if not has_column("t_notification_task", "team_id"):
                         cursor.execute(
@@ -939,6 +985,10 @@ class JsonFileStore:
             return self._read_mysql_templates()
         if collection == "project_notification_configs":
             return self._read_mysql_project_notification_configs()
+        if collection == "tenant_notification_configs":
+            return self._read_mysql_tenant_notification_configs()
+        if collection == "notification_jobs":
+            return self._read_mysql_notification_jobs()
         if collection == "notification_rules":
             return self._read_mysql_notification_rules()
         if collection == "notification_attempts":
@@ -965,6 +1015,12 @@ class JsonFileStore:
             return
         if collection == "project_notification_configs":
             self._write_mysql_project_notification_configs(items)
+            return
+        if collection == "tenant_notification_configs":
+            self._write_mysql_tenant_notification_configs(items)
+            return
+        if collection == "notification_jobs":
+            self._write_mysql_notification_jobs(items)
             return
         if collection == "notification_rules":
             self._write_mysql_notification_rules(items)
@@ -1003,6 +1059,12 @@ class JsonFileStore:
         if collection == "project_notification_configs":
             self._upsert_mysql_project_notification_config(item, key)
             return item
+        if collection == "tenant_notification_configs":
+            self._upsert_mysql_tenant_notification_config(item, key)
+            return item
+        if collection == "notification_jobs":
+            self._upsert_mysql_notification_job(item)
+            return item
         self._upsert_mysql_generic(collection, item, key)
         return item
 
@@ -1013,6 +1075,10 @@ class JsonFileStore:
             return self._delete_mysql_template(item_id)
         if collection == "project_notification_configs" and key == "project_id":
             return self._delete_mysql_project_notification_config(item_id)
+        if collection == "tenant_notification_configs" and key == "tenant_id":
+            return self._delete_mysql_tenant_notification_config(item_id)
+        if collection == "notification_jobs" and key == "job_id":
+            return self._delete_mysql_notification_job(item_id)
         if collection == "notification_rules" and key == "id":
             return self._delete_mysql_rule(item_id)
         return self._delete_mysql_generic(collection, item_id, key)
@@ -1403,6 +1469,185 @@ class JsonFileStore:
                     WHERE project_id = %s
                     """,
                     (project_id,),
+                )
+            return affected > 0
+        finally:
+            connection.close()
+
+    def _read_mysql_tenant_notification_configs(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT tenant_id, wechat_webhook_url, sms_provider, sms_sign_name,
+                           sms_template_code, sms_credential_id, created_at, updated_at
+                    FROM t_tenant_notification_config
+                    ORDER BY updated_at DESC
+                    """
+                )
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+        return [
+            {
+                "tenant_id": str(row.get("tenant_id") or ""),
+                "wechat_webhook_url": str(row.get("wechat_webhook_url") or ""),
+                "sms_provider": str(row.get("sms_provider") or ""),
+                "sms_sign_name": str(row.get("sms_sign_name") or ""),
+                "sms_template_code": str(row.get("sms_template_code") or ""),
+                "sms_credential_id": str(row.get("sms_credential_id") or ""),
+                "created_at": _to_iso_datetime(row.get("created_at")),
+                "updated_at": _to_iso_datetime(row.get("updated_at")),
+            }
+            for row in rows
+        ]
+
+    def _write_mysql_tenant_notification_configs(self, items: list[dict[str, Any]]) -> None:
+        for item in items:
+            self._upsert_mysql_tenant_notification_config(item)
+
+    def _upsert_mysql_tenant_notification_config(
+        self,
+        item: dict[str, Any],
+        key: str = "tenant_id",
+        *,
+        cursor: Any | None = None,
+    ) -> None:
+        tenant_id = str(item.get(key) or item.get("tenant_id") or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        owned_connection = None
+        if cursor is None:
+            owned_connection = self._mysql_connect()
+            cursor = owned_connection.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO t_tenant_notification_config
+                (tenant_id, wechat_webhook_url, sms_provider, sms_sign_name,
+                 sms_template_code, sms_credential_id, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  wechat_webhook_url = VALUES(wechat_webhook_url),
+                  sms_provider = VALUES(sms_provider),
+                  sms_sign_name = VALUES(sms_sign_name),
+                  sms_template_code = VALUES(sms_template_code),
+                  sms_credential_id = VALUES(sms_credential_id),
+                  updated_at = VALUES(updated_at)
+                """,
+                (
+                    tenant_id,
+                    str(item.get("wechat_webhook_url") or ""),
+                    str(item.get("sms_provider") or ""),
+                    str(item.get("sms_sign_name") or ""),
+                    str(item.get("sms_template_code") or ""),
+                    str(item.get("sms_credential_id") or ""),
+                    _to_mysql_datetime(item.get("created_at")),
+                    _to_mysql_datetime(item.get("updated_at")),
+                ),
+            )
+            if owned_connection is not None:
+                owned_connection.commit()
+        finally:
+            if owned_connection is not None:
+                owned_connection.close()
+
+    def _delete_mysql_tenant_notification_config(self, tenant_id: str) -> bool:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                affected = cursor.execute(
+                    "DELETE FROM t_tenant_notification_config WHERE tenant_id = %s",
+                    (tenant_id,),
+                )
+            return affected > 0
+        finally:
+            connection.close()
+
+    def _read_mysql_notification_jobs(self) -> list[dict[str, Any]]:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT payload
+                    FROM t_notification_job
+                    ORDER BY created_at ASC
+                    """
+                )
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload = row.get("payload")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(payload, dict):
+                items.append(payload)
+        return items
+
+    def _write_mysql_notification_jobs(self, items: list[dict[str, Any]]) -> None:
+        for item in items:
+            self._upsert_mysql_notification_job(item)
+
+    def _upsert_mysql_notification_job(self, item: dict[str, Any]) -> None:
+        job_id = str(item.get("job_id") or "").strip()
+        if not job_id:
+            return
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO t_notification_job
+                    (job_id, tenant_id, team_id, trip_id, task_id, channel, status,
+                     attempt, max_attempt, next_run_at, lease_until, worker_id,
+                     last_error, payload, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                      status = VALUES(status),
+                      attempt = VALUES(attempt),
+                      next_run_at = VALUES(next_run_at),
+                      lease_until = VALUES(lease_until),
+                      worker_id = VALUES(worker_id),
+                      last_error = VALUES(last_error),
+                      payload = VALUES(payload),
+                      updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        job_id,
+                        str(item.get("tenant_id") or ""),
+                        str(item.get("team_id") or ""),
+                        str(item.get("trip_id") or ""),
+                        str(item.get("task_id") or ""),
+                        str(item.get("channel") or "sms"),
+                        str(item.get("status") or "pending"),
+                        int(item.get("attempt") or 0),
+                        int(item.get("max_attempt") or 3),
+                        _to_mysql_datetime(item.get("next_run_at")),
+                        _to_mysql_datetime(item.get("lease_until")) if item.get("lease_until") else None,
+                        str(item.get("worker_id") or ""),
+                        str(item.get("last_error") or "")[:512],
+                        json.dumps(item, ensure_ascii=False, default=_json_default),
+                        _to_mysql_datetime(item.get("created_at")),
+                        _to_mysql_datetime(item.get("updated_at")),
+                    ),
+                )
+        finally:
+            connection.close()
+
+    def _delete_mysql_notification_job(self, job_id: str) -> bool:
+        connection = self._mysql_connect()
+        try:
+            with connection.cursor() as cursor:
+                affected = cursor.execute(
+                    "DELETE FROM t_notification_job WHERE job_id = %s",
+                    (job_id,),
                 )
             return affected > 0
         finally:

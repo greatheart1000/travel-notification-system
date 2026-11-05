@@ -73,3 +73,42 @@ def test_tenant_boundary_rejects_cross_tenant_trip_and_history(monkeypatch, tmp_
         )
         assert partner_rules.status_code == 200
         assert partner_rules.json()["data"]["items"] == []
+
+
+def test_admin_can_manage_tenant_notification_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TRAVEL_NOTIFICATION_DB_DIR", str(tmp_path))
+    monkeypatch.setenv("NOTIFICATION_QUEUE_INTERVAL_SECONDS", "3600")
+    from app.api.http import create_app
+
+    app = create_app()
+    with TestClient(app) as client:
+        admin_token = _login(client, "admin")
+        partner_token = _login(client, "partner")
+
+        forbidden = client.get(
+            "/api/admin/tenant-notification-config",
+            headers=_auth(partner_token),
+        )
+        assert forbidden.status_code == 403
+
+        updated = client.put(
+            "/api/admin/tenant-notification-config",
+            headers=_auth(admin_token),
+            json={
+                "wechat_webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=tenant-a",
+                "sms_provider": "mock",
+                "sms_sign_name": "TravelHub",
+                "sms_template_code": "SMS_001",
+            },
+        )
+        assert updated.status_code == 200
+
+        fetched = client.get(
+            "/api/admin/tenant-notification-config",
+            headers=_auth(admin_token),
+        )
+        assert fetched.status_code == 200
+        config = fetched.json()["data"]["config"]
+        assert config["tenant_id"] == "tenant-a"
+        assert config["sms_provider"] == "mock"
+        assert config["wechat_webhook_url"].endswith("key=tenant-a")

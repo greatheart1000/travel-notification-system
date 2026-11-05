@@ -113,6 +113,15 @@ class TemplateService:
         if isinstance(value, Channel):
             return value
         raw = str(value).strip().lower()
+        aliases = {
+            "短信": "sms",
+            "sms": "sms",
+            "wechat": "wechat_work_group",
+            "wechat_work": "wechat_work_group",
+            "企业微信": "wechat_work_group",
+            "wechat_work_group": "wechat_work_group",
+        }
+        raw = aliases.get(raw, raw)
         matched = next((item for item in Channel if item.value == raw), None)
         return matched or Channel.SMS
 

@@ -51,15 +51,19 @@ class MockSMSProvider(SMSProvider):
 
 
 class AliyunSMSProvider(SMSProvider):
-    def __init__(self):
+    def __init__(
+        self,
+        access_key_id: str | None = None,
+        access_key_secret: str | None = None,
+    ):
         try:
             from alibabacloud_dysmsapi20170525.client import Client as Dysmsapi20170525Client
             from alibabacloud_tea_openapi import models as open_api_models
         except ImportError:
             raise RuntimeError("alibabacloud_dysmsapi20170525 is not installed")
 
-        access_key_id = os.getenv("ALIYUN_SMS_AK", "")
-        access_key_secret = os.getenv("ALIYUN_SMS_SK", "")
+        access_key_id = access_key_id or os.getenv("ALIYUN_SMS_AK", "")
+        access_key_secret = access_key_secret or os.getenv("ALIYUN_SMS_SK", "")
 
         config = open_api_models.Config(
             access_key_id=access_key_id, access_key_secret=access_key_secret

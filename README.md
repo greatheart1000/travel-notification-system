@@ -53,6 +53,28 @@ npm -C frontend run build
 
 一旦配置了 `role_recipients`，缺失某个岗位的接收人时该岗位会被跳过并写日志，**不会回退到公共群**，避免把岗位专属内容发给错误的人。
 
+### 租户级 provider 配置
+
+管理员可通过以下接口为当前租户配置独立渠道，不需要改代码或重启：
+
+```bash
+GET /api/admin/tenant-notification-config
+PUT /api/admin/tenant-notification-config
+```
+
+请求字段：`wechat_webhook_url`、`sms_provider`（`mock`/`aliyun`）、`sms_sign_name`、`sms_template_code`、`sms_credential_id`。原始 AK/SK 建议放密钥管理服务，接口只保存凭证引用 ID。
+
+### 可配置通知规则
+
+调度器会读取租户的 `NotificationRuleRepository` 规则：
+
+- 没有规则：保持旧行为；
+- 有规则：按 `stage + time_slot + scene + conditions` 匹配；
+- 规则存在但条件不匹配：跳过该行程并写审计；
+- `all_day` 规则可匹配任意 time_slot。
+
+运营可通过规则管理接口调整“行前几天发、什么条件发”，无需发版。
+
 ### 超时与“结果未知”策略
 
 企微群机器人不支持幂等键。对于超时/连接中断这类“请求可能已到达 provider”的情况，系统会：

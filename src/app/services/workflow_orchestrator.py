@@ -52,13 +52,19 @@ class WorkflowOrchestrator:
             days_until_start = (start_date - today).days
             status = trip.get("status")
 
-            # --- 场景 1: 行前准备 (T-3) ---
-            if days_until_start == 3 and status == "planned":
+            # --- 场景 1: 下团欢送 (完结日) ---
+            if today == end_date:
+                self._send(trip, "tpl-post-farewell", "下团欢送")
+                triggered_count += 1
+                logs.append(f"Trip {trip['id']}: Sent farewell")
+
+            # --- 场景 2: 行前准备 (T-3) ---
+            elif days_until_start == 3 and status == "planned":
                 self._send(trip, "tpl-pre-3d", "T-3行程确认")
                 triggered_count += 1
                 logs.append(f"Trip {trip['id']}: Sent T-3 notice")
 
-            # --- 场景 2: 出发前一天 (T-1) ---
+            # --- 场景 3: 出发前一天 (T-1) ---
             elif days_until_start == 1 and status == "planned":
                 # 连发两条：欢迎词 + 乘机提示
                 self._send(trip, "tpl-pre-1d-welcome", "T-1入群欢迎")
@@ -66,7 +72,7 @@ class WorkflowOrchestrator:
                 triggered_count += 2
                 logs.append(f"Trip {trip['id']}: Sent T-1 bundle")
 
-            # --- 场景 3: 行中每日提示 ---
+            # --- 场景 4: 行中每日提示 ---
             elif status == "in_progress" or (start_date <= today <= end_date):
                 # 落地首日特殊提示
                 if today == start_date:
@@ -78,12 +84,6 @@ class WorkflowOrchestrator:
                 self._send(trip, morning_tpl, "行中晨间提示")
                 triggered_count += 1
                 logs.append(f"Trip {trip['id']}: Sent daily morning tips")
-
-            # --- 场景 4: 下团欢送 (完结日) ---
-            elif today == end_date:
-                self._send(trip, "tpl-post-farewell", "下团欢送")
-                triggered_count += 1
-                logs.append(f"Trip {trip['id']}: Sent farewell")
 
         return {"status": "completed", "triggered_total": triggered_count, "details": logs}
 

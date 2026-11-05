@@ -65,6 +65,22 @@ CREATE TABLE IF NOT EXISTS t_notification_idempotency (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ---------------------------------------------------------------------------
+-- 3b) Per-tenant channel configuration (no secrets in source code)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS t_tenant_notification_config (
+  tenant_id VARCHAR(64) NOT NULL,
+  wechat_webhook_url VARCHAR(512) NOT NULL DEFAULT '',
+  sms_provider VARCHAR(32) NOT NULL DEFAULT '',
+  sms_sign_name VARCHAR(64) NOT NULL DEFAULT '',
+  sms_template_code VARCHAR(64) NOT NULL DEFAULT '',
+  sms_credential_id VARCHAR(64) NOT NULL DEFAULT '',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+    ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (tenant_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ---------------------------------------------------------------------------
 -- 4) Dead-letter view for operations
 -- Rows are derived from jobs that exhausted retries or need manual review.
 -- ---------------------------------------------------------------------------

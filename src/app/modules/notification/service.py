@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from app.core.models import Channel
 from app.core.observability import get_trace_id, metrics, new_trace_id
 from app.modules.integration.persistence import JsonFileStore
-from app.modules.integration.sms_provider import SMSProvider, get_sms_provider
+from app.modules.integration.sms_provider import get_sms_provider
 from app.modules.integration.wechat_provider import WeChatWorkWebhookProvider
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import (
@@ -18,6 +18,10 @@ from app.modules.notification.models import (
     NotificationAttempt,
     NotificationTask,
     NotificationTemplate,
+)
+from app.modules.notification.provider_registry import (
+    RealWorldSMSProvider,
+    TenantProviderRegistry,
 )
 
 UTC = UTC
@@ -31,34 +35,6 @@ class ChannelProvider(Protocol):
         provider_context: dict[str, str] | None = None,
     ) -> tuple[bool, str]:
         """Return (ok, provider_message)."""
-
-
-class RealWorldSMSProvider:
-    """适配 SMSProvider 接口到 NotificationService 的 ChannelProvider 协议。"""
-
-    _PHONE_PATTERN = re.compile(r"^\+?\d{7,20}$")
-
-    def __init__(self, provider: SMSProvider):
-        self.provider = provider
-
-    def send(
-        self,
-        customer_id: str,
-        content: str,
-        provider_context: dict[str, str] | None = None,
-    ) -> tuple[bool, str]:
-        phone = customer_id.strip()
-        if not self._PHONE_PATTERN.fullmatch(phone):
-            return False, "invalid_phone"
-        metadata = provider_context or {}
-        result = self.provider.send_sms(
-            phone,
-            content,
-            sign_name=metadata.get("sms_sign_name", "TravelHub"),
-            template_code=metadata.get("provider_template_code", ""),
-            template_params=metadata.get("template_params"),
-        )
-        return result["ok"], result.get("msg_id", result.get("error", "unknown"))
 
 
 class StubProvider:
@@ -183,14 +159,35 @@ class NotificationService:
         providers: dict[Channel, ChannelProvider] | None = None,
         idempotency_store: IdempotencyStore | None = None,
         attempt_repository: NotificationAttemptRepository | None = None,
+        provider_registry: TenantProviderRegistry | None = None,
     ) -> None:
-        sms_backend = RealWorldSMSProvider(get_sms_provider())
-        self.providers: dict[Channel, ChannelProvider] = providers or {
-            Channel.SMS: sms_backend,
-            Channel.WECHAT_WORK_GROUP: WeChatWorkWebhookProvider(),
-        }
+        self.provider_registry = provider_registry
+        if providers is not None:
+            self.providers: dict[Channel, ChannelProvider] | None = providers
+        elif provider_registry is not None:
+            self.providers = None
+        else:
+            self.providers = {
+                Channel.SMS: RealWorldSMSProvider(get_sms_provider()),
+                Channel.WECHAT_WORK_GROUP: WeChatWorkWebhookProvider(),
+            }
         self.idempotency_store = idempotency_store or IdempotencyStore()
         self.attempt_repository = attempt_repository
+
+    def _resolve_provider(
+        self,
+        channel: Channel,
+        task: NotificationTask,
+    ) -> ChannelProvider | None:
+        if self.providers is not None:
+            return self.providers.get(channel)
+        if self.provider_registry is not None:
+            return self.provider_registry.resolve(
+                channel,
+                task.tenant_id,
+                task.provider_context,
+            )
+        return None
 
     def render(self, template: NotificationTemplate, variables: dict[str, str]) -> str:
         placeholders = set(re.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", template.content))
@@ -264,7 +261,7 @@ class NotificationService:
             channels.append(task.fallback_channel)
 
         for channel in channels:
-            provider = self.providers.get(channel)
+            provider = self._resolve_provider(channel, task)
             if provider is None:
                 continue
 

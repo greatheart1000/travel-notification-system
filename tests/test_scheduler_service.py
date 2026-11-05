@@ -8,6 +8,7 @@ from typing import Any
 from app.core.models import Channel
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
+from app.modules.notification.rule_service import NotificationRuleRepository
 from app.modules.notification.service import NotificationService
 from app.services.async_dispatch import AsyncDispatchService
 from app.services.scheduler_service import AutoNotificationScheduler
@@ -44,6 +45,7 @@ def _build_scheduler(
     trips: list[dict[str, Any]],
     *,
     weather: FakeWeatherProvider | None = None,
+    rule_repository: NotificationRuleRepository | None = None,
 ) -> tuple[AutoNotificationScheduler, FakeChannelProvider, FakeChannelProvider, SimpleNamespace]:
     template_service = TemplateService()
     template_service.create_notification_template(
@@ -85,6 +87,7 @@ def _build_scheduler(
         notification_tasks={},
         weather_provider=weather or FakeWeatherProvider(),
         project_notification_config_repository=None,
+        notification_rule_repository=rule_repository,
     )
     scheduler = AutoNotificationScheduler(ctx)
     return scheduler, sms, wechat, ctx
@@ -375,3 +378,59 @@ def test_invalid_cron_expression_falls_back_to_default_hour() -> None:
 
     assert _parse_cron("not a cron", 7) == (0, 7)
     assert _parse_cron("15 8 * * *", 7) == (15, 8)
+
+
+def test_notification_rule_blocks_non_matching_trip(json_store) -> None:
+    repo = NotificationRuleRepository(store=json_store)
+    repo.create_rule(
+        {
+            "tenant_id": "tenant-a",
+            "name": "仅海南",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "channels": ["sms"],
+            "conditions": {"destination": "海南"},
+            "enabled": True,
+        }
+    )
+    scheduler, sms, _, _ = _build_scheduler(
+        [_trip(start_offset_days=3)],
+        rule_repository=repo,
+    )
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert sms.call_count == 0
+
+
+def test_notification_rule_allows_matching_trip(json_store) -> None:
+    repo = NotificationRuleRepository(store=json_store)
+    repo.create_rule(
+        {
+            "tenant_id": "tenant-a",
+            "name": "仅阿勒泰",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "channels": ["sms"],
+            "conditions": {"destination": "阿勒泰"},
+            "enabled": True,
+        }
+    )
+    scheduler, sms, _, _ = _build_scheduler(
+        [_trip(start_offset_days=3)],
+        rule_repository=repo,
+    )
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert sms.call_count == 1

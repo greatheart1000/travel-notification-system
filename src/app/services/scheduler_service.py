@@ -12,6 +12,7 @@ from app.modules.integration.weather_provider import WeatherInfo, WeatherProvide
 from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
+from app.modules.notification.policy import NotificationPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,8 @@ class AutoNotificationScheduler:
 
             scene = self._resolve_scene(weather_info, project_config, trip)
             scene_for_audit = scene
+            if not self._policy_allows(trip, stage, time_slot, scene, today, current_time):
+                return
             template = self.ctx.template_service.pick_notification_template(
                 tenant_id=str(trip.get("tenant_id", "tenant-a")),
                 project_id=self._resolve_project_id(trip),
@@ -258,6 +261,53 @@ class AutoNotificationScheduler:
             target=str(trip.get("id", "")),
             detail={"stage": stage, "time_slot": time_slot, "scene": scene_for_audit},
         )
+
+    def _policy_allows(
+        self,
+        trip: dict,
+        stage: str,
+        time_slot: str,
+        scene: str,
+        today,
+        current_time: datetime,
+    ) -> bool:  # noqa: ANN001
+        rule_repository = getattr(self.ctx, "notification_rule_repository", None)
+        if rule_repository is None:
+            return True
+        policy = NotificationPolicy(rule_repository)
+        decision = policy.resolve(
+            tenant_id=str(trip.get("tenant_id", "tenant-a")),
+            stage=stage,
+            time_slot=time_slot,
+            scene=scene,
+            context={
+                **trip,
+                "time_node": self._resolve_time_node(trip, stage, today),
+                "scene": scene,
+                "time_slot": time_slot,
+            },
+        )
+        if decision.configured and not decision.allowed:
+            self.ctx.audit_service.record(
+                operator_id="system_scheduler",
+                action="auto_notification_blocked_by_rule",
+                target=str(trip.get("id", "")),
+                detail={"stage": stage, "time_slot": time_slot, "scene": scene},
+            )
+            return False
+        return True
+
+    def _resolve_time_node(self, trip: dict, stage: str, today) -> str:  # noqa: ANN001
+        if stage == "pre_trip":
+            start_date = self._parse_date(trip.get("start_date"))
+            if start_date is not None:
+                return f"出发前{(start_date - today).days}天"
+            return "行前"
+        if stage == "in_trip":
+            return "每日固定时段"
+        if stage == "post_trip":
+            return "下团即时"
+        return ""
 
     def _resolve_project_id(self, trip: dict[str, object]) -> str:
         return str(trip.get("project_id") or trip.get("team_id") or trip.get("team") or "")

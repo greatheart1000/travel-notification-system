@@ -39,6 +39,10 @@ from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
 from app.modules.notification.rule_service import NotificationRuleRepository, RuleValidationError
+from app.modules.notification.provider_registry import (
+    TenantNotificationConfigRepository,
+    TenantProviderRegistry,
+)
 from app.modules.notification.service import NotificationAttemptRepository, NotificationService
 from app.modules.trigger.risk_alert_service import RiskAlertService
 from app.services.analytics_view_service import AnalyticsViewService
@@ -104,6 +108,7 @@ class AppContext:
     notification_attempt_repository: NotificationAttemptRepository
     notification_rule_repository: NotificationRuleRepository
     notification_service: NotificationService
+    tenant_notification_config_repository: TenantNotificationConfigRepository
     idempotency_store: IdempotencyStore
     async_dispatch_service: AsyncDispatchService
     audit_service: AuditService
@@ -487,6 +492,22 @@ class ProjectNotificationConfigUpsertRequest(BaseModel):
     sms_template_code_normal: str = ""
     sms_template_code_weather_alert: str = ""
     manual_takeover_target: str = ""
+
+
+class TenantNotificationConfigUpsertRequest(BaseModel):
+    wechat_webhook_url: str = ""
+    sms_provider: str = ""
+    sms_sign_name: str = ""
+    sms_template_code: str = ""
+    sms_credential_id: str = ""
+
+    @field_validator("sms_provider")
+    @classmethod
+    def check_sms_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"", "mock", "aliyun"}:
+            raise ValueError("sms_provider must be one of: mock, aliyun")
+        return normalized
 
 
 def _ok(data: Any) -> dict[str, Any]:
@@ -1781,9 +1802,14 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         template_id=template_service.ensure_default_template(tenant_id="tenant-a").id,
         tenant_id="tenant-a",
     )
+    tenant_notification_config_repository = TenantNotificationConfigRepository(store=persistence)
+    provider_registry = TenantProviderRegistry(
+        config_repository=tenant_notification_config_repository
+    )
     notification_service = NotificationService(
         idempotency_store=IdempotencyStore(store=persistence),
         attempt_repository=notification_attempt_repository,
+        provider_registry=provider_registry,
     )
     async_dispatch_service = AsyncDispatchService(
         notification_service=notification_service,
@@ -1808,6 +1834,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         notification_attempt_repository=notification_attempt_repository,
         notification_rule_repository=notification_rule_repository,
         notification_service=notification_service,
+        tenant_notification_config_repository=tenant_notification_config_repository,
         idempotency_store=notification_service.idempotency_store,
         async_dispatch_service=async_dispatch_service,
         audit_service=audit_service,
@@ -4038,6 +4065,47 @@ def create_app() -> FastAPI:
         return _ok(
             {"trip": _serialize_trip(trip), "notification_attempts": attempts, "audit_logs": logs}
         )
+
+    @fastapi_app.get("/api/admin/tenant-notification-config")
+    def get_tenant_notification_config(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        config = ctx.tenant_notification_config_repository.get(tenant_id) or {
+            "tenant_id": tenant_id
+        }
+        return _ok({"tenant_id": tenant_id, "config": config})
+
+    @fastapi_app.put("/api/admin/tenant-notification-config")
+    def upsert_tenant_notification_config(
+        payload: TenantNotificationConfigUpsertRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        config = ctx.tenant_notification_config_repository.upsert(
+            {
+                "tenant_id": tenant_id,
+                "wechat_webhook_url": payload.wechat_webhook_url,
+                "sms_provider": payload.sms_provider,
+                "sms_sign_name": payload.sms_sign_name,
+                "sms_template_code": payload.sms_template_code,
+                "sms_credential_id": payload.sms_credential_id,
+            }
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="tenant_notification_config_updated",
+            target=tenant_id,
+            detail={
+                "sms_provider": payload.sms_provider,
+                "sms_sign_name": payload.sms_sign_name,
+                "sms_credential_id": payload.sms_credential_id,
+                "wechat_webhook_configured": bool(payload.wechat_webhook_url),
+            },
+        )
+        return _ok({"tenant_id": tenant_id, "config": config})
 
     @fastapi_app.post("/api/admin/run-automation-scan")
     def run_automation_scan(

@@ -38,7 +38,11 @@ reliability semantics, and the remaining work before a SaaS/private deployment.
 - WeCom provider fails closed when no webhook is configured and only accepts
   official `qyapi.weixin.qq.com` webhook URLs.
 - SMS provider fails closed unless `SMS_PROVIDER` is explicitly configured.
+- Per-tenant channel configuration is stored in `t_tenant_notification_config`
+  and can be managed via `GET/PUT /api/admin/tenant-notification-config`.
 - Per-trip webhook, per-project SMS sign/template code, and per-role recipients.
+- Notification rules gate the scheduler: no rules = legacy behavior; matching
+  rules = allow; configured-but-unmatched rules = skip with audit.
 - Role recipients can be configured as:
   ```json
   {
@@ -76,8 +80,9 @@ reliability semantics, and the remaining work before a SaaS/private deployment.
 2. **MySQL outbox code path** is represented by the migration and advisory-lock
    serialization. A dedicated row-level `SELECT ... FOR UPDATE SKIP LOCKED`
    repository is the next step for high-throughput multi-worker deployments.
-3. **Per-tenant provider credentials** currently rely on environment + project
-   config. A tenant secret manager/provider registry is required for true SaaS.
+3. **Per-tenant provider credentials** are supported at config level (webhook,
+   SMS provider/sign/template, credential id). Raw AK/SK still belong in the
+   environment/secret manager; a dedicated secret-manager integration remains.
 4. **Exactly-once is impossible with WeCom group robots** (no idempotency key).
    The chosen policy is at-least-once with local idempotency and manual review on
    ambiguous timeout. This must be accepted as a business trade-off.
