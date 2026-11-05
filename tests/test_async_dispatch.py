@@ -166,3 +166,38 @@ def test_due_jobs_are_skipped_when_another_worker_holds_the_lock(json_store) -> 
 
     queue.run_due_jobs({task.id: task})
     assert provider.call_count == 1
+
+
+def test_dead_letter_job_can_be_requeued(json_store) -> None:
+    provider = FakeChannelProvider(
+        outcomes=[(False, "http_500")],
+        default=(True, "ok"),
+    )
+    queue = AsyncDispatchService(
+        notification_service=_service(provider),
+        store=json_store,
+        max_attempt=1,
+    )
+    task = _task()
+    job = queue.enqueue(task, channel="sms")
+    queue.run_due_jobs({task.id: task})
+    assert job.status == "manual_intervention"
+
+    requeued = queue.requeue(job.job_id, tenant_id="tenant-a")
+
+    assert requeued is not None
+    assert requeued["status"] == "pending"
+    assert requeued["last_error"] == ""
+    queue.run_due_jobs({task.id: task})
+    assert job.status == "sent"
+
+
+def test_requeue_rejects_cross_tenant_job(json_store) -> None:
+    queue = AsyncDispatchService(
+        notification_service=_service(FakeChannelProvider()),
+        store=json_store,
+    )
+    task = _task()
+    job = queue.enqueue(task, channel="sms")
+
+    assert queue.requeue(job.job_id, tenant_id="tenant-b") is None

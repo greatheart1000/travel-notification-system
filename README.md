@@ -64,12 +64,24 @@ PUT /api/admin/tenant-notification-config
 
 请求字段：`wechat_webhook_url`、`sms_provider`（`mock`/`aliyun`）、`sms_sign_name`、`sms_template_code`、`sms_credential_id`。原始 AK/SK 建议放密钥管理服务，接口只保存凭证引用 ID。
 
+### 异步队列与死信运维
+
+```bash
+GET  /api/admin/notification-jobs?status=manual_intervention
+POST /api/admin/notification-jobs/{job_id}/requeue
+```
+
+- 列表按当前租户过滤，支持 `pending/retrying/sent/failed/manual_intervention`。
+- 死信/失败任务可重放，重放会重置 attempt 预算并重新进入队列。
+- 所有重放操作写审计日志。
+
 ### 可配置通知规则
 
 调度器会读取租户的 `NotificationRuleRepository` 规则：
 
 - 没有规则：保持旧行为；
 - 有规则：按 `stage + time_slot + scene + conditions` 匹配；
+- 条件支持 `==/!=/>/>=/</<=/in/contains` 运算符；
 - 规则存在但条件不匹配：跳过该行程并写审计；
 - `all_day` 规则可匹配任意 time_slot。
 

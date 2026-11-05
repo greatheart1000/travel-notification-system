@@ -105,3 +105,30 @@ def test_policy_isolates_tenants(json_store) -> None:
 
     assert decision.configured is False
     assert decision.allowed is True
+
+
+def test_policy_supports_operator_conditions(json_store) -> None:
+    repo = _repo(json_store)
+    _create_rule(
+        repo,
+        conditions={"temperature": {"op": "<=", "value": -15}},
+    )
+    policy = NotificationPolicy(repo)
+
+    matched = policy.resolve(
+        tenant_id="tenant-a",
+        stage="pre_trip",
+        time_slot="morning",
+        scene="normal",
+        context={"temperature": -20},
+    )
+    unmatched = policy.resolve(
+        tenant_id="tenant-a",
+        stage="pre_trip",
+        time_slot="morning",
+        scene="normal",
+        context={"temperature": 5},
+    )
+
+    assert matched.allowed is True
+    assert unmatched.allowed is False

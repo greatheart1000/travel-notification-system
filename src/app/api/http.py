@@ -4107,6 +4107,39 @@ def create_app() -> FastAPI:
         )
         return _ok({"tenant_id": tenant_id, "config": config})
 
+    @fastapi_app.get("/api/admin/notification-jobs")
+    def list_notification_jobs(
+        status: str | None = None,
+        limit: int = 50,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        items = ctx.async_dispatch_service.list_jobs(
+            tenant_id=tenant_id,
+            status=status,
+            limit=max(1, min(limit, 200)),
+        )
+        return _ok({"total": len(items), "items": items})
+
+    @fastapi_app.post("/api/admin/notification-jobs/{job_id}/requeue")
+    def requeue_notification_job(
+        job_id: str,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        job = ctx.async_dispatch_service.requeue(job_id, tenant_id=tenant_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found or not requeueable")
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="notification_job_requeued",
+            target=job_id,
+            detail={"tenant_id": tenant_id},
+        )
+        return _ok(job)
+
     @fastapi_app.post("/api/admin/run-automation-scan")
     def run_automation_scan(
         user: dict[str, str] = Depends(require_admin),

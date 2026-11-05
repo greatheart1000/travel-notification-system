@@ -10,6 +10,9 @@ from app.modules.trigger.models import TriggerRule
 class TriggerEngine:
     """按规则判断是否触发通知，支持简单表达式条件。"""
 
+    def match_value(self, actual: Any, expected: Any) -> bool:
+        return self._match_value(actual, expected)
+
     def _match_value(self, actual: Any, expected: Any) -> bool:
         if actual is None:
             return False

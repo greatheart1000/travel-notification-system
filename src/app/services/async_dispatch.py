@@ -136,6 +136,24 @@ class AsyncDispatchService:
                 items = [item for item in items if item.status == status]
             return [item.to_payload() for item in items[: max(0, limit)]]
 
+    def requeue(self, job_id: str, *, tenant_id: str) -> dict[str, Any] | None:
+        """Requeue a dead-letter/failed job for a fresh attempt budget."""
+        with self._lock:
+            job = next((item for item in self._jobs if item.job_id == job_id), None)
+            if job is None or job.tenant_id != tenant_id:
+                return None
+            if job.status not in {"manual_intervention", "failed", "retrying"}:
+                return None
+            now = datetime.now(tz=UTC)
+            job.status = "pending"
+            job.attempt = 0
+            job.next_run_at = now
+            job.last_error = ""
+            job.started_at = None
+            job.updated_at = now
+            self._persist()
+            return job.to_payload()
+
     def run_due_jobs(self, tasks: dict[str, NotificationTask]) -> list[dict[str, Any]]:
         lock_store = self.store
         if lock_store is not None:

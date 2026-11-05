@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.modules.notification.rule_service import NotificationRuleRepository
+from app.modules.trigger.engine import TriggerEngine
 
 
 @dataclass(slots=True)
@@ -24,6 +25,7 @@ class NotificationPolicy:
 
     def __init__(self, rule_repository: NotificationRuleRepository) -> None:
         self.rule_repository = rule_repository
+        self._trigger_engine = TriggerEngine()
 
     def resolve(
         self,
@@ -66,11 +68,10 @@ class NotificationPolicy:
             rule_ids=[str(rule.get("id") or "") for rule in matched],
         )
 
-    @staticmethod
-    def _match_conditions(conditions: Any, context: dict[str, Any]) -> bool:
+    def _match_conditions(self, conditions: Any, context: dict[str, Any]) -> bool:
         if not isinstance(conditions, dict):
             return False
         for key, expected in conditions.items():
-            if context.get(key) != expected:
+            if not self._trigger_engine.match_value(context.get(key), expected):
                 return False
         return True
