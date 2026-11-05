@@ -22,9 +22,20 @@ def test_tenant_boundary_rejects_cross_tenant_trip_and_history(monkeypatch, tmp_
     from app.api.http import create_app
 
     app = create_app()
+    auth = app.state.ctx.auth_service
+    auth.users["admin-b"] = {
+        "id": "user-tenant-b-admin",
+        "username": "admin-b",
+        "email": "admin-b@travelhub.com",
+        "role": "admin",
+        "tenant_id": "tenant-b",
+        "password_hash": auth.hash_password("123456"),
+        "created_at": "2026-04-11T00:00:00Z",
+    }
     with TestClient(app) as client:
         admin_token = _login(client, "admin")
         partner_token = _login(client, "partner")
+        tenant_b_admin_token = _login(client, "admin-b")
 
         created = client.post(
             "/api/trips",
@@ -73,6 +84,39 @@ def test_tenant_boundary_rejects_cross_tenant_trip_and_history(monkeypatch, tmp_
         )
         assert partner_rules.status_code == 200
         assert partner_rules.json()["data"]["items"] == []
+
+        created_template = client.post(
+            "/api/notifications/templates",
+            headers=_auth(admin_token),
+            json={
+                "name": "租户A模板",
+                "content": "你好 {{customer_name}}",
+                "channel": "sms",
+                "notification_type": "daily_reminder",
+            },
+        )
+        assert created_template.status_code == 201
+        template_id = created_template.json()["data"]["id"]
+
+        partner_templates = client.get(
+            "/api/notifications/templates",
+            headers=_auth(tenant_b_admin_token),
+        )
+        assert partner_templates.status_code == 200
+        assert all(
+            item["id"] != template_id
+            for item in partner_templates.json()["data"]["items"]
+        )
+
+        assert client.put(
+            "/api/project-configs/proj-tenant-a",
+            headers=_auth(admin_token),
+            json={"project_name": "A项目"},
+        ).status_code == 200
+        assert client.get(
+            "/api/project-configs/proj-tenant-a",
+            headers=_auth(tenant_b_admin_token),
+        ).status_code == 404
 
 
 def test_admin_can_manage_tenant_notification_config(monkeypatch, tmp_path) -> None:
