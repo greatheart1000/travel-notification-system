@@ -51,7 +51,7 @@ npm -C frontend run build
 }
 ```
 
-一旦配置了 `role_recipients`，缺失某个岗位的接收人时该岗位会被跳过并写日志，**不会回退到公共群**，避免把岗位专属内容发给错误的人。
+一旦配置了 `role_recipients`，缺失某个岗位的接收人时该岗位会被跳过并写日志，**不会回退到公共群**，避免把岗位专属内容发给错误的人。角色键支持中文别名：`计调`→manager、`导游`→concierge、`司机`→driver。
 
 ### 租户级 provider 配置
 

@@ -294,6 +294,30 @@ def test_configured_role_recipients_do_not_fall_back_to_the_group() -> None:
     assert wechat.call_count == 0
 
 
+def test_role_recipients_support_chinese_role_aliases() -> None:
+    trip = _trip(start_offset_days=0, status="in_progress")
+    trip["guests"] = []
+    trip["role_recipients"] = {
+        "计调": {"channel": "sms", "address": "13800000011"},
+        "导游": {"channel": "sms", "address": "13800000012"},
+        "司机": {"channel": "sms", "address": "13800000013"},
+    }
+    scheduler, sms, wechat, _ = _build_scheduler([trip])
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert {call["customer_id"] for call in sms.calls} == {
+        "13800000011",
+        "13800000012",
+        "13800000013",
+    }
+    assert wechat.call_count == 0
+
+
 def test_post_trip_end_day_sends_farewell_template() -> None:
     trip = _trip(start_offset_days=-2, status="completed", end_offset_days=0)
     scheduler, sms, _, _ = _build_scheduler([trip])

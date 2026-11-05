@@ -618,12 +618,32 @@ class AutoNotificationScheduler:
             else:
                 logger.info("[StaffDispatch] role=%s trip=%s sent ok", role, trip.get("id"))
 
+    _ROLE_ALIASES: dict[str, str] = {
+        "manager": "manager",
+        "计调": "manager",
+        "dispatcher": "manager",
+        "concierge": "concierge",
+        "导游": "concierge",
+        "guide": "concierge",
+        "driver": "driver",
+        "司机": "driver",
+    }
+
     def _resolve_role_target(
         self,
         role: str,
         role_recipients: dict,
     ) -> dict[str, object] | None:
-        recipient = role_recipients.get(role)
+        aliases = [
+            key
+            for key, canonical in self._ROLE_ALIASES.items()
+            if canonical == role
+        ]
+        recipient = None
+        for key in [role, *aliases]:
+            if key in role_recipients:
+                recipient = role_recipients[key]
+                break
         if recipient is None:
             return None
         if isinstance(recipient, str):
