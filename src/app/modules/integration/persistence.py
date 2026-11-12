@@ -481,7 +481,7 @@ class JsonFileStore:
                             NOT NULL DEFAULT 'all_day',
                         scene ENUM('normal','weather_alert','delay','complaint','manual')
                             NOT NULL DEFAULT 'normal',
-                        template_id BIGINT UNSIGNED NOT NULL,
+                        template_id BIGINT UNSIGNED NULL,
                         priority INT UNSIGNED NOT NULL DEFAULT 100,
                         enabled TINYINT(1) NOT NULL DEFAULT 1,
                         conditions_json JSON NULL,
@@ -2491,14 +2491,9 @@ class JsonFileStore:
             connection.close()
 
     def _delete_mysql_generic(self, collection: str, item_id: str, key: str) -> bool:
-        if key != "id":
-            rows = self._read_mysql_generic_collection(collection)
-            filtered = [row for row in rows if str(row.get(key)) != str(item_id)]
-            if len(filtered) == len(rows):
-                return False
-            self._write_mysql_generic_collection(collection, filtered)
-            return True
-
+        # ``item_key`` is written from the preferred key at upsert time, so it
+        # can be deleted directly regardless of whether the key is ``id`` or a
+        # domain identifier (tenant_id, username, token hash, ...).
         connection = self._mysql_connect()
         try:
             with connection.cursor() as cursor:

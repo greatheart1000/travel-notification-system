@@ -1,0 +1,16 @@
+.git
+.gitignore
+.github
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+frontend/node_modules
+frontend/dist
+deploy/fc/build
+deploy/fc/*.zip
+公共资料*.txt
+.env
+.env.*
+!.env.example

@@ -93,3 +93,75 @@ reliability semantics, and the remaining work before a SaaS/private deployment.
    next migration.
 7. **MySQL migration runner** is a SQL file, not an automated/versioned migration
    tool. Production should run it through the deployment pipeline with backups.
+
+---
+
+## Commercial SaaS layer (2026-11-12)
+
+The product now ships a deployable commercial layer on top of the notification
+core. It is designed so that an operator only needs to fill `.env` and run
+`docker compose up -d --build`.
+
+### Self-service accounts and tenants
+- Persistent tenants, users and sessions in MySQL (JSON store for local runs).
+- Enterprise registration with SMS verification, password login, SMS-code login,
+  SMS password reset, password change, and team-member management.
+- PBKDF2 password hashing, opaque access/refresh tokens stored hashed,
+  refresh-token rotation, logout revocation, login rate limiting, and last-admin
+  protection.
+- Tenant suspension and disabled-user tokens are rejected at request time.
+
+### SMS
+- Aliyun Dysmsapi SDK is a production dependency; templates are selected by
+  purpose (`login`, `register`, `reset`).
+- Per-phone 60s cooldown, daily per-phone/per-IP caps, global daily cap, and
+  five-attempt verification limit.
+- Debug verification codes are only returned with the mock provider or an
+  explicit non-production flag.
+- Tenant-level channel configuration controls WeCom webhook, SMS provider,
+  sign name and business template code; credentials stay in the environment.
+
+### Plans, payments and quota
+- Built-in plans: free, trial, starter, growth, enterprise; prices and quotas
+  are overridable via `BILLING_PLANS_JSON`.
+- Trial subscription on tenant creation; expired subscriptions fall back to the
+  free plan; quota is counted per business-timezone month.
+- 易支付 / 极速付 (彩虹易支付 MD5 protocol) and Stripe Checkout adapters.
+- Order state machine (`pending → paid/closed/refunded`), signature and amount
+  verification, callback idempotency, advisory-lock settlement, late-callback
+  recovery for locally closed orders, and pending-order capping.
+- SMS quota is enforced in the provider registry; exhausted tenants fail closed
+  and fall back to WeCom when configured.
+- Payment receipts are sent by SMTP when a tenant contact email is configured.
+
+### Platform operations
+- `/operator` console (role `operator`): platform revenue, tenant list, manual
+  plan activation and refund recording.
+- Platform tenant is hidden from tenant lists and revenue.
+- Registration, login failure, payment, refund, quota and verification metrics
+  are exposed at `/api/health/metrics`.
+- Production disables OpenAPI docs; `METRICS_TOKEN` optionally protects detail
+  and metrics endpoints.
+
+### Deployment
+- Multi-stage `Dockerfile` builds the SPA and serves it from FastAPI.
+- `docker-compose.yml` provides MySQL + app with healthchecks, automatic
+  migrations and a non-root runtime user.
+- `scripts/apply_migrations.py` is idempotent and tracks applied files.
+- MySQL schema initialization and migration were verified in a real MySQL 8.2
+  container, including rule creation, tenant config, payments, notification
+  attempts/jobs and restart persistence.
+
+### Remaining gaps before large-scale SaaS
+1. Overall repository coverage is still below the notification-domain gate;
+   billing/identity are covered by unit and API tests, but not every legacy
+   module is.
+2. The scheduler and outbox worker still run inside the web process; split them
+   into a dedicated worker before horizontal scaling beyond `RUN_SCHEDULER`.
+3. Refunds are bookkeeping only; actual gateway refund APIs are not integrated.
+4. Invoice/tax fields, self-service subscription cancellation UI beyond
+   "cancel at period end", and dunning are not implemented.
+5. MySQL row-level `SKIP LOCKED` claiming is still the next step for
+   high-throughput multi-worker queues.
+6. Stripe CNY availability depends on the merchant account; the adapter is
+   implemented but should be validated against the live account.

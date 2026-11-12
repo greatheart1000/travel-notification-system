@@ -139,6 +139,7 @@ function normalizeErrorBody(data: unknown): ApiErrorBody {
     code: typeof data.code === 'number' ? data.code : undefined,
     error: typeof data.error === 'string' ? data.error : undefined,
     message: typeof data.message === 'string' ? data.message : undefined,
+    detail: typeof data.detail === 'string' ? data.detail : undefined,
   }
 }
 
@@ -150,7 +151,7 @@ function toApiClientError(error: unknown): ApiClientError {
   if (error instanceof AxiosError) {
     const status = error.response?.status ?? 0
     const body = normalizeErrorBody(error.response?.data)
-    const message = body.error ?? body.message ?? error.message ?? '请求失败'
+    const message = body.error ?? body.message ?? body.detail ?? error.message ?? '请求失败'
 
     return new ApiClientError({
       status,

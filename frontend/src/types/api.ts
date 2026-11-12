@@ -21,6 +21,7 @@ export interface ApiErrorBody {
   code?: number
   error?: string
   message?: string
+  detail?: string
 }
 
 export interface ApiErrorDetail {
@@ -41,7 +42,10 @@ export interface CurrentUser {
   id: string
   username: string
   email: string
+  phone?: string
   role: string
+  tenant_id: string
+  status?: string
   created_at: string
 }
 

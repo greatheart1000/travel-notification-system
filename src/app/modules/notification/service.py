@@ -218,7 +218,7 @@ class NotificationService:
         )
         if raw.startswith(non_retryable_prefixes):
             return "permanent"
-        if raw.endswith("_not_configured"):
+        if raw.endswith("_not_configured") or raw.endswith("_exceeded"):
             return "permanent"
         if "permanent" in raw:
             return "permanent"

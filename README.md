@@ -1,326 +1,195 @@
-# 新疆行程管家服务流程数字化
+# 行程管家 · Travel Hub
 
-本仓库是“行程通知与管家流程”项目的 MVP 后端与前端联调工程。
+面向旅行社的商业化行程通知 SaaS：多租户隔离、短信/企业微信双渠道、可配置通知规则、异步队列与死信重放、套餐订阅与在线支付。
 
-## 商用化配置（必须显式设置）
+- 后端：FastAPI + MySQL（JSON 文件存储仅用于本地/演示）
+- 前端：React 18 + TypeScript + Vite + Tailwind CSS
+- 短信：阿里云 Dysmsapi（登录/注册验证码 + 业务通知）
+- 支付：易支付 / 极速付（彩虹易支付协议）、Stripe Checkout、本地模拟支付
+- 部署：单镜像 + Docker Compose，一条命令启动
 
-生产环境不会回退到硬编码企微 webhook 或模拟短信：
+## 快速部署
+
+```bash
+cp .env.example .env
+# 编辑 .env：数据库密码、域名、短信 AK/SK、支付商户信息、管理员初始密码
+docker compose up -d --build
+```
+
+启动后访问 `http://<服务器地址>:8000`：
+
+1. 使用 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` 登录；
+2. 在「设置 → 通知渠道」配置企业微信 webhook 与短信签名/模板；
+3. 在「套餐与账单」查看试用额度并购买套餐；
+4. 在「设置 → 通知规则」配置发送策略；
+5. 在「运维 → 发送任务」查看队列与死信。
+
+> 生产环境不会创建演示账号，也不会回退到 mock 短信。首次启动必须显式设置管理员密码。
+
+健康检查：
+
+```bash
+curl -fsS http://127.0.0.1:8000/api/health
+curl -fsS http://127.0.0.1:8000/api/health/detail
+```
+
+## 环境变量
+
+完整清单见 [.env.example](.env.example)。关键变量：
 
 | 变量 | 说明 |
 |---|---|
-| `APP_ENV` | `production` / `staging` / `dev` / `test`；非 dev/test 下未配置短信 provider 会失败关闭 |
-| `WECHAT_WEBHOOK_URL` | 默认企微群机器人地址；也可在行程上配置 `webhook_url` 覆盖 |
-| `SMS_PROVIDER` | `aliyun` 或 `mock`；生产必须显式配置 |
-| `ALIYUN_SMS_AK` / `ALIYUN_SMS_SK` | 阿里云短信凭证 |
-| `ALIYUN_SMS_TEMPLATE_CODE` | 默认短信模板 ID |
-| `QWEATHER_API_HOST` / `QWEATHER_API_KEY` | 和风天气凭证；未配置时天气告警会安全降级 |
-| `TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND` | `mysql`（生产默认）或 `json`（本地/FC 演示） |
+| `APP_ENV` | `production` / `staging` / `dev` / `test` |
+| `APP_BASE_URL` | 对外访问地址，用于支付回调与邮件链接 |
+| `TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND` | `mysql`（生产）或 `json`（本地） |
 | `TRAVEL_NOTIFICATION_MYSQL_*` | MySQL 连接信息 |
-| `NOTIFICATION_QUEUE_INTERVAL_SECONDS` | 异步发送队列扫描间隔，默认 5 秒 |
-| `NOTIFICATION_TIMEZONE` | 定时调度时区，默认 `Asia/Shanghai` |
+| `AUTH_TOKEN_SECRET` / `VERIFICATION_CODE_SECRET` | 会话与验证码签名密钥，务必使用随机长字符串 |
+| `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` | 首个平台管理员 |
+| `SMS_PROVIDER` | `aliyun`（生产）；`mock` 仅限本地 |
+| `ALIYUN_SMS_AK` / `ALIYUN_SMS_SK` | 阿里云短信凭证（只放环境变量/密钥管理） |
+| `ALIYUN_SMS_SIGN_NAME` | 短信签名，例如 `江西锌鑫` |
+| `ALIYUN_SMS_LOGIN_TEMPLATE_CODE` | 登录验证码模板 CODE |
+| `ALIYUN_SMS_REGISTER_TEMPLATE_CODE` | 注册验证码模板 CODE |
+| `PAYMENT_PROVIDERS` | 逗号分隔：`epay,jisufu,stripe,mock` |
+| `PAYMENT_EPAY_*` / `PAYMENT_JISUFU_*` | 易支付 / 极速付商户信息 |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Stripe Checkout 与 webhook 密钥 |
+| `BILLING_TRIAL_DAYS` / `BILLING_TRIAL_SMS_QUOTA` | 新租户试用期与试用短信额度 |
+| `BOOTSTRAP_OPERATOR_USERNAME` / `BOOTSTRAP_OPERATOR_PASSWORD` | 可选：平台运营账号（跨租户运营后台） |
+| `METRICS_TOKEN` | 可选：保护 `/api/health/detail` 与 `/api/health/metrics` |
+| `RUN_SCHEDULER` | 多实例部署时仅在主实例设为 `true` |
+| `BILLING_PLANS_JSON` | 可选：覆盖内置套餐目录 |
+| `SMTP_*` | 可选：支付成功回执邮件 |
+| `NOTIFICATION_QUEUE_INTERVAL_SECONDS` | 异步队列扫描间隔，默认 5 秒 |
 
-安全说明：仓库历史中曾出现企微 webhook key，升级后请立即在企微后台轮换该 key，并检查 `WECHAT_WEBHOOK_URL` 是否只配置在环境变量/密钥管理服务中。
+### 支付回调地址
 
-可观测性：
-- 所有 HTTP 响应带 `X-Trace-Id`；请求可传入同名 header。
-- `GET /api/health/metrics` 返回发送尝试、成功、失败、重试、死信计数与延迟直方图。
-- `GET /api/health/detail` 返回队列积压、最近失败与组件状态。
+在支付商户后台配置：
 
-测试命令：
+```text
+易支付：https://<域名>/api/payments/epay/notify
+极速付：https://<域名>/api/payments/jisufu/notify
+Stripe：https://<域名>/api/payments/stripe/webhook
+```
+
+也可只配置 `PAYMENT_NOTIFY_URL=https://<域名>/api/payments/{provider}/notify`，系统会按 provider 替换。不要把一个固定网关地址复用给另一个网关，否则签名校验会失败。
+
+支付成功后用户回到 `https://<域名>/billing`。回调会校验签名、商户号、金额与订单状态，并做幂等处理；重复回调不会重复开通。
+
+### 短信模板
+
+认证验证码使用阿里云模板参数 `{"code": "123456"}`：
+
+| 用途 | 环境变量 | 当前资料中的模板 |
+|---|---|---|
+| 登录 | `ALIYUN_SMS_LOGIN_TEMPLATE_CODE` | `SMS_512540357` |
+| 注册 | `ALIYUN_SMS_REGISTER_TEMPLATE_CODE` | `SMS_512500353` |
+| 重置密码 | `ALIYUN_SMS_RESET_TEMPLATE_CODE` | 复用登录模板 |
+
+业务通知短信需在阿里云控制台审核单独的模板，并通过租户渠道配置的「通知模板 CODE」使用。
+
+## 商业化能力
+
+- **自助注册与登录**：企业注册、短信验证码登录、密码登录、短信重置密码、登录失败限流。
+- **多租户与团队**：租户级数据隔离，管理员/普通成员角色，团队成员管理。
+- **套餐与计费**：免费版/标准版/成长版/企业版，试用期，短信额度按自然月统计与拦截。
+- **在线支付**：易支付、极速付、Stripe、本地模拟支付；订单状态机与幂等回调。
+- **通知渠道**：租户级企业微信 webhook、短信服务商/签名/模板配置，失败关闭（fail-closed）。
+- **通知规则**：阶段/时段/场景/条件组匹配，通道与优先级可配置。
+- **可靠性**：异步 outbox、跨进程锁、重试与死信、人工重放、超时人工复核。
+- **可观测性**：`X-Trace-Id`、指标端点、健康详情、手机号/webhook 脱敏。
+- **支付回执**：配置 SMTP 后自动发送支付成功邮件。
+- **平台运营后台**：`/operator` 查看全平台租户、收入、套餐与订单，支持手动开通套餐与退款标记。
+- **生产安全开关**：生产环境关闭 OpenAPI 文档，可用 `METRICS_TOKEN` 保护运维指标。
+
+## 本地开发
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# 本地使用 JSON 存储与 mock 短信，避免真实外呼
+export APP_ENV=dev
+export TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND=json
+export SMS_PROVIDER=mock
+export PAYMENT_PROVIDERS=mock
+export FRONTEND_DIST_DIR=frontend/dist
+
+npm -C frontend install
+npm -C frontend run build
+PYTHONPATH=src python -m uvicorn app.api.http:app --host 127.0.0.1 --port 8000
+```
+
+前端热更新：
+
+```bash
+npm -C frontend run dev
+```
+
+## 测试
 
 ```bash
 .venv/bin/python -m pytest -q
-.venv/bin/python -m pytest -q --cov=app --cov-report=term-missing
 npm -C frontend test
 npm -C frontend run build
 ```
 
-测试会通过 socket 级 guard 阻止任何真实外呼；如新增外部 provider，必须注入 fake，不能在测试中访问真实网络。
+测试通过 socket 级 guard 阻止真实外呼；新增外部 provider 必须注入 fake，不能在测试中访问真实网络。
 
-### 分岗位接收人配置
+## 运维
 
-默认情况下，团期负责人/旅行管家/司机三类话术会发送到行程群 webhook。若需要私发到不同接收人，可在行程或项目配置中增加：
+- **数据库迁移**：容器启动时自动执行 `scripts/apply_migrations.py`，已执行文件记录在 `t_schema_migrations`。
+- **备份**：备份 MySQL 数据卷/实例；订单、租户与用户数据都在 MySQL 中。
+- **扩容**：当前调度器与队列 worker 在应用进程内运行。单实例使用 `WEB_CONCURRENCY=1`；多实例时只在主实例设置 `RUN_SCHEDULER=true`，其余实例设为 `false`，且每个实例都必须能访问同一 MySQL。
+- **死信处理**：管理员在「发送任务」按状态筛选并重新入队，操作写审计日志。
+- **额度告警**：账单页展示本月用量；额度耗尽时短信发送失败关闭并回退企业微信（若配置）。
 
-```json
-{
-  "role_recipients": {
-    "manager": {"channel": "sms", "address": "13800000001"},
-    "concierge": {"channel": "sms", "address": "13800000002"},
-    "driver": {"channel": "wechat_work_group", "address": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."}
-  }
-}
-```
+## 安全须知
 
-一旦配置了 `role_recipients`，缺失某个岗位的接收人时该岗位会被跳过并写日志，**不会回退到公共群**，避免把岗位专属内容发给错误的人。角色键支持中文别名：`计调`→manager、`导游`→concierge、`司机`→driver。
-
-### 租户级 provider 配置
-
-管理员可通过以下接口为当前租户配置独立渠道，不需要改代码或重启：
-
-```bash
-GET /api/admin/tenant-notification-config
-PUT /api/admin/tenant-notification-config
-```
-
-请求字段：`wechat_webhook_url`、`sms_provider`（`mock`/`aliyun`）、`sms_sign_name`、`sms_template_code`、`sms_credential_id`。原始 AK/SK 建议放密钥管理服务，接口只保存凭证引用 ID。
-
-### 异步队列与死信运维
-
-```bash
-GET  /api/admin/notification-jobs?status=manual_intervention
-POST /api/admin/notification-jobs/{job_id}/requeue
-```
-
-- 列表按当前租户过滤，支持 `pending/retrying/sent/failed/manual_intervention`。
-- 死信/失败任务可重放，重放会重置 attempt 预算并重新进入队列。
-- 所有重放操作写审计日志。
-
-### 可配置通知规则
-
-调度器会读取租户的 `NotificationRuleRepository` 规则：
-
-- 没有规则：保持旧行为；
-- 有规则：按 `stage + time_slot + scene + conditions` 匹配；
-- 条件支持 `==/!=/>/>=/</<=/in/contains` 运算符；
-- 规则存在但条件不匹配：跳过该行程并写审计；
-- `all_day` 规则可匹配任意 time_slot。
-
-运营可通过规则管理接口调整“行前几天发、什么条件发”，无需发版。
-
-### 超时与“结果未知”策略
-
-企微群机器人不支持幂等键。对于超时/连接中断这类“请求可能已到达 provider”的情况，系统会：
-
-1. 记录 `delivery_unknown`，不自动重试；
-2. 将幂等状态置为 `unknown`；
-3. 将任务标记为 `manual_intervention`，由人工核对后处理。
-
-普通 5xx/限流仍会按退避策略重试；配置错误、空内容、非法手机号等属于永久失败，不重试。
-
-### 数据库迁移
-
-商用 MySQL 环境上线前执行：
-
-```bash
-mysql -u <user> -p <database> < docs/migrations/2026-11-05-commercial-notification.sql
-```
-
-迁移包含 `trace_id`、异步 outbox、持久化幂等状态、角色接收人表和租户唯一索引。
-
-## 模块概览
-
-- `notification`：通知编排与发送任务（短信主渠道、企业微信群兜底）
-- `trigger`：必发节点与条件触发规则引擎
-- `complaint`：投诉/负面情绪识别与升级
-- `integration`：外部系统接口抽象（易途、天气）
-- `audit`：关键操作审计日志
-- `survey`：满意度回收与低分自动跟进
-- `services/lifecycle_rule_builder.py`：生命周期规则草案生成
+- `.env`、`公共资料.txt` 等包含真实凭证的文件已在 `.gitignore` 中，禁止提交。
+- 仓库历史中曾出现企微 webhook key；升级后请立即在企微后台轮换。
+- 本次接入使用的阿里云 AK/SK、支付商户密钥、SMTP 授权码均只应配置在环境变量或密钥管理服务中。
+- 生产环境必须设置强随机 `AUTH_TOKEN_SECRET`、`VERIFICATION_CODE_SECRET` 与管理员密码。
+- 建议在反向代理层启用 HTTPS、HSTS、请求体大小限制与访问日志脱敏。
 
 ## 目录结构
 
 ```text
 src/app/
-  core/
-  api/
+  api/http.py                 HTTP API 与 SPA 托管
+  core/                       配置、可观测性、环境变量加载
   modules/
-  services/
-frontend/
-tests/
+    identity/                 租户、用户、验证码、登录限流
+    billing/                  套餐、订阅、订单、支付 provider、额度
+    notification/             通知服务、规则、provider registry、幂等
+    integration/              持久化、短信、企微、邮件、天气、认证
+  services/                   调度、异步队列、工作流
+frontend/src/
+  pages/                      业务页、登录/注册、账单、设置
+  services/commercialApi.ts   商业化 API 客户端
 docs/
+  migrations/                 MySQL 迁移
+  commercial-deployment.md    部署与上线 runbook
 ```
 
-## 本地环境准备
+## API 速览
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+```text
+POST /api/auth/sms-code             发送验证码
+POST /api/auth/register             企业注册
+POST /api/auth/login                密码登录
+POST /api/auth/login-sms            验证码登录
+POST /api/auth/password/reset       重置密码
+GET  /api/public/plans              套餐目录（公开）
+GET  /api/billing/subscription      当前订阅与用量
+POST /api/billing/orders            创建支付订单
+GET  /api/billing/orders            订单列表
+POST /api/payments/{provider}/notify 支付回调（公开）
+GET  /api/admin/tenant-notification-config 租户渠道配置
+GET  /api/admin/notification-jobs   死信/队列任务
+POST /api/admin/users               团队成员管理
+GET  /api/operator/tenants          平台运营：租户列表
+GET  /api/operator/billing/overview 平台运营：收入与订单
+POST /api/operator/tenants/{id}/activate-plan 平台运营：手动开通
+POST /api/operator/orders/{no}/refund         平台运营：退款标记
 ```
-
-> 说明：`python-multipart` 已纳入项目依赖，无需额外手工安装，可直接用于 `/api/trips/import` 等上传接口。
-
-前端依赖（首次）：
-
-```bash
-cd frontend
-npm install
-cd ..
-```
-
-## 启动方式
-
-后端：
-
-```bash
-TRAVEL_NOTIFICATION_CORS_ORIGINS=http://127.0.0.1:4180 \
-PYTHONPATH=src python -m uvicorn app.api.http:app --host 127.0.0.1 --port 18000
-```
-
-前端：
-
-```bash
-cd frontend
-npm run build
-cd ..
-python scripts/frontend_proxy_server.py \
-  --host 127.0.0.1 \
-  --port 4180 \
-  --backend http://127.0.0.1:18000 \
-  --static-dir frontend/dist
-```
-
-## 部署命令（前后端）
-
-当前推荐部署端口：
-- backend: `18000`
-- frontend: `4180`（通过本地代理转发 `/api/*` 到 backend）
-
-### 生产构建前端
-
-```bash
-npm -C frontend run build
-```
-
-### 启动后端（端口 18000）
-
-```bash
-TRAVEL_NOTIFICATION_CORS_ORIGINS=http://127.0.0.1:4180 \
-PYTHONPATH=src python -m uvicorn app.api.http:app --host 127.0.0.1 --port 18000
-```
-
-> `TRAVEL_NOTIFICATION_CORS_ORIGINS` 支持逗号分隔多个来源（例如 `http://127.0.0.1:4180,http://localhost:5173`）。
-
-### 启动前端代理（端口 4180）
-
-```bash
-python scripts/frontend_proxy_server.py \
-  --host 127.0.0.1 \
-  --port 4180 \
-  --backend http://127.0.0.1:18000 \
-  --static-dir frontend/dist
-```
-
-### 部署后检查
-
-```bash
-curl -fsS http://127.0.0.1:18000/api/health
-curl -fsS -X POST http://127.0.0.1:4180/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"123456"}'
-```
-
-访问地址：
-- 前端登录页：`http://127.0.0.1:4180`
-
-## 健康检查
-
-```bash
-curl -fsS http://127.0.0.1:18000/api/health
-```
-
-## 统一状态块（2026-04-12）
-
-- `/api/health` 运行时验证：以直接 HTTP 健康检查为准
-- `/api/notifications/rules*` 端点现状：已实现并可鉴权访问（见 `docs/api-contract.md`）
-- 当前 blocker（命令级）：无
-- 本地执行观察（2026-05-10）：后端 `uvicorn` 启动与 `python -m pytest -q` 为当前主验证方式。
-- 当前剩余阻塞（rules 联调内容级）：
-  1. `rules` 端点已纳入 `tests/test_http_api.py`（`test_notification_rules_contract_smoke`）。
-  2. 前端规则阶段枚举与后端规范值仍有收敛空间（后端规范：`pre_trip|in_trip|post_trip`）。
-  3. `stage/time_slot/scene` 的别名输入策略尚未冻结为团队统一规范。
-- 临时绕行（仅当 backend 再次启动失败时）：
-  1. `python -m pytest -q tests/test_http_api.py`
-  2. 单独启动 backend 后执行 `curl -fsS http://127.0.0.1:18000/api/health`
-- 当前可运行命令（已验证）：
-  - `python -m pytest -q`
-  - `python -m pytest -q tests/test_http_api.py`
-  - `curl -fsS http://127.0.0.1:18000/api/health`
-  - `npm -C frontend run build`
-- 恢复步骤（统一）：
-  1. backend rules 契约收口完成（以 `docs/api-contract.md` 为准）。
-  2. frontend rules smoke：执行下方 `rules 最小 smoke 命令链`。
-  3. integration verify：`python -m pytest -q tests/test_http_api.py`
-  4. integration full verify：`python -m pytest -q`（收尾）
-- 阶段边界：实现优先 + 最小验证，综合回归 deferred（待 rules 用例纳入最小默认回归后执行）。
-- 最小联调命令（可直接复制执行）：
-```bash
-curl -fsS http://127.0.0.1:18000/api/health
-python -m pytest -q tests/test_http_api.py
-```
-
-- rules 最小 smoke 命令链（可直接复制执行）：
-```bash
-TOKEN=$(curl -fsS -X POST http://127.0.0.1:18000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"123456"}' \
-  | python -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
-
-curl -fsS "http://127.0.0.1:18000/api/notifications/rules?stage=pre_trip&time_slot=morning&scene=normal" \
-  -H "Authorization: Bearer ${TOKEN}"
-
-curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:18000/api/notifications/rules \
-  -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -d '{"name":"smoke-rule","stage":"pre_trip","time_slot":"morning","scene":"normal","channels":["sms"],"enabled":true,"priority":100}'
-```
-
-### team/team_id 兼容过渡期说明（统一口径）
-
-- 现状：接口字段仍存在 `team` 与 `team_id` 并存。
-- 过渡期写入：前端/联调请求优先使用 `team_id`，并在兼容阶段同时携带 `team`。
-- 过渡期读取：若响应仅返回 `team`，客户端在适配层映射为 `team_id` 后再进入业务逻辑。
-- 退出条件：后端完成 `team_id` 统一并发布后，移除 `team` 兼容写入与映射逻辑。
-
-
-## 推荐测试命令
-
-### 最小联调校验（推荐先跑）
-
-```bash
-python -m pytest -q tests/test_http_api.py
-```
-
-### 契约测试（可选，主链路通后再跑）
-
-```bash
-python -m pytest -q tests/test_http_api.py
-```
-
-### 关键链路验证（可选，主链路通后再跑）
-
-```bash
-python -m pytest -q \
-  tests/test_bootstrap.py \
-  tests/test_notification_pipeline.py \
-  tests/test_trigger_and_audit.py \
-  tests/test_lifecycle_rule_builder.py \
-  tests/test_concierge_playbook.py
-```
-
-### Smoke 测试（真实 HTTP）
-
-```bash
-curl -fsS http://127.0.0.1:18000/api/health
-```
-
-### 联调收尾（含全量测试）
-
-```bash
-python -m pytest -q
-```
-
-## API 与联调文档
-
-- 契约文档：`docs/api-contract.md`
-- 联调指南：`API_INTEGRATION.md`
-- 连通性报告：`docs/api_connectivity_report.md`
-- 上线/联调 Runbook：`docs/api_connectivity_runbook.md`
-- 联调交接执行清单：`docs/api_connectivity_runbook.md`（章节：`7. 联调交接执行清单`）
-- Batch 2 两周迭代任务单（RBAC/异步重试/可观测/审批流）：`docs/batch2-two-week-iteration-plan.md`
-- MySQL 表结构与种子数据：`docs/mysql_schema_seed.sql`
-- MySQL 设计说明：`docs/mysql-table-design.md`
-
-## 测试边界说明
-
-`pyproject.toml` 已设置 `testpaths = ["tests"]`，并排除 `everything-claude-code` 子目录，避免非本项目测试被误收集。

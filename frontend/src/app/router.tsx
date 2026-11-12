@@ -11,6 +11,14 @@ export type AppPage =
   | 'trip_workflow'
   | 'analytics'
   | 'preferences'
+  | 'billing'
+  | 'settings_channels'
+  | 'settings_rules'
+  | 'settings_jobs'
+  | 'settings_users'
+  | 'operator'
+  | 'login'
+  | 'register'
 
 export interface AppRoute {
   page: AppPage
@@ -54,6 +62,16 @@ export function parseAppRoute(pathname: string, search: string): AppRoute {
   }
   if (parts[0] === 'analytics') return { page: 'analytics' }
   if (parts[0] === 'preferences') return { page: 'preferences' }
+  if (parts[0] === 'billing') return { page: 'billing' }
+  if (parts[0] === 'operator') return { page: 'operator' }
+  if (parts[0] === 'login') return { page: 'login' }
+  if (parts[0] === 'register') return { page: 'register' }
+  if (parts[0] === 'settings') {
+    if (parts[1] === 'channels') return { page: 'settings_channels' }
+    if (parts[1] === 'rules') return { page: 'settings_rules' }
+    if (parts[1] === 'jobs') return { page: 'settings_jobs' }
+    if (parts[1] === 'users') return { page: 'settings_users' }
+  }
 
   return { page: 'trips' }
 }
@@ -84,6 +102,22 @@ export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: 
       return `/trips/${encodeURIComponent(params?.tripId ?? '')}/workflow`
     case 'preferences':
       return '/preferences'
+    case 'billing':
+      return '/billing'
+    case 'operator':
+      return '/operator'
+    case 'settings_channels':
+      return '/settings/channels'
+    case 'settings_rules':
+      return '/settings/rules'
+    case 'settings_jobs':
+      return '/settings/jobs'
+    case 'settings_users':
+      return '/settings/users'
+    case 'login':
+      return '/login'
+    case 'register':
+      return '/register'
     default:
       return '/trips'
   }

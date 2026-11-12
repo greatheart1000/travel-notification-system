@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import csv
+import hmac
 import io
+import logging
 import os
 import re
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 from xml.etree import ElementTree
@@ -15,7 +18,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 from starlette.routing import Router as StarletteRouter
@@ -25,7 +28,13 @@ from app.core.models import Channel, NotificationType
 from app.core.observability import metrics, new_trace_id, reset_trace_id, set_trace_context
 from app.modules.analytics.service import AnalyticsRepository, AnalyticsService
 from app.modules.audit.service import AuditLogRepository, AuditService
-from app.modules.integration.auth import AuthService
+from app.modules.billing.providers import PaymentError
+from app.modules.billing.service import BillingService
+from app.modules.identity.repository import TenantRepository
+from app.modules.identity.service import AccountService
+from app.modules.identity.verification import VerificationError, VerificationService
+from app.modules.integration.auth import AuthError, AuthService
+from app.modules.integration.email_provider import EmailProvider, get_email_provider
 from app.modules.integration.wechat_provider import get_wechat_provider_for_trip
 from app.modules.integration.persistence import (
     JsonFileStore,
@@ -56,6 +65,7 @@ from app.services.template_service import TemplateService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 UTC = UTC
+logger = logging.getLogger(__name__)
 
 
 
@@ -101,6 +111,10 @@ class Response:
 class AppContext:
     store: JsonFileStore
     auth_service: AuthService
+    account_service: AccountService
+    verification_service: VerificationService
+    billing_service: BillingService
+    tenant_repository: TenantRepository
     trip_repository: TripRepository
     project_notification_config_repository: ProjectNotificationConfigRepository
     template_service: TemplateService
@@ -116,7 +130,73 @@ class AppContext:
     weather_provider: WeatherProvider
     risk_evidence_repository: RiskEvidenceRepository
     notification_tasks: dict[str, NotificationTask]
+    email_provider: EmailProvider | None = None
     scheduler_service: Any | None = None
+
+
+class SmsCodeRequest(BaseModel):
+    phone: str = Field(min_length=6, max_length=32)
+    purpose: str = Field(default="login", max_length=16)
+
+
+class RegisterRequest(BaseModel):
+    tenant_name: str = Field(min_length=2, max_length=64)
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=6, max_length=128)
+    phone: str = Field(min_length=6, max_length=32)
+    code: str = Field(min_length=4, max_length=8)
+
+
+class SmsLoginRequest(BaseModel):
+    phone: str = Field(min_length=6, max_length=32)
+    code: str = Field(min_length=4, max_length=8)
+
+
+class PasswordResetRequest(BaseModel):
+    phone: str = Field(min_length=6, max_length=32)
+    code: str = Field(min_length=4, max_length=8)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class BillingOrderRequest(BaseModel):
+    plan_code: str = Field(min_length=1, max_length=32)
+    provider: str = Field(default="epay", min_length=1, max_length=32)
+
+
+class TenantProfileUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=64)
+    contact_name: str | None = Field(default=None, max_length=64)
+    contact_phone: str | None = Field(default=None, max_length=32)
+    contact_email: str | None = Field(default=None, max_length=128)
+
+
+class TenantUserCreateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=6, max_length=128)
+    email: str = Field(default="", max_length=128)
+    phone: str = Field(default="", max_length=32)
+    role: str = Field(default="user", max_length=16)
+
+
+class TenantUserUpdateRequest(BaseModel):
+    email: str | None = Field(default=None, max_length=128)
+    phone: str | None = Field(default=None, max_length=32)
+    role: str | None = Field(default=None, max_length=16)
+    status: str | None = Field(default=None, max_length=16)
+
+
+class AdminPlanActivateRequest(BaseModel):
+    plan_code: str = Field(min_length=1, max_length=32)
+    days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class RefundOrderRequest(BaseModel):
+    downgrade: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -1788,6 +1868,17 @@ def _seed_concierge_templates(template_service: TemplateService, tenant_id: str)
 
 def _build_context(store: JsonFileStore | None = None) -> AppContext:
     persistence = store or JsonFileStore()
+    billing_service = BillingService(store=persistence)
+    auth_service = AuthService(store=persistence)
+    tenant_repository = TenantRepository(store=persistence)
+    verification_service = VerificationService(store=persistence)
+    account_service = AccountService(
+        auth_service=auth_service,
+        tenant_repository=tenant_repository,
+        verification_service=verification_service,
+        billing_service=billing_service,
+    )
+    account_service.ensure_bootstrap_tenants()
     trip_repository = TripRepository(store=persistence)
     project_notification_config_repository = ProjectNotificationConfigRepository(store=persistence)
     template_service = TemplateService(store=persistence)
@@ -1804,7 +1895,8 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     )
     tenant_notification_config_repository = TenantNotificationConfigRepository(store=persistence)
     provider_registry = TenantProviderRegistry(
-        config_repository=tenant_notification_config_repository
+        config_repository=tenant_notification_config_repository,
+        billing_service=billing_service,
     )
     notification_service = NotificationService(
         idempotency_store=IdempotencyStore(store=persistence),
@@ -1821,12 +1913,15 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         attempt_repository=notification_attempt_repository,
         trip_repository=trip_repository,
     )
-    auth_service = AuthService()
     weather_provider = WeatherProvider()
     risk_evidence_repository = RiskEvidenceRepository(store=persistence)
     context = AppContext(
         store=persistence,
         auth_service=auth_service,
+        account_service=account_service,
+        verification_service=verification_service,
+        billing_service=billing_service,
+        tenant_repository=tenant_repository,
         trip_repository=trip_repository,
         project_notification_config_repository=project_notification_config_repository,
         template_service=template_service,
@@ -1842,6 +1937,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         weather_provider=weather_provider,
         risk_evidence_repository=risk_evidence_repository,
         notification_tasks={},
+        email_provider=get_email_provider(),
     )
     context.scheduler_service = init_scheduler(context)
     return context
@@ -1869,14 +1965,27 @@ def create_app() -> FastAPI:
         ctx = app.state.ctx
         scheduler = ctx.scheduler_service or init_scheduler(ctx)
         ctx.scheduler_service = scheduler
-        scheduler.start()
+        run_scheduler = os.getenv("RUN_SCHEDULER", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        if run_scheduler:
+            scheduler.start()
+        else:
+            logger.info("scheduler disabled by RUN_SCHEDULER=false")
         yield
-        scheduler.stop()
+        if run_scheduler:
+            scheduler.stop()
 
+    production = os.getenv("APP_ENV", "dev").strip().lower() == "production"
     fastapi_app = FastAPI(
         title="Travel Notification API",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
+        docs_url=None if production else "/docs",
+        redoc_url=None if production else "/redoc",
+        openapi_url=None if production else "/openapi.json",
     )
 
     @fastapi_app.middleware("http")
@@ -1892,6 +2001,49 @@ def create_app() -> FastAPI:
 
     from fastapi.middleware.gzip import GZipMiddleware
     fastapi_app.add_middleware(GZipMiddleware, minimum_size=500)
+
+    try:
+        max_body_bytes = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(25 * 1024 * 1024)))
+    except ValueError:
+        max_body_bytes = 25 * 1024 * 1024
+
+    @fastapi_app.middleware("http")
+    async def security_middleware(request: Request, call_next):
+        if request.method in {"POST", "PUT", "PATCH"}:
+            raw_length = request.headers.get("content-length")
+            if raw_length:
+                try:
+                    length = int(raw_length)
+                except ValueError:
+                    length = 0
+                if length > max_body_bytes:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"code": 413, "error": "请求体过大", "detail": "请求体过大"},
+                    )
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("X-Frame-Options", "DENY")
+        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        headers.setdefault(
+            "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+        )
+        headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; font-src 'self' data:; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        )
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+        if request.url.scheme == "https" or forwarded_proto == "https":
+            headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
+        if request.url.path.startswith("/api/") and "Cache-Control" not in headers:
+            headers["Cache-Control"] = "no-store"
+        return response
+
     cors_origins = [
         origin.strip()
         for origin in os.getenv("TRAVEL_NOTIFICATION_CORS_ORIGINS", "").split(",")
@@ -1909,6 +2061,48 @@ def create_app() -> FastAPI:
 
     security = HTTPBearer(auto_error=False)
 
+    @fastapi_app.exception_handler(AuthError)
+    async def auth_error_handler(_request: Request, exc: AuthError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "code": exc.status_code,
+                "error": exc.message,
+                "detail": exc.message,
+                "error_code": exc.code,
+            },
+        )
+
+    @fastapi_app.exception_handler(VerificationError)
+    async def verification_error_handler(
+        _request: Request, exc: VerificationError
+    ) -> JSONResponse:
+        headers = None
+        if exc.retry_after:
+            headers = {"Retry-After": str(exc.retry_after)}
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "code": exc.status_code,
+                "error": exc.message,
+                "detail": exc.message,
+                "error_code": exc.code,
+            },
+            headers=headers,
+        )
+
+    @fastapi_app.exception_handler(PaymentError)
+    async def payment_error_handler(_request: Request, exc: PaymentError) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "code": 400,
+                "error": str(exc),
+                "detail": str(exc),
+                "error_code": "payment_error",
+            },
+        )
+
     def get_ctx(request: Request) -> AppContext:
         return request.app.state.ctx
 
@@ -1921,6 +2115,9 @@ def create_app() -> FastAPI:
         user = ctx.auth_service.authenticate(credentials.credentials)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid token")
+        tenant = ctx.account_service.get_tenant(str(user.get("tenant_id") or ""))
+        if tenant is not None and tenant.status != "active":
+            raise HTTPException(status_code=403, detail="企业账号已停用")
         return user
 
     def require_admin(user: dict[str, str] = Depends(get_current_user)) -> dict[str, str]:
@@ -1928,11 +2125,48 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="Admin role required")
         return user
 
+    def require_operator(user: dict[str, str] = Depends(get_current_user)) -> dict[str, str]:
+        if user.get("role") != "operator":
+            raise HTTPException(status_code=403, detail="Operator role required")
+        return user
+
+    def _client_ip(request: Request) -> str:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.client.host if request.client else ""
+
     def _current_tenant_id(user: dict[str, str]) -> str:
         tenant_id = str(user.get("tenant_id") or "").strip()
         if not tenant_id:
             raise HTTPException(status_code=403, detail="Tenant context missing")
         return tenant_id
+
+    def _send_payment_receipt(ctx: AppContext, order: dict[str, Any]) -> None:
+        provider = ctx.email_provider
+        if provider is None:
+            return
+        tenant = ctx.account_service.get_tenant(str(order.get("tenant_id") or ""))
+        recipient = str(tenant.contact_email if tenant else "").strip()
+        if not recipient:
+            return
+        plan, subscription = ctx.billing_service.effective_plan(
+            str(order.get("tenant_id") or "")
+        )
+        amount = int(order.get("amount_cents") or 0) / 100
+        body = (
+            f"您好，{tenant.name if tenant else '客户'}：\n\n"
+            f"您的订单 {order.get('order_no')} 已支付成功。\n"
+            f"套餐：{plan.name}\n"
+            f"金额：¥{amount:.2f}\n"
+            f"到期时间：{subscription.current_period_end}\n\n"
+            "如非本人操作，请联系企业管理员。\n"
+            "—— 行程管家"
+        )
+        try:
+            provider.send(recipient, "行程管家 · 支付成功通知", body)
+        except Exception:  # noqa: BLE001 - receipts must never fail a payment
+            pass
 
     def _build_emergency_weather_service(ctx: AppContext) -> EmergencyWeatherService:
         return EmergencyWeatherService(
@@ -2039,15 +2273,31 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return JSONResponse(
             status_code=422,
-            content={"code": 422, "error": "Validation error", "detail": exc.errors()},
+            content={"code": 422, "error": "请求参数校验失败", "detail": exc.errors()},
         )
 
     @fastapi_app.get("/api/health")
     def get_health() -> dict[str, Any]:
-        return _ok({"status": "ok", "time": datetime.now(tz=UTC).isoformat(), "version": "0.2.0"})
+        return _ok({"status": "ok", "time": datetime.now(tz=UTC).isoformat(), "version": "0.3.0"})
+
+    def _metrics_authorized(request: Request) -> bool:
+        expected = os.getenv("METRICS_TOKEN", "").strip()
+        if not expected:
+            return True
+        supplied = request.headers.get("X-Metrics-Token", "").strip()
+        if not supplied:
+            authorization = request.headers.get("Authorization", "")
+            if authorization.startswith("Bearer "):
+                supplied = authorization[7:].strip()
+        return bool(supplied) and hmac.compare_digest(expected, supplied)
 
     @fastapi_app.get("/api/health/detail")
-    def get_health_detail(ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    def get_health_detail(
+        request: Request,
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        if not _metrics_authorized(request):
+            raise HTTPException(status_code=403, detail="Metrics token required")
         attempts = ctx.notification_attempt_repository.list_history(limit=9999)
         queue_health = ctx.async_dispatch_service.health_snapshot()
         return _ok(
@@ -2068,30 +2318,115 @@ def create_app() -> FastAPI:
                         "status": "ok",
                         "count": len(ctx.audit_service.repository.logs),
                     },
+                    "billing": {
+                        "status": "ok",
+                        "plans": len(ctx.billing_service.list_plans()),
+                        "payment_providers": [
+                            item["code"] for item in ctx.billing_service.list_payment_methods()
+                        ],
+                        "email_configured": ctx.email_provider is not None,
+                    },
+                    "identity": {
+                        "status": "ok",
+                        "tenants": len(ctx.tenant_repository.list_all()),
+                        "users": len(ctx.auth_service.users),
+                    },
                 },
             }
         )
 
     @fastapi_app.get("/api/health/metrics")
-    def get_metrics() -> dict[str, Any]:
+    def get_metrics(request: Request) -> dict[str, Any]:
+        if not _metrics_authorized(request):
+            raise HTTPException(status_code=403, detail="Metrics token required")
         return _ok(metrics.snapshot())
 
     @fastapi_app.post("/api/auth/login")
-    def login(payload: LoginRequest, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
-        try:
-            token = ctx.auth_service.login(payload.username, payload.password)
-            if token is None:
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-            return _ok(token)
-        except HTTPException:
-            raise
-        except Exception as e:
-            import traceback
-
-            error_detail = traceback.format_exc()
+    def login(
+        payload: LoginRequest,
+        request: Request,
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        client_ip = _client_ip(request)
+        if ctx.auth_service.login_rate_limited(payload.username, client_ip=client_ip):
             return JSONResponse(
-                status_code=500, content={"code": 500, "error": str(e), "detail": error_detail}
+                status_code=429,
+                content={
+                    "code": 429,
+                    "error": "登录尝试过于频繁，请 15 分钟后再试",
+                    "error_code": "login_rate_limited",
+                },
             )
+        token = ctx.auth_service.login(
+            payload.username,
+            payload.password,
+            client_ip=client_ip,
+        )
+        if token is None:
+            raise HTTPException(status_code=401, detail="账号或密码不正确")
+        return _ok(token)
+
+    @fastapi_app.post("/api/auth/sms-code")
+    def send_sms_code(
+        payload: SmsCodeRequest,
+        request: Request,
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        result = ctx.verification_service.send_code(
+            payload.phone,
+            payload.purpose,
+            client_ip=_client_ip(request),
+        )
+        return _ok(result)
+
+    @fastapi_app.post("/api/auth/register", status_code=201)
+    def register(
+        payload: RegisterRequest,
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        result = ctx.account_service.register(
+            tenant_name=payload.tenant_name,
+            username=payload.username,
+            password=payload.password,
+            phone=payload.phone,
+            code=payload.code,
+        )
+        ctx.audit_service.record(
+            operator_id=str(result["user"]["id"]),
+            action="tenant_registered",
+            target=str(result["tenant"]["tenant_id"]),
+            detail={"tenant_name": payload.tenant_name, "username": payload.username},
+        )
+        return _ok(result)
+
+    @fastapi_app.post("/api/auth/login-sms")
+    def login_with_sms(
+        payload: SmsLoginRequest,
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        return _ok(
+            ctx.account_service.login_with_sms(phone=payload.phone, code=payload.code)
+        )
+
+    @fastapi_app.post("/api/auth/password/reset")
+    def reset_password(
+        payload: PasswordResetRequest,
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        result = ctx.account_service.reset_password(
+            phone=payload.phone,
+            code=payload.code,
+            new_password=payload.new_password,
+        )
+        phone = payload.phone.strip()
+        masked = f"{phone[:3]}****{phone[-4:]}" if len(phone) >= 7 else "***"
+        ctx.audit_service.record(
+            operator_id="self-service",
+            action="password_reset",
+            target=masked,
+            detail={"channel": "sms"},
+        )
+        return _ok(result)
 
     @fastapi_app.post("/api/auth/logout")
     def logout(
@@ -2109,9 +2444,375 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="Invalid refresh token")
         return _ok(token)
 
+    # ---------------------------------------------------------------- billing
+    @fastapi_app.get("/api/public/plans")
+    def public_plans(ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+        import os as _os
+
+        plans = [plan.to_public_dict() for plan in ctx.billing_service.list_plans()]
+        return _ok(
+            {
+                "plans": plans,
+                "payment_methods": ctx.billing_service.list_payment_methods(),
+                "currency": _os.getenv("BILLING_CURRENCY", "CNY"),
+                "trial_days": int(_os.getenv("BILLING_TRIAL_DAYS", "14")),
+                "trial_sms_quota": int(_os.getenv("BILLING_TRIAL_SMS_QUOTA", "100")),
+            }
+        )
+
+    @fastapi_app.get("/api/billing/subscription")
+    def billing_subscription(
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        subscription = ctx.billing_service.get_subscription(tenant_id)
+        plan, _ = ctx.billing_service.effective_plan(tenant_id)
+        return _ok(
+            {
+                "tenant_id": tenant_id,
+                "subscription": subscription.to_dict(),
+                "plan": plan.to_public_dict(),
+                "usage": ctx.billing_service.usage_view(tenant_id).to_dict(),
+                "payment_methods": ctx.billing_service.list_payment_methods(),
+            }
+        )
+
+    @fastapi_app.get("/api/billing/usage")
+    def billing_usage(
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        return _ok(ctx.billing_service.usage_view(_current_tenant_id(user)).to_dict())
+
+    @fastapi_app.get("/api/billing/orders")
+    def billing_orders(
+        limit: int = 50,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        orders = ctx.billing_service.list_orders(tenant_id, limit=limit)
+        return _ok({"total": len(orders), "items": [order.to_dict() for order in orders]})
+
+    @fastapi_app.post("/api/billing/orders", status_code=201)
+    def create_billing_order(
+        payload: BillingOrderRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        order = ctx.billing_service.create_order(
+            tenant_id,
+            payload.plan_code,
+            payload.provider,
+            created_by=user["id"],
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="billing_order_created",
+            target=order.order_no,
+            detail={"tenant_id": tenant_id, "plan_code": order.plan_code, "provider": order.provider},
+        )
+        return _ok(order.to_dict())
+
+    @fastapi_app.get("/api/billing/orders/{order_no}")
+    def get_billing_order(
+        order_no: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        order = ctx.billing_service.get_order(_current_tenant_id(user), order_no)
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+        return _ok(order.to_dict())
+
+    @fastapi_app.post("/api/billing/orders/{order_no}/cancel")
+    def cancel_billing_order(
+        order_no: str,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        order = ctx.billing_service.cancel_order(_current_tenant_id(user), order_no)
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+        return _ok(order.to_dict())
+
+    @fastapi_app.post("/api/billing/orders/{order_no}/mock-pay")
+    def mock_pay_billing_order(
+        order_no: str,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        result = ctx.billing_service.mark_paid_for_local_test(
+            _current_tenant_id(user), order_no
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="billing_order_paid",
+            target=order_no,
+            detail={"provider": "mock"},
+        )
+        _send_payment_receipt(ctx, result.get("order") or {})
+        return _ok(result)
+
+    @fastapi_app.post("/api/billing/subscription/cancel")
+    def cancel_subscription(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        subscription = ctx.billing_service.cancel_subscription(
+            _current_tenant_id(user)
+        )
+        return _ok(subscription.to_dict())
+
+    @fastapi_app.post("/api/billing/subscription/resume")
+    def resume_subscription(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        subscription = ctx.billing_service.resume_subscription(
+            _current_tenant_id(user)
+        )
+        return _ok(subscription.to_dict())
+
+    @fastapi_app.api_route(
+        "/api/payments/{provider_code}/notify",
+        methods=["GET", "POST"],
+    )
+    async def payment_notify(
+        provider_code: str,
+        request: Request,
+        ctx: AppContext = Depends(get_ctx),
+    ):
+        from fastapi.responses import PlainTextResponse
+
+        params: dict[str, str] = dict(request.query_params)
+        if request.method == "POST":
+            form = await request.form()
+            params.update({key: str(value) for key, value in form.items()})
+        try:
+            result = ctx.billing_service.handle_notify(provider_code, params)
+        except PaymentError as exc:
+            logger.warning("payment callback rejected provider=%s reason=%s", provider_code, exc)
+            return PlainTextResponse(f"fail:{exc}", status_code=400)
+        if result.get("ok") and not result.get("idempotent"):
+            ctx.audit_service.record(
+                operator_id="payment_gateway",
+                action="billing_order_paid",
+                target=str((result.get("order") or {}).get("order_no") or ""),
+                detail={"provider": provider_code},
+            )
+            _send_payment_receipt(ctx, result.get("order") or {})
+        return PlainTextResponse("success")
+
+    @fastapi_app.post("/api/payments/stripe/webhook")
+    async def stripe_webhook(
+        request: Request,
+        ctx: AppContext = Depends(get_ctx),
+    ):
+        from fastapi.responses import PlainTextResponse
+
+        raw_body = await request.body()
+        signature = request.headers.get("Stripe-Signature", "")
+        try:
+            result = ctx.billing_service.handle_stripe_webhook(raw_body, signature)
+        except PaymentError as exc:
+            logger.warning("payment callback rejected provider=%s reason=%s", provider_code, exc)
+            return PlainTextResponse(f"fail:{exc}", status_code=400)
+        if result.get("ok") and not result.get("idempotent"):
+            ctx.audit_service.record(
+                operator_id="payment_gateway",
+                action="billing_order_paid",
+                target=str((result.get("order") or {}).get("order_no") or ""),
+                detail={"provider": provider_code},
+            )
+            _send_payment_receipt(ctx, result.get("order") or {})
+        return PlainTextResponse("success")
+
+    @fastapi_app.get("/api/payments/{provider_code}/return")
+    def payment_return(provider_code: str, request: Request):
+        order_no = request.query_params.get("out_trade_no") or request.query_params.get("order_no", "")
+        target = f"/billing?paid=1&order_no={order_no}" if order_no else "/billing?paid=1"
+        return RedirectResponse(url=target, status_code=302)
+
+    # ------------------------------------------------------- tenant profile
+    @fastapi_app.get("/api/tenant/me")
+    def get_current_tenant(
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        tenant = ctx.account_service.get_tenant(tenant_id)
+        if tenant is None:
+            return _ok({"tenant_id": tenant_id, "name": tenant_id, "status": "active"})
+        return _ok(tenant.to_dict())
+
+    @fastapi_app.get("/api/admin/tenant-profile")
+    def get_tenant_profile(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant = ctx.account_service.get_tenant(_current_tenant_id(user))
+        if tenant is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        return _ok(tenant.to_dict())
+
+    @fastapi_app.put("/api/admin/tenant-profile")
+    def update_tenant_profile(
+        payload: TenantProfileUpdateRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        tenant = ctx.account_service.update_tenant_profile(
+            tenant_id,
+            payload.model_dump(exclude_none=True),
+        )
+        if tenant is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="tenant_profile_updated",
+            target=tenant_id,
+            detail=payload.model_dump(exclude_none=True),
+        )
+        return _ok(tenant.to_dict())
+
+    @fastapi_app.get("/api/admin/users")
+    def list_tenant_users(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        items = ctx.auth_service.list_users(_current_tenant_id(user))
+        return _ok({"total": len(items), "items": items})
+
+    @fastapi_app.post("/api/admin/users", status_code=201)
+    def create_tenant_user(
+        payload: TenantUserCreateRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        if payload.role not in {"admin", "user"}:
+            raise HTTPException(status_code=400, detail="租户成员角色只能是 admin 或 user")
+        profile = ctx.auth_service.create_user(
+            tenant_id=_current_tenant_id(user),
+            username=payload.username,
+            password=payload.password,
+            email=payload.email,
+            phone=payload.phone,
+            role=payload.role,
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="tenant_user_created",
+            target=payload.username,
+            detail={"role": payload.role},
+        )
+        return _ok(profile)
+
+    @fastapi_app.put("/api/admin/users/{username}")
+    def update_tenant_user(
+        username: str,
+        payload: TenantUserUpdateRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        target = ctx.auth_service.get_user(username)
+        if target is None or str(target.get("tenant_id") or "") != _current_tenant_id(user):
+            raise HTTPException(status_code=404, detail="User not found")
+        if payload.role is not None and payload.role not in {"admin", "user"}:
+            raise HTTPException(status_code=400, detail="租户成员角色只能是 admin 或 user")
+        profile = ctx.auth_service.update_user(
+            username,
+            email=payload.email,
+            phone=payload.phone,
+            role=payload.role,
+            status=payload.status,
+        )
+        if profile is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="tenant_user_updated",
+            target=username,
+            detail=payload.model_dump(exclude_none=True),
+        )
+        return _ok(profile)
+
+    # ------------------------------------------------------ platform operator
+    @fastapi_app.get("/api/operator/tenants")
+    def operator_list_tenants(
+        _user: dict[str, str] = Depends(require_operator),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenants = ctx.account_service.list_tenants()
+        return _ok({"total": len(tenants), "items": tenants})
+
+    @fastapi_app.get("/api/operator/billing/overview")
+    def operator_billing_overview(
+        _user: dict[str, str] = Depends(require_operator),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        return _ok(ctx.billing_service.overview())
+
+    @fastapi_app.post("/api/operator/tenants/{tenant_id}/activate-plan")
+    def operator_activate_plan(
+        tenant_id: str,
+        payload: AdminPlanActivateRequest,
+        user: dict[str, str] = Depends(require_operator),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        if ctx.tenant_repository.get(tenant_id) is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        subscription = ctx.billing_service.activate_plan(
+            tenant_id,
+            payload.plan_code,
+            days=payload.days,
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="tenant_plan_activated",
+            target=tenant_id,
+            detail={"plan_code": payload.plan_code, "days": payload.days},
+        )
+        return _ok(subscription.to_dict())
+
+    @fastapi_app.post("/api/operator/orders/{order_no}/refund")
+    def operator_refund_order(
+        order_no: str,
+        payload: RefundOrderRequest,
+        user: dict[str, str] = Depends(require_operator),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        order = ctx.billing_service.refund_order(
+            order_no, downgrade=payload.downgrade
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="billing_order_refunded",
+            target=order_no,
+            detail={"downgrade": payload.downgrade, "tenant_id": order.tenant_id},
+        )
+        return _ok(order.to_dict())
+
     @fastapi_app.get("/api/users/me")
     def me(user: dict[str, str] = Depends(get_current_user)) -> dict[str, Any]:
         return _ok(user)
+
+    @fastapi_app.post("/api/users/me/password")
+    def change_my_password(
+        payload: PasswordChangeRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        if not ctx.auth_service.verify_password(
+            user["username"], payload.current_password
+        ):
+            raise HTTPException(status_code=400, detail="当前密码不正确")
+        ctx.auth_service.change_password(user["username"], payload.new_password)
+        tokens = ctx.auth_service.issue_token_pair(user["username"])
+        return _ok({"changed": True, "tokens": tokens})
 
     @fastapi_app.get("/api/preferences/me")
     def get_preferences_me(
@@ -4348,7 +5049,7 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/notifications/rules", status_code=201)
     def create_notification_rule(
         payload: NotificationRuleCreateRequest,
-        user: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         try:
@@ -4385,7 +5086,7 @@ def create_app() -> FastAPI:
     def update_notification_rule(
         rule_id: str,
         payload: NotificationRuleUpdateRequest,
-        user: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         try:
@@ -4403,7 +5104,7 @@ def create_app() -> FastAPI:
     @fastapi_app.delete("/api/notifications/rules/{rule_id}")
     def delete_notification_rule(
         rule_id: str,
-        user: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         deleted = ctx.notification_rule_repository.delete_rule(
@@ -4412,6 +5113,24 @@ def create_app() -> FastAPI:
         if not deleted:
             raise HTTPException(status_code=404, detail="Rule not found")
         return _ok({"deleted": True})
+
+    # ------------------------------------------------------------ SPA hosting
+    # In single-container deployments the backend also serves the built SPA.
+    frontend_dist = Path(os.getenv("FRONTEND_DIST_DIR", "")).expanduser()
+    if str(frontend_dist).strip() and frontend_dist.is_dir():
+        frontend_root = frontend_dist.resolve()
+        index_file = frontend_root / "index.html"
+
+        @fastapi_app.get("/{full_path:path}", include_in_schema=False)
+        def serve_frontend(full_path: str):
+            if full_path.startswith(("api/", "docs", "redoc", "openapi.json")):
+                raise HTTPException(status_code=404, detail="Not found")
+            candidate = (frontend_root / full_path).resolve()
+            if candidate.is_file() and str(candidate).startswith(str(frontend_root)):
+                return FileResponse(candidate)
+            if index_file.is_file():
+                return FileResponse(index_file)
+            raise HTTPException(status_code=404, detail="Frontend not built")
 
     return fastapi_app
 
@@ -4457,4 +5176,7 @@ def dispatch_request(
 
 
 def run_http_server(host: str = "0.0.0.0", port: int = 8000) -> None:
+    from app.core.env import load_dotenv_if_present
+
+    load_dotenv_if_present()
     uvicorn.run(get_app(), host=host, port=port)

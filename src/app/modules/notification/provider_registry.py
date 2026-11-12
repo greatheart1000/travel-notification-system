@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.core.models import Channel
+from app.core.observability import metrics
 from app.modules.integration.persistence import JsonFileStore
 from app.modules.integration.sms_provider import (
     AliyunSMSProvider,
@@ -87,10 +88,39 @@ class TenantNotificationConfigRepository:
 
 
 @dataclass(slots=True)
+class QuotaEnforcingSMSProvider:
+    """Fail closed when the tenant's monthly SMS quota is exhausted.
+
+    Verification codes are sent through the identity module and are not
+    counted here; business notifications (the high-volume path) are.
+    """
+
+    tenant_id: str
+    billing_service: Any
+    inner: ChannelProvider
+
+    def send(
+        self,
+        customer_id: str,
+        content: str,
+        provider_context: dict[str, str] | None = None,
+    ) -> tuple[bool, str]:
+        allowed, _remaining = self.billing_service.check_sms_quota(self.tenant_id)
+        if not allowed:
+            metrics.inc("sms_quota_exceeded_total", tenant_id=self.tenant_id)
+            return False, "sms_quota_exceeded"
+        ok, message = self.inner.send(customer_id, content, provider_context)
+        if ok:
+            self.billing_service.record_sms(self.tenant_id)
+        return ok, message
+
+
+@dataclass(slots=True)
 class TenantProviderRegistry:
     """Resolve channel providers using tenant config, trip context, and env fallback."""
 
     config_repository: TenantNotificationConfigRepository
+    billing_service: Any | None = None
     _cache: dict[tuple[str, str, str], ChannelProvider] = field(default_factory=dict)
 
     def resolve(
@@ -133,5 +163,12 @@ class TenantProviderRegistry:
                         else "sms_provider_not_configured"
                     )
                 )
-            return RealWorldSMSProvider(backend)
+            provider: ChannelProvider = RealWorldSMSProvider(backend)
+            if self.billing_service is not None:
+                provider = QuotaEnforcingSMSProvider(
+                    tenant_id=tenant_id,
+                    billing_service=self.billing_service,
+                    inner=provider,
+                )
+            return provider
         return None

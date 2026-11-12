@@ -1,0 +1,42 @@
+name: travel-notification-system
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-root}
+      MYSQL_DATABASE: ${TRAVEL_NOTIFICATION_MYSQL_DATABASE:-travel_notification_system}
+      MYSQL_USER: ${TRAVEL_NOTIFICATION_MYSQL_USER:-travel}
+      MYSQL_PASSWORD: ${TRAVEL_NOTIFICATION_MYSQL_PASSWORD:-change-me-db}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TRAVEL_NOTIFICATION_MYSQL_HOST: mysql
+      TRAVEL_NOTIFICATION_MYSQL_PORT: "3306"
+      PORT: "8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+volumes:
+  mysql_data:

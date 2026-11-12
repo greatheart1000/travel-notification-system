@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from app.modules.integration.sms_provider import (
     MisconfiguredSMSProvider,
     MockSMSProvider,
@@ -38,11 +36,15 @@ def test_get_sms_provider_unknown_type_fails_closed(monkeypatch) -> None:
     assert result["error"] == "unknown_sms_provider:unknown-provider"
 
 
-def test_get_sms_provider_aliyun_requires_sdk(monkeypatch) -> None:
+def test_get_sms_provider_aliyun_constructs_with_sdk(monkeypatch) -> None:
     monkeypatch.setenv("SMS_PROVIDER", "aliyun")
+    monkeypatch.setenv("ALIYUN_SMS_AK", "test-ak")
+    monkeypatch.setenv("ALIYUN_SMS_SK", "test-sk")
 
-    with pytest.raises(RuntimeError):
-        get_sms_provider()
+    from app.modules.integration.sms_provider import AliyunSMSProvider
+
+    provider = get_sms_provider()
+    assert isinstance(provider, AliyunSMSProvider)
 
 
 def test_mask_phone_does_not_expose_full_number() -> None:

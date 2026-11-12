@@ -6,8 +6,15 @@ __pycache__/
 htmlcov/
 .codex
 .codex-memory/
-.env.local
+.env
+.env.*
+!.env.example
 *.local
+
+# Local credential handoff files (never commit)
+公共资料.txt
+公共资料*.txt
+secrets.local.*
 
 # local embedded repositories
 /everything-claude-code/

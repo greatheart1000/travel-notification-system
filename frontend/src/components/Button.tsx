@@ -11,6 +11,7 @@ interface ButtonProps {
   disabled?: boolean
   loading?: boolean
   className?: string
+  title?: string
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
@@ -34,10 +35,12 @@ export function Button({
   disabled = false,
   loading = false,
   className = '',
+  title,
 }: ButtonProps) {
   return (
     <button
       onClick={onClick}
+      title={title}
       disabled={disabled || loading}
       className={`
         font-semibold rounded-lg transition-all duration-200
