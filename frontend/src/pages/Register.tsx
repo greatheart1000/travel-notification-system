@@ -106,7 +106,7 @@ export function Register({ onAuthenticated, onNavigate }: RegisterPageProps) {
             value={tenantName}
             onChange={(event) => setTenantName(event.target.value)}
             className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100"
-            placeholder="例如：沙笛旅行社"
+            placeholder="例如：月亮旅行社"
           />
         </label>
         <label className="block text-sm font-medium text-paper-700">

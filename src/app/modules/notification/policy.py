@@ -13,6 +13,7 @@ class PolicyDecision:
     allowed: bool
     channels: list[str] = field(default_factory=list)
     rule_ids: list[str] = field(default_factory=list)
+    template_id: str = ""
 
 
 class NotificationPolicy:
@@ -66,6 +67,7 @@ class NotificationPolicy:
             allowed=True,
             channels=list(selected.get("channels") or []),
             rule_ids=[str(rule.get("id") or "") for rule in matched],
+            template_id=str(selected.get("template_id") or ""),
         )
 
     def _match_conditions(self, conditions: Any, context: dict[str, Any]) -> bool:

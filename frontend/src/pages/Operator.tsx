@@ -69,6 +69,7 @@ export function Operator() {
   const [refundTarget, setRefundTarget] = useState<BillingOrder | null>(null)
   const [refundMode, setRefundMode] = useState<'manual' | 'gateway'>('manual')
   const [refundReason, setRefundReason] = useState('')
+  const [refundDowngrade, setRefundDowngrade] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -148,11 +149,15 @@ export function Operator() {
       await operatorApi.refundOrder(orderNo, {
         mode: refundMode,
         reason: refundReason.trim(),
+        downgrade: refundDowngrade,
       })
       setNotice(
-        refundMode === 'gateway'
-          ? `订单 ${orderNo} 网关退款成功`
-          : `订单 ${orderNo} 已记账退款，请在支付商户后台完成资金退回`,
+        [
+          refundMode === 'gateway'
+            ? `订单 ${orderNo} 网关退款成功`
+            : `订单 ${orderNo} 已记账退款，请在支付商户后台完成资金退回`,
+          refundDowngrade ? '租户套餐已降级为免费版' : '租户套餐保持不变',
+        ].join('；'),
       )
       setRefundTarget(null)
       setRefundReason('')
@@ -351,6 +356,7 @@ export function Operator() {
                               setRefundTarget(order)
                               setRefundMode('manual')
                               setRefundReason('')
+                              setRefundDowngrade(true)
                             }}
                           >
                             处理退款
@@ -469,6 +475,20 @@ export function Operator() {
                 placeholder="可选，最多 200 字"
                 maxLength={200}
               />
+            </label>
+            <label className="flex items-start gap-2.5 rounded-control border border-paper-200 bg-paper-50 px-3 py-2.5 text-sm text-paper-700">
+              <input
+                type="checkbox"
+                checked={refundDowngrade}
+                onChange={(event) => setRefundDowngrade(event.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-accent-600"
+              />
+              <span>
+                退款后取消当前套餐并降级到免费版
+                <span className="mt-0.5 block text-xs text-paper-500">
+                  适用于整单退款；若只是部分补偿，请取消勾选
+                </span>
+              </span>
             </label>
             <p className="text-xs text-paper-500">
               {refundMode === 'gateway'

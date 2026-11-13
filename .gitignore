@@ -23,3 +23,10 @@ secrets.local.*
 # deploy build artifacts
 deploy/fc/build/
 *.zip
+
+# local QA data
+/var/
+
+# Client materials — never push
+/需求文档/
+/ERP接口.md

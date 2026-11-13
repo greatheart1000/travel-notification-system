@@ -54,11 +54,11 @@ export function EmergencyWeatherSummaryPanel({
                 <div>
                   <div className="mb-2 flex flex-wrap items-center gap-2">
                     <Badge variant={riskBadgeVariant}>{weatherSummary.riskLevelLabel}</Badge>
-                    <Badge variant="info">AI已完成判断</Badge>
+                    <Badge variant="info">已判断</Badge>
                   </div>
                   <h2 className="text-2xl font-semibold text-paper-950">紧急天气通知</h2>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-paper-700">
-                    {weatherSummary.title}。当前模块已支持天气摘要、AI风险分析、受影响旅行团摘要与 AI 生成通知文案预览，发送前可二次编辑。
+                    {weatherSummary.title}。系统已生成天气摘要、风险判断、受影响旅行团和通知文案，发送前可编辑。
                   </p>
                 </div>
               </div>
@@ -105,7 +105,7 @@ export function EmergencyWeatherSummaryPanel({
                 <div className="rounded-panel border border-accent-100 bg-accent-50/70 p-5">
                   <div className="mb-3 flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-accent-600" />
-                    <h3 className="text-base font-semibold text-paper-900">AI风险分析</h3>
+                    <h3 className="text-base font-semibold text-paper-900">风险分析</h3>
                   </div>
                   <p className="text-sm leading-6 text-paper-700">{weatherSummary.aiRiskSummary}</p>
                 </div>
@@ -135,7 +135,7 @@ export function EmergencyWeatherSummaryPanel({
             <div className="rounded-panel border border-paper-200 bg-paper-950 p-5 text-white">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold text-danger-200">AI生成通知文案</p>
+                  <p className="text-xs font-semibold text-danger-200">通知文案</p>
                   <p className="mt-2 text-sm text-paper-300">推荐发送渠道：{weatherSummary.channelLabel}</p>
                 </div>
                 <Button variant="secondary" size="sm" onClick={onOpenEditor}>

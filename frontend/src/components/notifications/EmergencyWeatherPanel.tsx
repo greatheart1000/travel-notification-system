@@ -57,11 +57,11 @@ export function EmergencyWeatherPanel({
             <div>
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <Badge variant={riskBadge}>{summary.riskLevelLabel}</Badge>
-                <Badge variant="info">AI已完成判断</Badge>
+                <Badge variant="info">已判断</Badge>
               </div>
               <h2 className="text-2xl font-semibold text-paper-950">紧急天气预警</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-paper-700">
-                {summary.title}。当前流程已支持天气获取、风险判断、AI 文案生成，并在人工确认后发送通知。
+                {summary.title}。系统已获取天气并完成风险判断，文案可在确认前编辑。
               </p>
             </div>
           </div>
@@ -108,7 +108,7 @@ export function EmergencyWeatherPanel({
             <div className="rounded-panel border border-accent-100 bg-accent-50/70 p-5">
               <div className="mb-3 flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-accent-600" />
-                <h3 className="text-base font-semibold text-paper-900">AI 风险分析</h3>
+                <h3 className="text-base font-semibold text-paper-900">风险分析</h3>
               </div>
               <p className="text-sm leading-6 text-paper-700">{summary.aiRiskSummary}</p>
               <div className="mt-3 flex flex-wrap gap-2">

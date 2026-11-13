@@ -1,4 +1,4 @@
-import { type Trip, type TripSchedule } from '../../types/api'
+import { type ItineraryItem, type Trip, type TripSchedule } from '../../types/api'
 
 export interface TripDayPlan {
   id: string
@@ -140,7 +140,7 @@ export function removeDay(days: TripDayPlan[], dayId: string): TripDayPlan[] {
   return renumberDays(days.filter((day) => day.id !== dayId))
 }
 
-export function toTripItineraryPayload(days: TripDayPlan[]): Array<Record<string, string>> {
+export function toTripItineraryPayload(days: TripDayPlan[]): Array<ItineraryItem & Record<string, string>> {
   return renumberDays(days).map((day) => ({
     date: day.date,
     transport: day.transport,

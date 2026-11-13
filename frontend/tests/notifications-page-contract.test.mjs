@@ -19,14 +19,14 @@ assert.match(
 
 assert.match(
   notificationsSource,
-  /AI风险分析/,
-  'Notifications page must display an AI risk analysis section.',
+  /风险分析/,
+  'Notifications page must display a risk analysis section.',
 )
 
 assert.match(
   notificationsSource,
-  /AI生成通知文案/,
-  'Notifications page must display an AI-generated notification preview section.',
+  /通知文案/,
+  'Notifications page must display a notification preview section.',
 )
 
 assert.match(

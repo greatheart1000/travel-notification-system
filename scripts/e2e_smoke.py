@@ -21,6 +21,7 @@ from playwright.sync_api import Page, sync_playwright
 
 DEFAULT_PAGES = [
     ("/trips", "行程管理"),
+    ("/team", "团队执行"),
     ("/analytics", "数据分析"),
     ("/billing", "套餐与账单"),
     ("/preferences", "偏好设置"),

@@ -6,9 +6,10 @@ import type { Trip } from '../../types/api'
 
 interface Props {
   tripId: string
+  readOnly?: boolean
 }
 
-export function TripWecomConfig({ tripId }: Props) {
+export function TripWecomConfig({ tripId, readOnly = false }: Props) {
   const [trip, setTrip] = useState<Trip | null>(null)
   const [webhookUrl, setWebhookUrl] = useState('')
   const [loading, setLoading] = useState(true)
@@ -117,23 +118,28 @@ export function TripWecomConfig({ tripId }: Props) {
           value={webhookUrl}
           onChange={(e) => setWebhookUrl(e.target.value)}
           placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
-          className="w-full rounded-control border border-paper-300 px-3 py-2 font-mono text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100"
+          disabled={readOnly}
+          className="w-full rounded-control border border-paper-300 px-3 py-2 font-mono text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-paper-50 disabled:text-paper-600"
         />
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => void handleSaveWebhook()} loading={saving}>
-            <Save className="h-4 w-4" />
-            保存 webhook
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void handleTestWebhook()}
-            disabled={testing || !webhookUrl.trim()}
-            loading={testing}
-          >
-            <Send className="h-4 w-4" />
-            测试发送
-          </Button>
-        </div>
+        {readOnly ? (
+          <p className="text-xs text-paper-500">仅管理员可修改群配置</p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => void handleSaveWebhook()} loading={saving}>
+              <Save className="h-4 w-4" />
+              保存 webhook
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void handleTestWebhook()}
+              disabled={testing || !webhookUrl.trim()}
+              loading={testing}
+            >
+              <Send className="h-4 w-4" />
+              测试发送
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   )

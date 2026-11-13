@@ -104,12 +104,22 @@ class AuthService:
     def _seed_users(self) -> dict[str, dict[str, str]]:
         environment = app_environment()
         seeded: dict[str, dict[str, str]] = {}
-        if environment != "production" and self.seed_demo_users is not False:
+        demo_users_enabled = os.getenv("SEED_DEMO_USERS", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        if (
+            environment != "production"
+            and self.seed_demo_users is not False
+            and demo_users_enabled
+        ):
             default_password = os.getenv("TRAVEL_NOTIFICATION_DEFAULT_PASSWORD", "123456")
             seeded = {
                 "admin": {
                     "id": "user-001",
                     "username": "admin",
+                    "display_name": "陈静",
                     "email": "admin@travelhub.com",
                     "phone": "",
                     "role": "admin",
@@ -121,6 +131,7 @@ class AuthService:
                 "user": {
                     "id": "user-002",
                     "username": "user",
+                    "display_name": "李文",
                     "email": "user@travelhub.com",
                     "phone": "",
                     "role": "user",
@@ -132,6 +143,7 @@ class AuthService:
                 "partner": {
                     "id": "user-003",
                     "username": "partner",
+                    "display_name": "合作方",
                     "email": "partner@travelhub.com",
                     "phone": "",
                     "role": "user",
@@ -151,6 +163,7 @@ class AuthService:
                 "id": seeded.get(bootstrap_username, {}).get("id")
                 or f"user-{uuid4().hex[:12]}",
                 "username": bootstrap_username,
+                "display_name": os.getenv("BOOTSTRAP_ADMIN_NAME", "").strip(),
                 "email": os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip(),
                 "phone": os.getenv("BOOTSTRAP_ADMIN_PHONE", "").strip(),
                 "role": "admin",
@@ -173,6 +186,7 @@ class AuthService:
                 "id": seeded.get(operator_username, {}).get("id")
                 or f"user-{uuid4().hex[:12]}",
                 "username": operator_username,
+                "display_name": os.getenv("BOOTSTRAP_OPERATOR_NAME", "").strip(),
                 "email": os.getenv("BOOTSTRAP_OPERATOR_EMAIL", "").strip(),
                 "phone": "",
                 "role": "operator",
@@ -195,6 +209,7 @@ class AuthService:
             username=username,
             password=password,
             email=os.getenv("BOOTSTRAP_OPERATOR_EMAIL", "").strip(),
+            display_name=os.getenv("BOOTSTRAP_OPERATOR_NAME", "").strip(),
             role="operator",
         )
 
@@ -209,6 +224,7 @@ class AuthService:
             password=password,
             email=os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip(),
             phone=os.getenv("BOOTSTRAP_ADMIN_PHONE", "").strip(),
+            display_name=os.getenv("BOOTSTRAP_ADMIN_NAME", "").strip(),
             role="admin",
         )
 
@@ -304,6 +320,7 @@ class AuthService:
         password: str,
         email: str = "",
         phone: str = "",
+        display_name: str = "",
         role: str = "user",
     ) -> dict[str, str]:
         username = str(username or "").strip()
@@ -321,12 +338,13 @@ class AuthService:
             if self.find_by_phone(normalized) is not None:
                 raise AuthError("phone_taken", "该手机号已注册", 409)
             phone = normalized
-        if role not in {"admin", "user", "operator"}:
+        if role not in {"admin", "guide", "user", "operator"}:
             raise AuthError("invalid_role", "无效角色", 400)
 
         user = {
             "id": f"user-{uuid4().hex[:12]}",
             "username": username,
+            "display_name": str(display_name or "").strip(),
             "email": str(email or "").strip(),
             "phone": phone,
             "role": role,
@@ -372,6 +390,7 @@ class AuthService:
         *,
         email: str | None = None,
         phone: str | None = None,
+        display_name: str | None = None,
         role: str | None = None,
         status: str | None = None,
     ) -> dict[str, str] | None:
@@ -381,6 +400,8 @@ class AuthService:
         fields: dict[str, object] = {}
         if email is not None:
             fields["email"] = str(email).strip()
+        if display_name is not None:
+            fields["display_name"] = str(display_name).strip()
         if phone is not None:
             normalized = normalize_phone(phone) if phone else ""
             if normalized and normalized != str(user.get("phone") or ""):
@@ -389,7 +410,7 @@ class AuthService:
                     raise AuthError("phone_taken", "该手机号已注册", 409)
             fields["phone"] = normalized
         if role is not None:
-            if role not in {"admin", "user", "operator"}:
+            if role not in {"admin", "guide", "user", "operator"}:
                 raise AuthError("invalid_role", "无效角色", 400)
             fields["role"] = role
         if status is not None:
@@ -619,6 +640,7 @@ class AuthService:
         return {
             "id": str(user.get("id") or username),
             "username": user["username"],
+            "display_name": str(user.get("display_name") or ""),
             "email": str(user.get("email") or ""),
             "phone": str(user.get("phone") or ""),
             "role": str(user.get("role") or "user"),

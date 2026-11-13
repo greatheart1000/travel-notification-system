@@ -33,6 +33,12 @@ _ROLE_PERMISSIONS: dict[str, set[str]] = {
         "audit:read",
         "ops:read",
     },
+    "guide": {
+        "trip:read",
+        "notification:read",
+        "notification:write",
+        "template:read",
+    },
     "concierge": {
         "trip:read",
         "notification:read",
@@ -45,7 +51,7 @@ _ROLE_PERMISSIONS: dict[str, set[str]] = {
         "audit:read",
     },
     "sales": {"trip:read", "notification:read"},
-    "user": {"trip:read", "trip:write", "notification:read", "notification:write"},
+    "user": {"trip:read", "notification:read", "notification:write", "template:read"},
 }
 
 

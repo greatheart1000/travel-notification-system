@@ -12,7 +12,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 
-interface Props { tripId: string }
+interface Props { tripId: string; onOpenGroupConfig?: () => void }
 
 interface PlaybookStep {
   id: string; stage: string; time_node: string; core_work: string
@@ -47,12 +47,12 @@ const STEP_KEY_MAP: Record<string, string[]> = {
 
 const MESSAGE_STEPS = new Set(['pre_flight_notice', 'group_built', 'day1_guide_sent', 'farewell_sent', 'survey_sent', 'group_dismissed', 'resources_verified', 'insurance_verified', 'daily_reminder', 'scene_alert', 'issue_coordination', 'follow_up'])
 
-export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId }: Props) {
+export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId, onOpenGroupConfig }: Props) {
   const [playbook, setPlaybook] = useState<PlaybookStep[]>([])
   const [wfStatus, setWfStatus] = useState<Record<string, any>>({})
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
+  const [message, setMessage] = useState<{ text: string; ok: boolean; showWecomAction?: boolean } | null>(null)
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
 
   const fetchData = useCallback(async () => {
@@ -73,7 +73,12 @@ export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId }: Pro
   useEffect(() => { fetchData() }, [fetchData])
 
   const showMsg = useCallback((text: string, ok = true) => {
-    setMessage({ text, ok }); setTimeout(() => setMessage(null), 4000)
+    setMessage({
+      text,
+      ok,
+      showWecomAction: !ok && /企业微信|Webhook/i.test(text),
+    })
+    setTimeout(() => setMessage(null), 6000)
   }, [])
 
   const toggleExpand = useCallback((key: string) => {
@@ -162,7 +167,16 @@ export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId }: Pro
               : 'border-danger-200 bg-danger-50 text-danger-700'
           }`}
         >
-          {message.text}
+          <span>{message.text}</span>
+          {message.showWecomAction && onOpenGroupConfig ? (
+            <button
+              type="button"
+              onClick={onOpenGroupConfig}
+              className="mt-2 block font-medium text-danger-800 underline underline-offset-2 hover:text-danger-900"
+            >
+              去群配置填写企业微信 Webhook
+            </button>
+          ) : null}
         </div>
       )}
 

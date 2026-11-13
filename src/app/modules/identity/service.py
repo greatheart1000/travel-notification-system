@@ -31,7 +31,7 @@ class AccountService:
     billing_service: BillingService | None = None
 
     def ensure_bootstrap_tenants(self) -> None:
-        default_name = os.getenv("BOOTSTRAP_TENANT_NAME", "沙笛旅行").strip() or "沙笛旅行"
+        default_name = os.getenv("BOOTSTRAP_TENANT_NAME", "月亮旅行").strip() or "月亮旅行"
         bootstrap_tenant_id = os.getenv("BOOTSTRAP_TENANT_ID", "tenant-a").strip() or "tenant-a"
         if self.tenant_repository.get(bootstrap_tenant_id) is None:
             self.tenant_repository.create(

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
-import { BellRing, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
+import { BellRing, ChevronDown, ChevronRight, Info, Pencil, Plus, Trash2, Wand2 } from 'lucide-react'
 import { PageShell } from '../../components/PageShell'
 import { Button } from '../../components/Button'
 import { Badge } from '../../components/Badge'
 import { Modal } from '../../components/Modal'
-import { getErrorMessage, notificationsApi } from '../../services/api'
+import { getErrorMessage, notificationsApi, tripReminderApi } from '../../services/api'
+import type { NotificationTemplate } from '../../types/api'
 import { useSession } from '../../context/SessionContext'
 import {
   rulesApi,
@@ -34,7 +35,7 @@ const SCENE_OPTIONS = [
 ]
 
 const CHANNEL_OPTIONS = [
-  { value: 'sms', label: '短信' },
+  { value: 'sms', label: '短信（仅参团成功）' },
   { value: 'wechat_work_group', label: '企业微信' },
   { value: 'email', label: '邮件（暂未开放）', disabled: true },
 ]
@@ -112,13 +113,15 @@ export function Rules() {
   const { user } = useSession()
   const canWrite = user?.role === 'admin' || user?.role === 'operator'
   const [rules, setRules] = useState<NotificationRuleRaw[]>([])
-  const [templates, setTemplates] = useState<{ id: string; name: string }[]>([])
+  const [templates, setTemplates] = useState<NotificationTemplate[]>([])
   const [form, setForm] = useState<RuleForm>(EMPTY_FORM)
   const [isOpen, setIsOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [expandedRuleId, setExpandedRuleId] = useState<string | null>(null)
+  const [polishingRuleId, setPolishingRuleId] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -128,7 +131,7 @@ export function Rules() {
         notificationsApi.listTemplates().catch(() => []),
       ])
       setRules(ruleList)
-      setTemplates(templateList.map((item) => ({ id: item.id, name: item.name })))
+      setTemplates(templateList)
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -139,6 +142,33 @@ export function Rules() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const templateFor = (rule: NotificationRuleRaw) =>
+    templates.find((template) => template.id === rule.template_id)
+
+  const toggleExpanded = (ruleId: string) => {
+    setExpandedRuleId((current) => (current === ruleId ? null : ruleId))
+  }
+
+  const polishTemplate = async (rule: NotificationRuleRaw) => {
+    const template = templateFor(rule)
+    if (!template) return
+    setPolishingRuleId(rule.id)
+    setError(null)
+    try {
+      const result = await tripReminderApi.polish({
+        content: template.template,
+        scene: rule.name,
+      })
+      await notificationsApi.updateTemplate(template.id, { template: result.content })
+      setNotice(result.provider === 'glm' ? '已润色通知模板' : '已按本地规则润色')
+      await load()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setPolishingRuleId('')
+    }
+  }
 
   const openCreate = () => {
     setForm({ ...EMPTY_FORM })
@@ -248,7 +278,7 @@ export function Rules() {
   return (
     <PageShell
       title="通知规则"
-      description="规则按「阶段 + 时段 + 场景 + 条件」匹配；没有规则时沿用系统默认发送行为。"
+      description="规则决定谁在什么时间收到什么内容；服务通知默认发送到企业微信群。"
       actions={
         canWrite ? (
           <Button size="sm" onClick={openCreate}>
@@ -271,6 +301,13 @@ export function Rules() {
           {notice}
         </div>
       ) : null}
+
+      <div className="mb-4 flex items-start gap-2.5 rounded-card border border-accent-100 bg-accent-50/60 px-4 py-3 text-sm text-paper-700">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-accent-600" />
+        <p>
+          行程服务通知应全部发送到企业微信群；短信仅用于参团成功通知。未配置群的行程不会自动补发短信，会在「团队执行」页提示管理员处理。
+        </p>
+      </div>
 
       <div className="overflow-hidden rounded-card border border-paper-200 bg-white shadow-card">
         <table className="w-full text-left text-sm">
@@ -300,71 +337,143 @@ export function Rules() {
                 </td>
               </tr>
             ) : (
-              rules.map((rule) => (
-                <tr key={rule.id}>
-                  <td className="px-4 py-3 font-medium text-paper-900">{rule.name}</td>
-                  <td className="px-4 py-3">
-                    {canWrite ? (
-                      <button
-                        type="button"
-                        onClick={() => void toggle(rule)}
-                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                          rule.enabled ? 'bg-accent-600' : 'bg-paper-300'
-                        }`}
-                        aria-label={rule.enabled ? '停用规则' : '启用规则'}
-                      >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            rule.enabled ? 'translate-x-4' : 'translate-x-0.5'
-                          }`}
-                        />
-                      </button>
-                    ) : (
-                      <Badge variant={rule.enabled ? 'success' : 'default'}>
-                        {rule.enabled ? '已启用' : '已停用'}
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-paper-600">
-                    {labelOf(STAGE_OPTIONS, rule.stage)} / {labelOf(TIME_SLOT_OPTIONS, rule.time_slot)}
-                  </td>
-                  <td className="px-4 py-3 text-paper-600">{labelOf(SCENE_OPTIONS, rule.scene)}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {(rule.channels ?? []).map((channel) => (
-                        <Badge key={channel} variant="default">
-                          {labelOf(CHANNEL_OPTIONS, channel)}
-                        </Badge>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-paper-600">{rule.priority ?? 100}</td>
-                  <td className="px-4 py-3">
-                    {canWrite ? (
-                      <div className="flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openEdit(rule)}
-                          className="rounded-control p-1.5 text-paper-500 hover:bg-paper-100 hover:text-paper-900"
-                          aria-label="编辑规则"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void remove(rule)}
-                          className="rounded-control p-1.5 text-paper-500 hover:bg-danger-50 hover:text-danger-600"
-                          aria-label="删除规则"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-paper-400">-</span>
-                    )}
-                  </td>
-                </tr>
-              ))
+              rules.map((rule) => {
+                const template = templateFor(rule)
+                const expanded = expandedRuleId === rule.id
+                const conditionText = rule.conditions && Object.keys(rule.conditions).length
+                  ? JSON.stringify(rule.conditions, null, 2)
+                  : '无附加条件'
+                return (
+                  <Fragment key={rule.id}>
+                    <tr className="align-top">
+                      <td className="px-4 py-3">
+                        <div className="flex items-start gap-2">
+                          <button
+                            type="button"
+                            onClick={() => toggleExpanded(rule.id)}
+                            className="mt-0.5 rounded-control p-0.5 text-paper-400 hover:bg-paper-100 hover:text-paper-700"
+                            aria-label={expanded ? '收起通知内容' : '展开通知内容'}
+                          >
+                            {expanded ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" />
+                            )}
+                          </button>
+                          <div className="min-w-0">
+                            <div className="font-medium text-paper-900">{rule.name}</div>
+                            <p className="mt-1 line-clamp-2 max-w-md text-xs leading-5 text-paper-500">
+                              {template?.template || '未绑定通知模板，发送时使用系统默认内容'}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {canWrite ? (
+                          <button
+                            type="button"
+                            onClick={() => void toggle(rule)}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                              rule.enabled ? 'bg-accent-600' : 'bg-paper-300'
+                            }`}
+                            aria-label={rule.enabled ? '停用规则' : '启用规则'}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                rule.enabled ? 'translate-x-4' : 'translate-x-0.5'
+                              }`}
+                            />
+                          </button>
+                        ) : (
+                          <Badge variant={rule.enabled ? 'success' : 'default'}>
+                            {rule.enabled ? '已启用' : '已停用'}
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-paper-600">
+                        {labelOf(STAGE_OPTIONS, rule.stage)} / {labelOf(TIME_SLOT_OPTIONS, rule.time_slot)}
+                      </td>
+                      <td className="px-4 py-3 text-paper-600">{labelOf(SCENE_OPTIONS, rule.scene)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {(rule.channels ?? []).map((channel) => (
+                            <Badge key={channel} variant="default">
+                              {labelOf(CHANNEL_OPTIONS, channel)}
+                            </Badge>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-paper-600">{rule.priority ?? 100}</td>
+                      <td className="px-4 py-3">
+                        {canWrite ? (
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openEdit(rule)}
+                              className="rounded-control p-1.5 text-paper-500 hover:bg-paper-100 hover:text-paper-900"
+                              aria-label="编辑规则"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void remove(rule)}
+                              className="rounded-control p-1.5 text-paper-500 hover:bg-danger-50 hover:text-danger-600"
+                              aria-label="删除规则"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-paper-400">-</span>
+                        )}
+                      </td>
+                    </tr>
+                    {expanded ? (
+                      <tr>
+                        <td colSpan={7} className="bg-paper-50 px-4 py-4">
+                          <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                            <div>
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-xs font-medium text-paper-500">发送到群里的具体内容</p>
+                                {canWrite && template ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void polishTemplate(rule)}
+                                    disabled={polishingRuleId === rule.id}
+                                    className="inline-flex items-center gap-1.5 rounded-control border border-pink-200 bg-pink-50 px-2.5 py-1.5 text-xs font-medium text-pink-700 transition-colors hover:bg-pink-100 disabled:opacity-50"
+                                  >
+                                    <Wand2 className="h-3.5 w-3.5" />
+                                    {polishingRuleId === rule.id ? '润色中…' : '润色模板'}
+                                  </button>
+                                ) : null}
+                              </div>
+                              <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-card border border-paper-200 bg-white p-4 font-sans text-sm leading-6 text-paper-800">
+                                {template?.template || '未绑定通知模板，发送时使用系统默认内容。'}
+                              </pre>
+                              <p className="mt-2 text-xs text-paper-400">
+                                模板为当前企业共用；修改后，所有引用该模板的规则都会同步更新。{"{{变量}}"} 会在发送时自动替换为游客与行程数据。
+                              </p>
+                            </div>
+                            <div className="space-y-3 text-sm">
+                              <div>
+                                <p className="text-xs font-medium text-paper-500">绑定模板</p>
+                                <p className="mt-1 text-paper-800">{template?.name || '未绑定'}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs font-medium text-paper-500">规则条件</p>
+                                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-control bg-white p-3 font-mono text-xs leading-5 text-paper-600">
+                                  {conditionText}
+                                </pre>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                )
+              })
             )}
           </tbody>
         </table>

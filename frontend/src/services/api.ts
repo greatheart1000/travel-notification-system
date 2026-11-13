@@ -50,6 +50,7 @@ import {
   type RawEmergencyWeatherSummary,
   type RawNotificationRule,
   type RawNotificationTemplate,
+  type RawExecutionTask,
   type RawTripExecutionDetail,
   type RawTripExecutionRow,
   type RawWorkbenchOverview,
@@ -318,7 +319,7 @@ function mapRawTripExecutionDetail(raw: RawTripExecutionDetail): TripExecutionDe
     todayDone: toNumber(raw?.today_done),
     riskLevel: (raw?.risk_level || 'unknown') as TripExecutionDetail['riskLevel'],
     nextDispatchAt: String(raw?.next_dispatch_at || ''),
-    tasks: asArray(raw?.tasks).map((task) => ({
+    tasks: asArray<RawExecutionTask>(raw?.tasks).map((task) => ({
       taskId: String(task?.task_id || ''),
       title: String(task?.title || '未命名任务'),
       stage: String(task?.stage || 'unknown'),
@@ -690,6 +691,268 @@ export const tripsApi = {
       client.put(`/trips/${id}/import-validation`, { fields }),
     )
     return mapRawTripImportSnapshot(raw.snapshot || {})
+  },
+}
+
+export interface AIPolishInput {
+  content: string
+  destination?: string
+  scene?: string
+}
+
+export interface AIPolishResult {
+  content: string
+  provider: 'glm' | 'local' | string
+}
+
+export interface GroupReminderInput {
+  message?: string
+  useAi?: boolean
+  scene?: string
+  dryRun?: boolean
+  scheduleKey?: string
+}
+
+export interface GuideNotificationPreview {
+  content: string
+  status: string
+  channel: string
+  created_at: string
+}
+
+export interface GuideTripCard {
+  id: string
+  destination: string
+  team_id: string
+  start_date: string
+  end_date: string
+  participants: number
+  status: string
+  stage: string
+  stage_label: string
+  action_label: string
+  group_configured: boolean
+  send_mode: TripSendMode
+  weather_warning: string
+  latest_notification: GuideNotificationPreview | null
+}
+
+export interface GuideRecentNotification {
+  id: string
+  trip_id: string
+  trip_label: string
+  channel: string
+  status: string
+  content: string
+  created_at: string
+}
+
+export interface GuideWorkspaceData {
+  today: string
+  stats: {
+    assigned_trips: number
+    due_today: number
+    group_missing: number
+    failed_7d: number
+    weather_alerts: number
+  }
+  trips: GuideTripCard[]
+  recent_notifications: GuideRecentNotification[]
+}
+
+export const guideWorkspaceApi = {
+  async get(): Promise<GuideWorkspaceData> {
+    return unwrapData<GuideWorkspaceData>(client.get('/guide/workspace'))
+  },
+}
+
+export interface GroupReminderResult {
+  trip_id: string
+  message: string
+  provider: string
+  sent_at: string | null
+  dry_run?: boolean
+}
+
+export interface BookingConfirmationResult {
+  trip_id: string
+  sent: number
+  failed: number
+  skipped: number
+  message: string
+}
+
+export type TripMessagePlanStatus = 'sent' | 'failed' | 'pending' | 'missed'
+
+export interface TripMessagePlanItem {
+  id: string
+  date: string
+  time: string
+  slot: 'morning' | 'afternoon' | 'evening' | string
+  slot_label: string
+  stage: string
+  stage_label: string
+  title: string
+  content: string
+  template_id: string
+  rule_id: string
+  status: TripMessagePlanStatus
+  can_send: boolean
+}
+
+export interface TripMessagePlan {
+  trip_id: string
+  group_configured: boolean
+  items: TripMessagePlanItem[]
+}
+
+export type TripSendMode = 'auto' | 'approval'
+
+export interface TripSendModeResult {
+  trip_id: string
+  send_mode: TripSendMode
+  message: string
+}
+
+export interface StaffMessageItem {
+  id: string
+  role: 'manager' | 'concierge' | 'driver' | string
+  role_label: string
+  name: string
+  phone: string
+  slot: 'morning' | 'afternoon' | string
+  time: string
+  slot_label: string
+  title: string
+  content: string
+  channel: 'wechat_work_group' | 'sms' | string
+  channel_label: string
+  recipient_label: string
+  status: 'sent' | 'failed' | 'pending'
+}
+
+export interface StaffMessagesResult {
+  trip_id: string
+  today: string
+  group_configured: boolean
+  items: StaffMessageItem[]
+}
+
+export interface StaffMessageSendResult {
+  trip_id: string
+  role: string
+  role_label: string
+  slot: string
+  content: string
+  channel: string
+  message: string
+}
+
+export interface ReminderSuggestionVariant {
+  key: string
+  title: string
+  audience: string
+  content: string
+}
+
+export interface ReminderSuggestion {
+  situation: string
+  title: string
+  reason: string
+  content: string
+  region_tip: string
+  provider: 'glm' | 'local' | string
+  generated_at: string
+  variants?: ReminderSuggestionVariant[]
+  suggested_actions?: string[]
+}
+
+export interface ReminderSuggestionResult {
+  trip_id: string
+  suggestion: ReminderSuggestion | null
+}
+
+export const tripReminderApi = {
+  async polish(input: AIPolishInput): Promise<AIPolishResult> {
+    return unwrapData<AIPolishResult>(
+      client.post('/notifications/ai-polish', {
+        content: input.content,
+        destination: input.destination ?? '',
+        scene: input.scene ?? '行程提醒',
+      }),
+    )
+  },
+
+  async sendGroupReminder(
+    tripId: string,
+    input: GroupReminderInput,
+  ): Promise<GroupReminderResult> {
+    return unwrapData<GroupReminderResult>(
+      client.post(`/trips/${encodeURIComponent(tripId)}/group-reminder`, {
+        message: input.message,
+        use_ai: input.useAi ?? true,
+        scene: input.scene ?? '每日行程提醒',
+        dry_run: input.dryRun ?? false,
+        schedule_key: input.scheduleKey ?? '',
+      }),
+    )
+  },
+
+  async previewGroupReminder(
+    tripId: string,
+    input: GroupReminderInput,
+  ): Promise<GroupReminderResult> {
+    return unwrapData<GroupReminderResult>(
+      client.post(`/trips/${encodeURIComponent(tripId)}/group-reminder`, {
+        message: input.message,
+        use_ai: true,
+        scene: input.scene ?? '每日行程提醒',
+        dry_run: true,
+      }),
+    )
+  },
+
+  async sendBookingConfirmation(tripId: string): Promise<BookingConfirmationResult> {
+    return unwrapData<BookingConfirmationResult>(
+      client.post(`/trips/${encodeURIComponent(tripId)}/booking-confirmation`),
+    )
+  },
+
+  async updateSendMode(tripId: string, mode: TripSendMode): Promise<TripSendModeResult> {
+    return unwrapData<TripSendModeResult>(
+      client.put(`/trips/${encodeURIComponent(tripId)}/send-mode`, { mode }),
+    )
+  },
+
+  async getStaffMessages(tripId: string): Promise<StaffMessagesResult> {
+    return unwrapData<StaffMessagesResult>(
+      client.get(`/trips/${encodeURIComponent(tripId)}/staff-messages`),
+    )
+  },
+
+  async sendStaffMessage(
+    tripId: string,
+    role: string,
+    input: { slot: string; content?: string },
+  ): Promise<StaffMessageSendResult> {
+    return unwrapData<StaffMessageSendResult>(
+      client.post(
+        `/trips/${encodeURIComponent(tripId)}/staff-messages/${encodeURIComponent(role)}/send`,
+        { slot: input.slot, content: input.content ?? '' },
+      ),
+    )
+  },
+
+  async getReminderSuggestion(tripId: string): Promise<ReminderSuggestionResult> {
+    return unwrapData<ReminderSuggestionResult>(
+      client.get(`/trips/${encodeURIComponent(tripId)}/reminder-suggestion`),
+    )
+  },
+
+  async getTripMessagePlan(tripId: string): Promise<TripMessagePlan> {
+    return unwrapData<TripMessagePlan>(
+      client.get(`/trips/${encodeURIComponent(tripId)}/message-plan`),
+    )
   },
 }
 
@@ -1130,16 +1393,67 @@ export interface StaffMember {
   role: string
   name: string
   phone: string
+  recipientChannel?: '' | 'wechat_work_group' | 'sms'
+  recipientAddress?: string
+}
+
+function mapStaffMember(raw: any): StaffMember {
+  return {
+    role: String(raw.role ?? ''),
+    name: String(raw.name ?? ''),
+    phone: String(raw.phone ?? ''),
+    recipientChannel:
+      raw.recipient_channel === 'sms' || raw.recipient_channel === 'wechat_work_group'
+        ? raw.recipient_channel
+        : '',
+    recipientAddress: String(raw.recipient_address ?? ''),
+  }
+}
+
+export interface TripAssignee {
+  id: string
+  username: string
+  display_name?: string
+  role: string
+}
+
+export interface TripAssignments {
+  trip_id: string
+  assigned_user_ids: string[]
+  users: TripAssignee[]
+}
+
+export const tripAssignmentsApi = {
+  async get(tripId: string): Promise<TripAssignments> {
+    return unwrapData<TripAssignments>(
+      client.get(`/trips/${encodeURIComponent(tripId)}/assignments`),
+    )
+  },
+
+  async update(tripId: string, userIds: string[]): Promise<TripAssignments> {
+    return unwrapData<TripAssignments>(
+      client.put(`/trips/${encodeURIComponent(tripId)}/assignments`, { user_ids: userIds }),
+    )
+  },
 }
 
 export const staffApi = {
   async getByTrip(tripId: string): Promise<StaffMember[]> {
-    const raw = await unwrapData<{ staff: StaffMember[] }>(client.get(`/trips/${tripId}/staff`))
-    return raw.staff || []
+    const raw = await unwrapData<{ staff: any[] }>(client.get(`/trips/${tripId}/staff`))
+    return (raw.staff || []).map(mapStaffMember)
   },
 
   async updateTripStaff(tripId: string, staff: StaffMember[]): Promise<{ staff: StaffMember[] }> {
-    return unwrapData<{ staff: StaffMember[] }>(client.put(`/trips/${tripId}/staff`, { staff }))
+    const payload = staff.map((member) => ({
+      role: member.role,
+      name: member.name,
+      phone: member.phone,
+      recipient_channel: member.recipientChannel ?? '',
+      recipient_address: member.recipientAddress ?? '',
+    }))
+    return unwrapData<{ staff: StaffMember[] }>(
+      client.put(`/trips/${tripId}/staff`, { staff: payload }),
+    )
   },
 
   async deleteStaffRole(tripId: string, role: string): Promise<{ message: string }> {

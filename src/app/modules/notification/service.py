@@ -90,6 +90,10 @@ class NotificationAttemptRepository:
             "team_id": task.team_id,
             "customer_id": task.customer_id,
             "customer_name": task.provider_context.get("customer_name", task.customer_id),
+            "operator_id": str(task.provider_context.get("operator_id") or ""),
+            "operator_name": str(task.provider_context.get("operator_name") or "系统自动"),
+            "content": str(task.rendered_content or ""),
+            "schedule_key": str(task.provider_context.get("schedule_key") or ""),
             "attempt_no": persisted_attempt_no,
             "channel": attempt.channel.value,
             "ok": attempt.ok,
@@ -104,6 +108,16 @@ class NotificationAttemptRepository:
         if self.store is not None:
             self.store.write_collection(self.collection, self._records)
         return payload
+
+    def has_sent_schedule(self, schedule_key: str, *, tenant_id: str = "") -> bool:
+        if not schedule_key:
+            return False
+        return any(
+            str(item.get("schedule_key") or "") == schedule_key
+            and bool(item.get("ok"))
+            and (not tenant_id or str(item.get("tenant_id") or "") == tenant_id)
+            for item in self._records
+        )
 
     def list_history(
         self,

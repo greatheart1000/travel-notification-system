@@ -97,7 +97,14 @@ class AsyncDispatchService:
             self.collection, [job.to_payload() for job in self._jobs]
         )
 
-    def enqueue(self, task: NotificationTask, *, channel: str) -> NotificationJob:
+    def enqueue(
+        self,
+        task: NotificationTask,
+        *,
+        channel: str,
+        status: str = "pending",
+        last_error: str = "",
+    ) -> NotificationJob:
         now = datetime.now(tz=UTC)
         job = NotificationJob(
             job_id=f"job-{uuid4().hex[:10]}",
@@ -106,11 +113,12 @@ class AsyncDispatchService:
             team_id=task.team_id,
             trip_id=task.trip_id,
             channel=channel,
-            status="pending",
+            status=status,
             attempt=0,
             next_run_at=now,
             created_at=now,
             updated_at=now,
+            last_error=last_error,
         )
         with self._lock:
             self._jobs.insert(0, job)

@@ -27,6 +27,8 @@ def test_trigger_engine_supports_comparison_and_membership_operators() -> None:
     assert engine.evaluate(_rule({"temperature": {"op": "<=", "value": -15}}), context, now=now)
     assert engine.evaluate(_rule({"weather": {"op": "in", "value": ["snow", "rain"]}}), context, now=now)
     assert engine.evaluate(_rule({"tags": {"op": "contains", "value": "骑马"}}), context, now=now)
+    assert engine.evaluate(_rule({"tags": ["极寒", "骑马"]}), context, now=now)
+    assert not engine.evaluate(_rule({"tags": ["滑雪"]}), context, now=now)
     assert not engine.evaluate(_rule({"wind": {"op": ">", "value": 8}}), context, now=now)
     assert not engine.evaluate(_rule({"missing": "x"}), context, now=now)
 

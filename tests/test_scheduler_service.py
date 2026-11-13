@@ -173,6 +173,57 @@ def test_in_trip_role_messages_are_sent_through_dispatcher_and_idempotent() -> N
     assert len(ctx.notification_tasks) >= 3
 
 
+def test_send_mode_approval_holds_automatic_messages() -> None:
+    trip = _trip(start_offset_days=0, status="in_progress")
+    trip["send_mode"] = "approval"
+    scheduler, sms, wechat, ctx = _build_scheduler([trip])
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert sms.call_count == 0
+    assert wechat.call_count == 0
+    assert any(
+        item["action"] == "auto_notification_held_for_approval"
+        for item in ctx.audit_service.logs
+    )
+
+
+class _ManualSentRepo:
+    def __init__(self, keys: set[str]) -> None:
+        self.keys = keys
+
+    def has_sent_schedule(self, schedule_key: str, *, tenant_id: str = "") -> bool:
+        return schedule_key in self.keys
+
+
+def test_staff_dispatch_skips_slot_sent_manually() -> None:
+    scheduler, _, wechat, ctx = _build_scheduler(
+        [_trip(start_offset_days=0, status="in_progress")]
+    )
+    ctx.notification_attempt_repository = _ManualSentRepo(
+        {"trip-1:2026-05-10:staff:driver:morning"}
+    )
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    roles = {call["provider_context"].get("role") for call in wechat.calls}
+    assert roles == {"manager", "concierge"}
+    assert all(
+        call["provider_context"].get("schedule_key", "").startswith(
+            "trip-1:2026-05-10:staff:"
+        )
+        for call in wechat.calls
+    )
+
+
 def test_pre_trip_does_not_send_role_messages() -> None:
     scheduler, _, wechat, _ = _build_scheduler([_trip(start_offset_days=3)])
 
@@ -274,7 +325,7 @@ def test_role_recipients_route_each_role_to_its_configured_channel() -> None:
     assert wechat.calls[0]["provider_context"]["role"] == "driver"
 
 
-def test_configured_role_recipients_do_not_fall_back_to_the_group() -> None:
+def test_configured_role_recipients_do_not_use_group_for_staff_messages() -> None:
     trip = _trip(start_offset_days=0, status="in_progress")
     trip["guests"] = []
     trip["webhook_url"] = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=trip"
@@ -291,7 +342,10 @@ def test_configured_role_recipients_do_not_fall_back_to_the_group() -> None:
 
     assert sms.call_count == 1
     assert sms.calls[0]["customer_id"] == "13800000001"
-    assert wechat.call_count == 0
+    assert all(
+        not str(call["customer_id"]).startswith("staff:") for call in wechat.calls
+    )
+    assert [call["customer_id"] for call in wechat.calls] == ["group:trip-1"]
 
 
 def test_role_recipients_support_chinese_role_aliases() -> None:
@@ -487,3 +541,103 @@ def test_notification_rule_channel_selects_wechat(json_store) -> None:
 
     assert sms.call_count == 0
     assert wechat.call_count == 1
+
+
+def test_group_channel_sends_one_message_for_all_guests() -> None:
+    trip = _trip(start_offset_days=3)
+    trip["webhook_url"] = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=trip"
+    trip["guests"] = [
+        {"name": "张三", "phone": "13800138001"},
+        {"name": "李四", "phone": "13800138002"},
+        {"name": "王五", "phone": "13800138003"},
+    ]
+    scheduler, sms, wechat, _ = _build_scheduler([trip])
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert sms.call_count == 0
+    assert wechat.call_count == 1
+    assert wechat.calls[0]["customer_id"] == "group:trip-1"
+    assert "各位团友" in wechat.calls[0]["content"]
+    assert all(name not in wechat.calls[0]["content"] for name in ("张三", "李四", "王五"))
+
+
+def test_group_message_is_sent_even_when_guests_have_no_phone() -> None:
+    trip = _trip(start_offset_days=3)
+    trip["webhook_url"] = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=trip"
+    trip["guests"] = [{"name": "无手机号"}]
+    scheduler, sms, wechat, _ = _build_scheduler([trip])
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert sms.call_count == 0
+    assert wechat.call_count == 1
+    assert wechat.calls[0]["customer_id"] == "group:trip-1"
+
+
+def test_matching_rule_bound_template_is_used(json_store) -> None:
+    repo = NotificationRuleRepository(store=json_store)
+    scheduler, sms, _, _ = _build_scheduler(
+        [_trip(start_offset_days=3)], rule_repository=repo
+    )
+    template = scheduler.ctx.template_service.create_notification_template(
+        tenant_id="tenant-a",
+        project_id="proj-1",
+        name="规则绑定模板",
+        content="BOUND {{customer_name}} {{destination}}",
+        channel="sms",
+        notification_type="pre_trip_reminder",
+        is_active=True,
+        stage="pre_trip",
+        time_slot="morning",
+        scene="normal",
+    )
+    repo.create_rule(
+        {
+            "tenant_id": "tenant-a",
+            "name": "绑定指定模板",
+            "stage": "pre_trip",
+            "time_slot": "morning",
+            "scene": "normal",
+            "channels": ["sms"],
+            "template_id": template.id,
+            "conditions": {"destination": "阿勒泰"},
+            "enabled": True,
+        }
+    )
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert sms.call_count == 1
+    assert sms.calls[0]["content"].startswith("BOUND")
+
+
+def test_scheduler_skips_group_message_already_sent_manually() -> None:
+    trip = _trip(start_offset_days=3)
+    trip["webhook_url"] = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=trip"
+    scheduler, _, wechat, ctx = _build_scheduler([trip])
+    ctx.notification_attempt_repository = SimpleNamespace(
+        has_sent_schedule=lambda schedule_key, tenant_id="": schedule_key.endswith(
+            ":pre_trip:morning"
+        )
+    )
+
+    asyncio.run(
+        scheduler.check_and_send_notifications_for_slot(
+            "morning", now=datetime(2026, 5, 10, 7, 30, tzinfo=UTC)
+        )
+    )
+
+    assert wechat.call_count == 0

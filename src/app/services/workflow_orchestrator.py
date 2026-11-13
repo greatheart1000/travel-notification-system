@@ -97,7 +97,7 @@ class WorkflowOrchestrator:
                 logger.warning(f"Template {template_code} not found, skipping {scene_label}")
                 return
 
-            # 2. 准备变量 (对接沙笛业务字段)
+            # 2. 准备变量 (对接旅行业务字段)
             # 获取真实的游客信息，如果没有则降级为"贵宾"
             guests = trip.get("guests", [])
             customer_name = guests[0].get("name", "贵宾") if guests else "贵宾"

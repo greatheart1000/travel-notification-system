@@ -198,3 +198,28 @@ def test_legacy_template_helpers_still_work() -> None:
 
     assert picked.template_id == "legacy-1"
     assert rendered == "你好 张三"
+
+
+def test_resolve_seasonal_template_switches_by_month() -> None:
+    service = _service()
+    spring = service.create_notification_template(
+        tenant_id="tenant-a",
+        name="晨间提示-春季",
+        content="spring",
+        channel="wechat_work_group",
+        notification_type="daily_reminder",
+        is_active=True,
+    )
+    autumn = service.create_notification_template(
+        tenant_id="tenant-a",
+        name="晨间提示-秋季",
+        content="autumn",
+        channel="wechat_work_group",
+        notification_type="daily_reminder",
+        is_active=True,
+    )
+
+    resolved = service.resolve_seasonal_template(spring, tenant_id="tenant-a", month=10)
+
+    assert resolved is not None
+    assert resolved.id == autumn.id

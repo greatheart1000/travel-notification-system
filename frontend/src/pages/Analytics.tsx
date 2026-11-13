@@ -5,14 +5,22 @@ import { PageState } from '../components/PageState'
 import { analyticsApi } from '../services/api'
 import type { AnalyticsData, AnalyticsChannelPerformance, AnalyticsTopTrip } from '../types/api'
 
-function MetricCard({ label, value, primary = false }: { label: string; value: string; primary?: boolean }) {
+function MetricCard({
+  label,
+  value,
+  primary = false,
+}: {
+  label: string
+  value: string
+  primary?: boolean
+}) {
   return (
     <div
-      className={`rounded-card border border-paper-200 bg-white p-5 shadow-card ${
-        primary ? 'md:col-span-12 lg:col-span-6' : 'md:col-span-4 lg:col-span-2'
+      className={`rounded-card border p-5 ${
+        primary ? 'border-accent-200 bg-accent-50/45 md:col-span-12 lg:col-span-6' : 'border-paper-200 bg-white md:col-span-4 lg:col-span-2'
       }`}
     >
-      <p className="text-sm text-paper-500">{label}</p>
+      <p className="text-sm font-medium text-paper-600">{label}</p>
       <p
         className={`mt-2 font-semibold tabular-nums text-paper-900 ${
           primary ? 'text-3xl' : 'text-2xl'

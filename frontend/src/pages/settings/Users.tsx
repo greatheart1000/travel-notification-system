@@ -7,7 +7,7 @@ import { Modal } from '../../components/Modal'
 import { getErrorMessage } from '../../services/api'
 import { tenantUsersApi, type TenantUser } from '../../services/commercialApi'
 
-const ROLE_LABELS: Record<string, string> = { admin: '管理员', user: '普通成员', operator: '平台运营' }
+const ROLE_LABELS: Record<string, string> = { admin: '管理员', guide: '导游', user: '普通成员', operator: '平台运营' }
 const STATUS_LABELS: Record<string, string> = { active: '启用', disabled: '停用' }
 
 const inputClass =
@@ -16,7 +16,7 @@ const inputClass =
 export function Users() {
   const [users, setUsers] = useState<TenantUser[]>([])
   const [isOpen, setIsOpen] = useState(false)
-  const [form, setForm] = useState({ username: '', password: '', email: '', phone: '', role: 'user' })
+  const [form, setForm] = useState({ username: '', display_name: '', password: '', email: '', phone: '', role: 'user' })
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -56,13 +56,14 @@ export function Users() {
     try {
       await tenantUsersApi.create({
         username: form.username.trim(),
+        display_name: form.display_name.trim(),
         password: form.password,
         email: form.email.trim(),
         phone: form.phone.trim(),
         role: form.role,
       })
       setIsOpen(false)
-      setForm({ username: '', password: '', email: '', phone: '', role: 'user' })
+      setForm({ username: '', display_name: '', password: '', email: '', phone: '', role: 'user' })
       setNotice('成员已创建')
       await load()
     } catch (err) {
@@ -106,7 +107,7 @@ export function Users() {
         <table className="w-full text-left text-sm">
           <thead>
             <tr className="border-b border-paper-200 text-xs font-medium text-paper-500">
-              <th className="px-5 py-3">用户名</th>
+              <th className="px-5 py-3">成员</th>
               <th className="px-5 py-3">邮箱 / 手机</th>
               <th className="px-5 py-3">角色</th>
               <th className="px-5 py-3">状态</th>
@@ -129,7 +130,10 @@ export function Users() {
             ) : (
               users.map((user) => (
                 <tr key={user.id || user.username} className="transition-colors hover:bg-paper-50">
-                  <td className="px-5 py-3 font-medium text-paper-900">{user.username}</td>
+                  <td className="px-5 py-3">
+                    <span className="block font-medium text-paper-900">{user.display_name || user.username}</span>
+                    <span className="block text-xs text-paper-400">@{user.username}</span>
+                  </td>
                   <td className="px-5 py-3 text-paper-600">
                     <span className="block">{user.email || '-'}</span>
                     <span className="block text-xs text-paper-400">{user.phone || ''}</span>
@@ -143,6 +147,7 @@ export function Users() {
                       className="rounded-control border border-paper-300 px-2 py-1 text-sm disabled:opacity-60"
                     >
                       <option value="admin">管理员</option>
+                      <option value="guide">导游</option>
                       <option value="user">普通成员</option>
                     </select>
                   </td>
@@ -235,6 +240,7 @@ export function Users() {
               onChange={(event) => setForm((prev) => ({ ...prev, role: event.target.value }))}
               className={inputClass}
             >
+              <option value="guide">导游</option>
               <option value="user">普通成员</option>
               <option value="admin">管理员</option>
             </select>

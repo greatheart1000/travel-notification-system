@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import hmac
 import io
@@ -43,7 +44,8 @@ from app.modules.integration.persistence import (
     WorkflowExecutionRepository,
 )
 from app.modules.integration.rbac import PermissionDenied, assert_tenant_scope, require_permission
-from app.modules.integration.weather_provider import WeatherProvider
+from app.modules.integration.trip_assignment import TripAssignmentRepository
+from app.modules.integration.weather_provider import WeatherInfo, WeatherProvider
 from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
@@ -58,11 +60,20 @@ from app.services.analytics_view_service import AnalyticsViewService
 from app.services.billing_dunning_service import BillingDunningService
 from app.services.async_dispatch import AsyncDispatchService
 from app.services.emergency_weather_service import EmergencyWeatherService
+from app.services.llm_service import polish_travel_message
 from app.services.notification_agent_service import NotificationAgentService
 from app.services.preference_service import UserPreferenceService
+from app.services.reminder_suggestion_service import generate_reminder_suggestion
+from app.services.staff_message_service import (
+    ROLE_LABELS as STAFF_ROLE_LABELS,
+    build_staff_messages,
+    render_role_content,
+    resolve_recipient,
+)
 from app.services.risk_notification_service import RiskEvidenceRepository, RiskNotificationWorkflow
 from app.services.scheduler_service import init_scheduler
 from app.services.template_service import TemplateService
+from app.services.trip_message_plan_service import build_trip_message_plan
 from app.services.weather_query_service import UnknownWeatherRegion, WeatherQueryService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
@@ -118,6 +129,7 @@ class AppContext:
     billing_service: BillingService
     tenant_repository: TenantRepository
     trip_repository: TripRepository
+    trip_assignment_repository: TripAssignmentRepository
     project_notification_config_repository: ProjectNotificationConfigRepository
     template_service: TemplateService
     preference_service: UserPreferenceService
@@ -189,12 +201,14 @@ class TenantProfileUpdateRequest(BaseModel):
 class TenantUserCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=6, max_length=128)
+    display_name: str = Field(default="", max_length=32)
     email: str = Field(default="", max_length=128)
     phone: str = Field(default="", max_length=32)
     role: str = Field(default="user", max_length=16)
 
 
 class TenantUserUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=32)
     email: str | None = Field(default=None, max_length=128)
     phone: str | None = Field(default=None, max_length=32)
     role: str | None = Field(default=None, max_length=16)
@@ -337,6 +351,33 @@ class TripCreateRequest(BaseModel):
         if start and v and v < start:
             raise ValueError("结束日期不能早于开始日期")
         return v
+
+
+class TripAssignmentRequest(BaseModel):
+    user_ids: list[str] = Field(default_factory=list)
+
+
+class TripSendModeRequest(BaseModel):
+    mode: str = Field(min_length=3, max_length=16)
+
+
+class StaffMessageSendRequest(BaseModel):
+    slot: str = Field(default="morning", max_length=16)
+    content: str | None = Field(default=None, max_length=4000)
+
+
+class AIPolishRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+    destination: str = Field(default="", max_length=64)
+    scene: str = Field(default="行程提醒", max_length=64)
+
+
+class GroupReminderRequest(BaseModel):
+    message: str | None = Field(default=None, max_length=2000)
+    use_ai: bool = True
+    scene: str = Field(default="每日行程提醒", max_length=64)
+    dry_run: bool = False
+    schedule_key: str = Field(default="", max_length=200)
 
 
 class TripUpdateRequest(BaseModel):
@@ -1133,6 +1174,9 @@ def _serialize_trip(trip: dict[str, Any]) -> dict[str, Any]:
         "erp_report_warnings": trip.get("erp_report_warnings", []),
         "user_id": trip.get("user_id", ""),
         "tenant_id": trip.get("tenant_id", ""),
+        "assigned_user_ids": list(trip.get("assigned_user_ids") or []),
+        "assigned_users": list(trip.get("assigned_users") or []),
+        "send_mode": str(trip.get("send_mode") or "auto"),
         "created_at": trip.get("created_at"),
         "updated_at": trip.get("updated_at"),
     }
@@ -1269,6 +1313,11 @@ def _normalize_history_item(item: dict[str, Any]) -> dict[str, Any]:
         "team_id": item.get("team_id", ""),
         "team": item.get("team_id", ""),
         "customer_id": item.get("customer_id", ""),
+        "customer_name": item.get("customer_name", ""),
+        "operator_id": str(item.get("operator_id") or ""),
+        "operator_name": str(item.get("operator_name") or "系统自动"),
+        "content": str(item.get("content") or ""),
+        "trip_label": str(item.get("trip_label") or ""),
         "attempt_no": int(item.get("attempt_no", 1)),
         "channel": str(item.get("channel", "sms")).lower(),
         "status": status,
@@ -1291,6 +1340,11 @@ def _to_recent_item(item: dict[str, Any]) -> dict[str, Any]:
         "channel": normalized["channel"],
         "status": normalized["status"],
         "created_at": normalized["attempted_at"],
+        "content": normalized["content"],
+        "operator_id": normalized["operator_id"],
+        "operator_name": normalized["operator_name"],
+        "customer_name": normalized["customer_name"],
+        "trip_label": normalized["trip_label"],
     }
 
 
@@ -1562,12 +1616,12 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
     default_trips: list[dict[str, Any]] = [
         {
             "id": "trip-default-pretrip",
-            "destination": "乌鲁木齐-喀纳斯精品线",
-            "team": "TEAM-DEMO-PRE",
-            "team_id": "TEAM-DEMO-PRE",
-            "start_date": "2026-05-08",
-            "end_date": "2026-05-14",
-            "participants": 18,
+            "destination": "北疆雪境 7 日｜乌鲁木齐·喀纳斯·禾木",
+            "team": "YL-2026-1120-BJ",
+            "team_id": "YL-2026-1120-BJ",
+            "start_date": "2026-11-20",
+            "end_date": "2026-11-26",
+            "participants": 12,
             "status": "planned",
             "user_id": "user-001",
             "tenant_id": "tenant-a",
@@ -1576,12 +1630,12 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
         },
         {
             "id": "trip-default-ontrip",
-            "destination": "伊犁草原深度游",
-            "team": "TEAM-DEMO-ON",
-            "team_id": "TEAM-DEMO-ON",
-            "start_date": "2026-04-20",
-            "end_date": "2026-04-26",
-            "participants": 22,
+            "destination": "伊犁冬牧 6 日｜赛里木湖·那拉提",
+            "team": "YL-2026-1125-YL",
+            "team_id": "YL-2026-1125-YL",
+            "start_date": "2026-11-25",
+            "end_date": "2026-11-30",
+            "participants": 8,
             "status": "in_progress",
             "user_id": "user-001",
             "tenant_id": "tenant-a",
@@ -1590,12 +1644,12 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
         },
         {
             "id": "trip-default-posttrip",
-            "destination": "阿勒泰禾木轻奢团",
-            "team": "TEAM-DEMO-POST",
-            "team_id": "TEAM-DEMO-POST",
-            "start_date": "2026-03-10",
-            "end_date": "2026-03-16",
-            "participants": 16,
+            "destination": "喀纳斯秋色 7 日",
+            "team": "YL-2026-1005-KNS",
+            "team_id": "YL-2026-1005-KNS",
+            "start_date": "2026-10-05",
+            "end_date": "2026-10-11",
+            "participants": 14,
             "status": "completed",
             "user_id": "user-001",
             "tenant_id": "tenant-a",
@@ -1610,7 +1664,9 @@ def _seed_default_trips(trip_repository: TripRepository) -> None:
 
 
 def _seed_default_notification_rules(
-    rule_repository: NotificationRuleRepository, template_id: str, tenant_id: str
+    rule_repository: NotificationRuleRepository,
+    template_service: TemplateService,
+    tenant_id: str,
 ) -> None:
     if rule_repository.list_rules(tenant_id=tenant_id):
         return
@@ -1619,11 +1675,12 @@ def _seed_default_notification_rules(
         {
             "id": "rule-default-pre-3day",
             "name": "行前3天沟通与行程单提醒",
+            "template_name": "行前3天-航班与行前提示",
             "stage": "pre_trip",
             "time_slot": "morning",
             "scene": "normal",
-            "channels": ["sms", "wechat_work_group"],
-            "template_id": template_id,
+            "channels": ["wechat_work_group"],
+            "template_id": "",
             "enabled": True,
             "priority": 10,
             "conditions": {"time_node": "出发前3天"},
@@ -1631,53 +1688,100 @@ def _seed_default_notification_rules(
         {
             "id": "rule-default-pre-1day",
             "name": "行前1天保险核查与群提醒",
+            "template_name": "行前1天-最终确认",
             "stage": "pre_trip",
             "time_slot": "evening",
             "scene": "normal",
             "channels": ["wechat_work_group"],
-            "template_id": template_id,
+            "template_id": "",
             "enabled": True,
             "priority": 20,
             "conditions": {"time_node": "出发前1天"},
         },
         {
-            "id": "rule-default-ontrip-daily",
-            "name": "行中固定时段温馨提示",
+            "id": "rule-default-ontrip-morning",
+            "name": "每日早间出发提醒",
+            "template_name": "晨间提示-春季",
             "stage": "on_trip",
-            "time_slot": "all_day",
+            "time_slot": "morning",
             "scene": "normal",
-            "channels": ["wechat_work_group", "sms"],
-            "template_id": template_id,
+            "channels": ["wechat_work_group"],
+            "template_id": "",
             "enabled": True,
             "priority": 30,
-            "conditions": {"time_node": "每日固定时段"},
+            "conditions": {"time_node": "每日 07:00"},
+        },
+        {
+            "id": "rule-default-ontrip-noon",
+            "name": "午间安全与节奏提示",
+            "template_name": "午间提示-春季",
+            "stage": "on_trip",
+            "time_slot": "afternoon",
+            "scene": "normal",
+            "channels": ["wechat_work_group"],
+            "template_id": "",
+            "enabled": True,
+            "priority": 35,
+            "conditions": {"time_node": "每日 12:30"},
+        },
+        {
+            "id": "rule-default-ontrip-evening",
+            "name": "晚间次日行程预告",
+            "template_name": "晚间播报-次日行程",
+            "stage": "on_trip",
+            "time_slot": "evening",
+            "scene": "normal",
+            "channels": ["wechat_work_group"],
+            "template_id": "",
+            "enabled": True,
+            "priority": 36,
+            "conditions": {"time_node": "每日 20:00"},
         },
         {
             "id": "rule-default-ontrip-scene",
             "name": "行中特殊场景安全提示",
+            "template_name": "场景提示-雨天",
             "stage": "on_trip",
             "time_slot": "afternoon",
             "scene": "weather_alert",
-            "channels": ["sms", "wechat_work_group"],
-            "template_id": template_id,
+            "channels": ["wechat_work_group"],
+            "template_id": "",
             "enabled": True,
             "priority": 40,
-            "conditions": {"scene_tags": ["骑马", "高原", "边境口岸", "极寒"]},
+            "conditions": {},
         },
         {
             "id": "rule-default-posttrip-survey",
             "name": "下团满意度调研提醒",
+            "template_name": "下团调研-满意度回访",
             "stage": "post_trip",
             "time_slot": "evening",
             "scene": "normal",
-            "channels": ["sms", "email"],
-            "template_id": template_id,
+            "channels": ["wechat_work_group"],
+            "template_id": "",
             "enabled": True,
             "priority": 50,
             "conditions": {"time_node": "下团即时"},
         },
     ]
+    templates = template_service.list_notification_templates(tenant_id=tenant_id)
     for rule in default_rules:
+        wanted_name = str(rule.pop("template_name", ""))
+        template = next(
+            (item for item in templates if item.name == wanted_name), None
+        )
+        if template is None:
+            template = template_service.pick_notification_template(
+                tenant_id=tenant_id,
+                project_id="",
+                stage=str(rule["stage"]),
+                time_slot=str(rule["time_slot"]),
+                scene=str(rule["scene"]),
+                channel="wechat_work_group",
+            )
+        if template is None:
+            template = template_service.ensure_default_template(tenant_id=tenant_id)
+        rule["template_id"] = template.id
         rule["tenant_id"] = tenant_id
         rule_repository.create_rule(rule)
 
@@ -1694,6 +1798,15 @@ def _seed_concierge_templates(template_service: TemplateService, tenant_id: str)
             "notification_type": "pre_trip_reminder",
             "stage": "pre_trip",
             "time_slot": "morning",
+            "scene": "normal",
+        },
+        {
+            "name": "行前1天-最终确认",
+            "key": "pre_trip_final_notice",
+            "channel": "wechat_work_group",
+            "notification_type": "pre_trip_reminder",
+            "stage": "pre_trip",
+            "time_slot": "evening",
             "scene": "normal",
         },
         {
@@ -1880,6 +1993,15 @@ def _seed_concierge_templates(template_service: TemplateService, tenant_id: str)
         )
 
 
+def _demo_seed_enabled() -> bool:
+    override = os.getenv("SEED_DEMO_DATA", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    return os.getenv("APP_ENV", "dev").strip().lower() in {"dev", "test", "local"}
+
+
 def _build_context(store: JsonFileStore | None = None) -> AppContext:
     persistence = store or JsonFileStore()
     billing_service = BillingService(store=persistence)
@@ -1894,19 +2016,25 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
     )
     account_service.ensure_bootstrap_tenants()
     trip_repository = TripRepository(store=persistence)
+    trip_assignment_repository = TripAssignmentRepository(store=persistence)
     project_notification_config_repository = ProjectNotificationConfigRepository(store=persistence)
     template_service = TemplateService(store=persistence)
-    _seed_default_trips(trip_repository)
-    _seed_concierge_templates(template_service, tenant_id="tenant-a")
+    seed_demo_data = _demo_seed_enabled()
+    if seed_demo_data:
+        _seed_default_trips(trip_repository)
+        _seed_concierge_templates(template_service, tenant_id="tenant-a")
+    else:
+        logger.info("demo seed data disabled by APP_ENV/SEED_DEMO_DATA")
     template_service.ensure_default_template(tenant_id="tenant-a")
     preference_service = UserPreferenceService(store=persistence)
     notification_attempt_repository = NotificationAttemptRepository(store=persistence)
     notification_rule_repository = NotificationRuleRepository(store=persistence)
-    _seed_default_notification_rules(
-        notification_rule_repository,
-        template_id=template_service.ensure_default_template(tenant_id="tenant-a").id,
-        tenant_id="tenant-a",
-    )
+    if seed_demo_data:
+        _seed_default_notification_rules(
+            notification_rule_repository,
+            template_service=template_service,
+            tenant_id="tenant-a",
+        )
     tenant_notification_config_repository = TenantNotificationConfigRepository(store=persistence)
     provider_registry = TenantProviderRegistry(
         config_repository=tenant_notification_config_repository,
@@ -1945,6 +2073,7 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         billing_service=billing_service,
         tenant_repository=tenant_repository,
         trip_repository=trip_repository,
+        trip_assignment_repository=trip_assignment_repository,
         project_notification_config_repository=project_notification_config_repository,
         template_service=template_service,
         preference_service=preference_service,
@@ -2284,8 +2413,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail=exc.message) from exc
         if user.get("role") == "admin":
             return
-        if trip.get("user_id") != user.get("id"):
-            raise HTTPException(status_code=403, detail="Forbidden")
+        if trip.get("user_id") == user.get("id"):
+            return
+        if user.get("id") in (trip.get("assigned_user_ids") or []):
+            return
+        raise HTTPException(status_code=403, detail="Forbidden")
 
     @fastapi_app.exception_handler(HTTPException)
     async def _http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
@@ -2486,7 +2618,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/billing/subscription")
     def billing_subscription(
-        user: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         tenant_id = _current_tenant_id(user)
@@ -2504,7 +2636,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/billing/usage")
     def billing_usage(
-        user: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         return _ok(ctx.billing_service.usage_view(_current_tenant_id(user)).to_dict())
@@ -2512,7 +2644,7 @@ def create_app() -> FastAPI:
     @fastapi_app.get("/api/billing/orders")
     def billing_orders(
         limit: int = 50,
-        user: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         tenant_id = _current_tenant_id(user)
@@ -2543,7 +2675,7 @@ def create_app() -> FastAPI:
     @fastapi_app.get("/api/billing/orders/{order_no}")
     def get_billing_order(
         order_no: str,
-        user: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         order = ctx.billing_service.get_order(_current_tenant_id(user), order_no)
@@ -2703,6 +2835,321 @@ def create_app() -> FastAPI:
         )
         return _ok(tenant.to_dict())
 
+    @fastapi_app.get("/api/guide/workspace")
+    def guide_workspace(
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        from zoneinfo import ZoneInfo
+
+        tenant_id = _current_tenant_id(user)
+        user_id = str(user.get("id") or "")
+        today = datetime.now(tz=ZoneInfo("Asia/Shanghai")).date()
+        assigned_ids = ctx.trip_assignment_repository.list_trip_ids(user_id, tenant_id)
+        trips = [
+            item
+            for item in ctx.trip_repository.list()
+            if str(item.get("tenant_id") or "") == tenant_id
+            and (
+                str(item.get("id") or "") in assigned_ids
+                or str(item.get("user_id") or "") == user_id
+            )
+        ]
+        visible_trip_ids = {str(item.get("id") or "") for item in trips}
+        attempts = [
+            item
+            for item in ctx.notification_attempt_repository.list_history(limit=None)
+            if str(item.get("tenant_id") or "") == tenant_id
+            and str(item.get("trip_id") or "") in visible_trip_ids
+        ]
+        attempts.sort(key=lambda item: str(item.get("attempted_at") or ""), reverse=True)
+        latest_by_trip: dict[str, dict[str, Any]] = {}
+        for item in attempts:
+            latest_by_trip.setdefault(str(item.get("trip_id") or ""), item)
+
+        def parse_date(raw: Any):
+            value = str(raw or "")[:10]
+            if not value:
+                return None
+            try:
+                return datetime.strptime(value, "%Y-%m-%d").date()
+            except ValueError:
+                return None
+
+        def stage_for(trip: dict[str, Any]) -> tuple[str, str, str]:
+            start = parse_date(trip.get("start_date"))
+            end = parse_date(trip.get("end_date"))
+            if str(trip.get("status") or "") == "cancelled":
+                return "cancelled", "已取消", "查看行程"
+            if start is not None and today < start:
+                days = (start - today).days
+                if days <= 3:
+                    return "pre_trip", f"距离出发 {days} 天", "发送行前提醒"
+                return "upcoming", f"距离出发 {days} 天", "查看行程"
+            if start is not None and end is not None and start <= today <= end:
+                return "in_trip", "今日在途", "发送今日提醒"
+            if end is not None and today > end:
+                return "post_trip", "行程已结束", "发送回访提醒"
+            return "upcoming", "待出发", "查看行程"
+
+        weather_by_city: dict[str, str] = {}
+        try:
+            weather_payload = ctx.weather_query_service.list_region("xinjiang")
+            for city in weather_payload.get("cities") or []:
+                warning = str(
+                    city.get("warning_title") or city.get("warning") or ""
+                ).strip()
+                if warning:
+                    weather_by_city[str(city.get("city") or "")] = warning
+        except Exception as exc:  # noqa: BLE001 - workspace must survive weather outage
+            logger.warning("guide workspace weather unavailable: %s", exc)
+
+        def warning_for(destination: str) -> str:
+            for city, warning in weather_by_city.items():
+                if city and (city in destination or destination in city):
+                    return warning
+            return ""
+
+        trip_items: list[dict[str, Any]] = []
+        due_today = 0
+        group_missing = 0
+        weather_alerts = 0
+        for trip in trips:
+            stage, stage_label, action_label = stage_for(trip)
+            latest = latest_by_trip.get(str(trip.get("id") or ""))
+            group_configured = bool(str(trip.get("webhook_url") or "").strip())
+            weather_warning = warning_for(str(trip.get("destination") or ""))
+            if weather_warning:
+                weather_alerts += 1
+            if stage in {"pre_trip", "in_trip", "post_trip"}:
+                due_today += 1
+            if not group_configured:
+                group_missing += 1
+            trip_items.append(
+                {
+                    "id": str(trip.get("id") or ""),
+                    "destination": str(trip.get("destination") or "未命名团"),
+                    "team_id": str(trip.get("team_id") or trip.get("team") or ""),
+                    "start_date": str(trip.get("start_date") or ""),
+                    "end_date": str(trip.get("end_date") or ""),
+                    "participants": int(trip.get("participants") or 0),
+                    "status": str(trip.get("status") or "planned"),
+                    "stage": stage,
+                    "stage_label": stage_label,
+                    "action_label": action_label,
+                    "group_configured": group_configured,
+                    "send_mode": str(trip.get("send_mode") or "auto"),
+                    "weather_warning": weather_warning,
+                    "latest_notification": (
+                        {
+                            "content": str(latest.get("content") or ""),
+                            "status": str(
+                                latest.get("status")
+                                or ("sent" if latest.get("ok") else "failed")
+                            ),
+                            "channel": str(latest.get("channel") or ""),
+                            "created_at": str(latest.get("attempted_at") or ""),
+                        }
+                        if latest
+                        else None
+                    ),
+                }
+            )
+        trip_items.sort(
+            key=lambda item: (
+                {"in_trip": 0, "pre_trip": 1, "post_trip": 2, "upcoming": 3, "cancelled": 4}.get(
+                    item["stage"], 5
+                ),
+                item.get("start_date") or "",
+            )
+        )
+        cutoff = datetime.now(tz=UTC) - timedelta(days=7)
+        failed_7d = 0
+        for item in attempts:
+            try:
+                if datetime.fromisoformat(str(item.get("attempted_at"))) < cutoff:
+                    continue
+            except ValueError:
+                continue
+            if item.get("ok") is False or str(item.get("status") or "") in {
+                "failed",
+                "manual_intervention",
+            }:
+                failed_7d += 1
+        recent = [
+            {
+                "id": str(item.get("attempt_id") or ""),
+                "trip_id": str(item.get("trip_id") or ""),
+                "trip_label": str(item.get("trip_label") or item.get("trip_id") or ""),
+                "channel": str(item.get("channel") or ""),
+                "status": str(
+                    item.get("status") or ("sent" if item.get("ok") else "failed")
+                ),
+                "content": str(item.get("content") or ""),
+                "created_at": str(item.get("attempted_at") or ""),
+            }
+            for item in attempts[:10]
+        ]
+        return _ok(
+            {
+                "today": today.isoformat(),
+                "stats": {
+                    "assigned_trips": len(trip_items),
+                    "due_today": due_today,
+                    "group_missing": group_missing,
+                    "failed_7d": failed_7d,
+                    "weather_alerts": weather_alerts,
+                },
+                "trips": trip_items,
+                "recent_notifications": recent,
+            }
+        )
+
+    @fastapi_app.get("/api/admin/team-overview")
+    def admin_team_overview(
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        members = [
+            item
+            for item in ctx.auth_service.list_users(tenant_id)
+            if str(item.get("role") or "") != "admin"
+        ]
+        trips = [
+            item
+            for item in ctx.trip_repository.list()
+            if str(item.get("tenant_id") or "") == tenant_id
+        ]
+        trips_by_id = {str(item.get("id") or ""): item for item in trips}
+        all_attempts = [
+            item
+            for item in ctx.notification_attempt_repository.list_history(limit=None)
+            if str(item.get("tenant_id") or "") == tenant_id
+        ]
+        all_attempts.sort(
+            key=lambda item: str(item.get("attempted_at") or ""), reverse=True
+        )
+        cutoff = datetime.now(tz=UTC) - timedelta(days=7)
+        recent_7d = 0
+        failed_7d = 0
+        for item in all_attempts:
+            try:
+                if datetime.fromisoformat(str(item.get("attempted_at"))) >= cutoff:
+                    recent_7d += 1
+                    if item.get("ok") is False or str(item.get("status") or "") in {
+                        "failed",
+                        "manual_intervention",
+                    }:
+                        failed_7d += 1
+            except ValueError:
+                continue
+
+        def trip_summary(trip: dict[str, Any], assigned_ids: list[str]) -> dict[str, Any]:
+            return {
+                "id": str(trip.get("id") or ""),
+                "destination": str(trip.get("destination") or "未命名团"),
+                "team_id": str(trip.get("team_id") or trip.get("team") or ""),
+                "start_date": str(trip.get("start_date") or ""),
+                "end_date": str(trip.get("end_date") or ""),
+                "participants": int(trip.get("participants") or 0),
+                "status": str(trip.get("status") or "planned"),
+                "assigned_user_ids": assigned_ids,
+                "send_mode": str(trip.get("send_mode") or "auto"),
+                "webhook_configured": bool(str(trip.get("webhook_url") or "").strip()),
+                "wecom_chat_id": str(trip.get("wecom_chat_id") or ""),
+            }
+
+        def notification_summary(item: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "id": str(item.get("attempt_id") or ""),
+                "task_id": str(item.get("task_id") or ""),
+                "trip_id": str(item.get("trip_id") or ""),
+                "trip_label": str(item.get("trip_label") or item.get("trip_id") or ""),
+                "channel": str(item.get("channel") or "sms"),
+                "status": str(item.get("status") or ("sent" if item.get("ok") else "failed")),
+                "content": str(item.get("content") or ""),
+                "customer_name": str(item.get("customer_name") or ""),
+                "operator_id": str(item.get("operator_id") or ""),
+                "operator_name": str(item.get("operator_name") or "系统自动"),
+                "created_at": str(item.get("attempted_at") or ""),
+            }
+
+        member_items: list[dict[str, Any]] = []
+        assigned_trip_ids: set[str] = set()
+        for member in members:
+            member_id = str(member.get("id") or "")
+            member_trip_ids = ctx.trip_assignment_repository.list_trip_ids(
+                member_id, tenant_id
+            )
+            assigned_trip_ids.update(member_trip_ids)
+            member_trips = [
+                trip_summary(trips_by_id[trip_id], sorted(member_trip_ids))
+                for trip_id in sorted(member_trip_ids)
+                if trip_id in trips_by_id
+            ]
+            member_attempts = [
+                item
+                for item in all_attempts
+                if str(item.get("trip_id") or "") in member_trip_ids
+            ]
+            member_items.append(
+                {
+                    "id": member_id,
+                    "username": str(member.get("username") or ""),
+                    "display_name": str(member.get("display_name") or ""),
+                    "role": str(member.get("role") or "user"),
+                    "phone": str(member.get("phone") or ""),
+                    "status": str(member.get("status") or "active"),
+                    "assigned_trips": member_trips,
+                    "notification_count": len(member_attempts),
+                    "recent_notifications": [
+                        notification_summary(item) for item in member_attempts[:12]
+                    ],
+                }
+            )
+
+        unassigned_trips = [
+            trip_summary(item, [])
+            for item in trips
+            if str(item.get("id") or "") not in assigned_trip_ids
+        ]
+        unassigned_trips.sort(key=lambda item: item.get("start_date") or "")
+        trips_without_group = [
+            trip_summary(
+                item,
+                ctx.trip_assignment_repository.list_user_ids(
+                    str(item.get("id") or ""), tenant_id
+                ),
+            )
+            for item in trips
+            if not str(item.get("webhook_url") or "").strip()
+        ]
+        trips_without_group.sort(key=lambda item: item.get("start_date") or "")
+        return _ok(
+            {
+                "stats": {
+                    "members": len(member_items),
+                    "assigned_trips": len(assigned_trip_ids),
+                    "unassigned_trips": len(unassigned_trips),
+                    "notifications_7d": recent_7d,
+                    "failed_7d": failed_7d,
+                    "trips_without_group": sum(
+                        1
+                        for item in trips
+                        if not str(item.get("webhook_url") or "").strip()
+                    ),
+                },
+                "members": member_items,
+                "unassigned_trips": unassigned_trips,
+                "trips_without_group": trips_without_group,
+                "recent_notifications": [
+                    notification_summary(item) for item in all_attempts[:20]
+                ],
+            }
+        )
+
     @fastapi_app.get("/api/admin/users")
     def list_tenant_users(
         user: dict[str, str] = Depends(require_admin),
@@ -2717,12 +3164,13 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        if payload.role not in {"admin", "user"}:
-            raise HTTPException(status_code=400, detail="租户成员角色只能是 admin 或 user")
+        if payload.role not in {"admin", "guide", "user"}:
+            raise HTTPException(status_code=400, detail="租户成员角色只能是 admin、guide 或 user")
         profile = ctx.auth_service.create_user(
             tenant_id=_current_tenant_id(user),
             username=payload.username,
             password=payload.password,
+            display_name=payload.display_name,
             email=payload.email,
             phone=payload.phone,
             role=payload.role,
@@ -2745,12 +3193,13 @@ def create_app() -> FastAPI:
         target = ctx.auth_service.get_user(username)
         if target is None or str(target.get("tenant_id") or "") != _current_tenant_id(user):
             raise HTTPException(status_code=404, detail="User not found")
-        if payload.role is not None and payload.role not in {"admin", "user"}:
-            raise HTTPException(status_code=400, detail="租户成员角色只能是 admin 或 user")
+        if payload.role is not None and payload.role not in {"admin", "guide", "user"}:
+            raise HTTPException(status_code=400, detail="租户成员角色只能是 admin、guide 或 user")
         profile = ctx.auth_service.update_user(
             username,
             email=payload.email,
             phone=payload.phone,
+            display_name=payload.display_name,
             role=payload.role,
             status=payload.status,
         )
@@ -3436,7 +3885,29 @@ def create_app() -> FastAPI:
         tenant_id = _current_tenant_id(user)
         items = [item for item in ctx.trip_repository.list() if item.get("tenant_id") == tenant_id]
         if user.get("role") != "admin":
-            items = [item for item in items if item.get("user_id") == user.get("id")]
+            assigned_trip_ids = ctx.trip_assignment_repository.list_trip_ids(
+                str(user.get("id") or ""), tenant_id
+            )
+            items = [
+                item
+                for item in items
+                if item.get("user_id") == user.get("id")
+                or str(item.get("id") or "") in assigned_trip_ids
+            ]
+        raw_items = items
+        items = []
+        for item in raw_items:
+            trip_tenant_id = str(item.get("tenant_id") or tenant_id)
+            assigned_ids = ctx.trip_assignment_repository.list_user_ids(
+                str(item.get("id") or ""), trip_tenant_id
+            )
+            items.append(
+                {
+                    **item,
+                    "assigned_user_ids": assigned_ids,
+                    "assigned_users": _assignee_profiles(ctx, trip_tenant_id, assigned_ids),
+                }
+            )
         total = len(items)
         page = int(kwargs.get("page", 1)) if "page" in str(locals().get("kwargs",{})) else 1
         page_size = int(kwargs.get("page_size", 0)) if "page_size" in str(locals().get("kwargs",{})) else 0
@@ -3706,7 +4177,7 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "请先配置企业微信群 webhook 地址")
         from zoneinfo import ZoneInfo
         now = datetime.now(tz=ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
-        content = f"【{now}】\n✅ 企业微信群机器人连接测试成功！\n行程：{trip.get('destination', '')}\n团号：{trip.get('team_id') or trip.get('team', '')}\n\n您好，这是一条来自旅行通知系统的测试消息，如果您能收到此消息，说明群机器人配置正确，后续通知将正常推送。"
+        content = f"【{now}】\n企业微信群机器人连接测试成功。\n行程：{trip.get('destination', '')}\n团号：{trip.get('team_id') or trip.get('team', '')}\n\n这是一条测试消息。收到后说明群机器人配置正确，后续通知会正常推送。"
         provider = get_wechat_provider_for_trip(trip)
         ok, msg = provider.send(f"test:{trip_id}", content)
         if not ok:
@@ -3853,12 +4324,13 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        existing = ctx.trip_repository.get(trip_id)
+        existing = _find_trip(trip_id, ctx)
         if existing is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, existing)
 
         patch = payload.model_dump(exclude_none=True)
+        actual_trip_id = str(existing.get("id") or trip_id)
         if "team_id" in patch or "team" in patch:
             normalized_team_id = _resolve_team_id(
                 patch.get("team") if isinstance(patch.get("team"), str) else None,
@@ -3876,12 +4348,12 @@ def create_app() -> FastAPI:
             patch["guests"] = []
         if "guests" in patch and isinstance(patch["guests"], list):
             patch["participants"] = len(patch["guests"])
-        updated = ctx.trip_repository.update(trip_id, patch)
+        updated = ctx.trip_repository.update(actual_trip_id, patch)
         if updated is None:
             raise HTTPException(status_code=404, detail="Trip not found")
 
         ctx.audit_service.record(
-            operator_id=user["id"], action="trip_updated", target=trip_id, detail=patch
+            operator_id=user["id"], action="trip_updated", target=actual_trip_id, detail=patch
         )
         return _ok(_serialize_trip(updated))
 
@@ -3891,13 +4363,17 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        existing = ctx.trip_repository.get(trip_id)
+        existing = _find_trip(trip_id, ctx)
         if existing is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, existing)
-        ctx.trip_repository.delete(trip_id)
+        actual_trip_id = str(existing.get("id") or trip_id)
+        ctx.trip_repository.delete(actual_trip_id)
+        ctx.trip_assignment_repository.delete_for_trip(
+            actual_trip_id, str(existing.get("tenant_id") or "")
+        )
         ctx.audit_service.record(
-            operator_id=user["id"], action="trip_deleted", target=trip_id, detail={}
+            operator_id=user["id"], action="trip_deleted", target=actual_trip_id, detail={}
         )
         return {"code": 200}
 
@@ -4069,7 +4545,64 @@ def create_app() -> FastAPI:
         existing.insert(0, record)
         ctx.store.write_collection("notification_attempts", existing)
 
-    def _send_workflow_template(trip, template_key, *, ctx, preview=False, extra=""):
+    _WORKFLOW_ERROR_HINTS = {
+        "wechat_webhook_not_configured": "企业微信未配置。请管理员到本团「群配置」填写企业微信群机器人 Webhook 后再发送。",
+        "invalid_webhook_url": "企业微信 Webhook 地址无效，请填写企业微信群机器人地址。",
+        "wecom_error": "企业微信拒绝了本次推送，请检查机器人是否仍在群内。",
+        "request_failed": "无法连接企业微信，请检查服务器网络后重试。",
+        "empty_content": "消息内容为空，请检查模板配置。",
+    }
+
+    def _workflow_failure_message(reason: str, job_id: str | None) -> str:
+        key = str(reason or "").split(":", 1)[0]
+        hint = _WORKFLOW_ERROR_HINTS.get(key) or f"渠道发送失败（{reason or 'unknown_error'}）。"
+        if job_id:
+            return f"推送失败：{hint} 已转入发送任务队列（{job_id}），可在「发送任务」中重试。"
+        return f"推送失败：{hint}"
+
+    _WORKFLOW_PERMANENT_ERRORS = {
+        "wechat_webhook_not_configured",
+        "invalid_webhook_url",
+        "empty_content",
+    }
+
+    def _workflow_error_is_permanent(reason: str) -> bool:
+        return str(reason or "").split(":", 1)[0] in _WORKFLOW_PERMANENT_ERRORS
+
+    def _enqueue_workflow_retry(
+        trip: dict[str, Any],
+        content: str,
+        *,
+        ctx: AppContext,
+        template_key: str,
+        reason: str,
+    ) -> str:
+        task = NotificationTask(
+            tenant_id=str(trip.get("tenant_id") or ""),
+            team_id=str(trip.get("team_id") or trip.get("team") or ""),
+            trip_id=str(trip.get("id") or ""),
+            customer_id=f"workflow:{template_key}",
+            rendered_content=content,
+            idempotency_key=f"workflow:{trip.get('id', '')}:{template_key}:{uuid4().hex}",
+            primary_channel=Channel.WECHAT_WORK_GROUP,
+            fallback_channel=None,
+            provider_context={
+                "webhook_url": str(trip.get("webhook_url") or "").strip(),
+                "workflow_step": template_key,
+            },
+            trace_id=new_trace_id(),
+        )
+        ctx.notification_tasks[task.id] = task
+        permanent_failure = _workflow_error_is_permanent(reason)
+        job = ctx.async_dispatch_service.enqueue(
+            task,
+            channel=Channel.WECHAT_WORK_GROUP.value,
+            status="manual_intervention" if permanent_failure else "pending",
+            last_error=reason if permanent_failure else "",
+        )
+        return job.job_id
+
+    def _send_workflow_template(trip, template_key, *, ctx, preview=False, extra="", operator=None):
         from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
         tpl = MESSAGE_TEMPLATES.get(template_key, "")
         if not tpl: raise HTTPException(status_code=500, detail=f"Template not found: {template_key}")
@@ -4079,9 +4612,14 @@ def create_app() -> FastAPI:
         for k,v in vars_.items(): tpl = tpl.replace("{{"+k+"}}", str(v))
         from zoneinfo import ZoneInfo
         tpl = f"【{datetime.now(tz=ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')}】\n{tpl}"
-        if preview: return True, tpl
+        if preview: return True, tpl, None
         provider = get_wechat_provider_for_trip(trip)
         ok, msg = provider.send(f"wf:{template_key}:{trip.get('id','')}", tpl)
+        job_id = None
+        if not ok:
+            job_id = _enqueue_workflow_retry(
+                trip, tpl, ctx=ctx, template_key=template_key, reason=msg
+            )
         # Record notification attempt for analytics
         now_iso = datetime.now(UTC).isoformat()
         attempt_record = {
@@ -4091,6 +4629,10 @@ def create_app() -> FastAPI:
             "trip_id": str(trip.get("id", "")),
             "team_id": str(trip.get("team_id") or trip.get("team", "")),
             "customer_id": "",
+            "customer_name": "各位团友",
+            "operator_id": str((operator or {}).get("id") or ""),
+            "operator_name": str((operator or {}).get("display_name") or (operator or {}).get("username") or "系统自动"),
+            "content": tpl,
             "attempt_no": 1,
             "channel": "wechat_work_group",
             "status": "sent" if ok else "failed",
@@ -4101,11 +4643,65 @@ def create_app() -> FastAPI:
             "attempted_at": now_iso,
         }
         _append_notification_attempt(ctx, attempt_record)
-        return ok, msg
+        return ok, msg, job_id
 
     def _update_workflow_status(trip, step, *, ctx, operator_id="", detail=None):
         repo = WorkflowExecutionRepository(store=ctx.store)
         repo.mark(str(trip.get("id","")), step, operator_id=operator_id, detail=detail or {})
+
+    def _build_group_reminder_base(trip: dict[str, Any]) -> str:
+        from zoneinfo import ZoneInfo
+
+        today = datetime.now(tz=ZoneInfo("Asia/Shanghai")).date()
+        start_date = str(trip.get("start_date") or "")[:10]
+        end_date = str(trip.get("end_date") or "")[:10]
+        destination = str(trip.get("destination") or "本次行程")
+        itinerary = [item for item in (trip.get("itinerary") or []) if isinstance(item, dict)]
+
+        def itinerary_line(day: dict[str, Any] | None) -> str:
+            if not day:
+                return ""
+            activity = str(
+                day.get("activity") or day.get("title") or day.get("route") or ""
+            ).strip()
+            if not activity:
+                return ""
+            transport = str(day.get("type") or day.get("transport") or "").strip()
+            hotel = str(day.get("hotel") or "").strip()
+            parts = [f"行程安排：{activity}。"]
+            if transport:
+                parts.append(f"交通安排：{transport}。")
+            if hotel:
+                parts.append(f"入住酒店：{hotel}。")
+            return "\n".join(parts)
+
+        if start_date and today.isoformat() < start_date:
+            first_day = next(
+                (item for item in itinerary if str(item.get("date") or "")[:10] == start_date),
+                itinerary[0] if itinerary else None,
+            )
+            lines = [
+                f"【行前提醒】{destination}行程将于 {start_date} 出发。",
+                itinerary_line(first_day),
+                "请大家提前整理证件与行李，保持手机畅通，集合时间与地点以群内通知为准。",
+            ]
+            return "\n".join(line for line in lines if line)
+
+        if end_date and today.isoformat() > end_date:
+            return (
+                f"【行程回访】{destination}行程已经结束，感谢大家的信任与配合。"
+                "欢迎在群里分享旅途照片和感受，也欢迎提出宝贵建议。"
+            )
+
+        day = next(
+            (item for item in itinerary if str(item.get("date") or "")[:10] == today.isoformat()),
+            None,
+        )
+        lines = [f"【今日行程提醒】{destination}，{today.isoformat()}。", itinerary_line(day)]
+        lines.append(
+            "请大家按约定时间集合，带好证件和随身物品，注意天气变化。如有问题随时在群里联系管家。"
+        )
+        return "\n".join(line for line in lines if line)
 
     @fastapi_app.post("/api/trips/{trip_id}/notify-driver")
     def notify_driver(
@@ -4131,17 +4727,41 @@ def create_app() -> FastAPI:
             for i, day in enumerate(itinerary[:7])
         ) or "  请参见行程详情"
         content = (
-            f"【行程确认单】{driver_name}师傅您好！\n"
+            f"【行程确认单】{driver_name}师傅，您好。\n"
             f"目的地：{destination}\n"
             f"行程日期：{start_date} ~ {end_date}\n"
             f"游客人数：{guest_count} 人\n"
             f"行程简介：\n{itinerary_text}\n"
             f"负责人：{str(trip.get('trip_manager_name') or trip.get('concierge_name') or '管家')}"
             f"（{str(trip.get('contact_phone') or '')}）\n"
-            f"请提前检查车辆，准时就位，谢谢！"
+            f"请提前检查车辆，准时就位。"
         )
         webhook = get_wechat_provider_for_trip(trip)
         ok, msg = webhook.send(f"driver:{trip_id}", content)
+        _append_notification_attempt(
+            ctx,
+            {
+                "attempt_id": f"driver-{uuid4().hex[:12]}",
+                "task_id": f"driver-notice:{trip_id}",
+                "tenant_id": str(trip.get("tenant_id", "")),
+                "trip_id": str(trip.get("id", "")),
+                "trip_label": str(trip.get("destination") or ""),
+                "team_id": str(trip.get("team_id") or trip.get("team", "")),
+                "customer_id": f"driver:{trip_id}",
+                "customer_name": driver_name,
+                "operator_id": user["id"],
+                "operator_name": user.get("display_name") or user.get("username", user["id"]),
+                "content": content,
+                "attempt_no": 1,
+                "channel": "wechat_work_group",
+                "status": "sent" if ok else "failed",
+                "ok": ok,
+                "reason": "" if ok else msg,
+                "provider_message": msg,
+                "latency_ms": 0,
+                "attempted_at": datetime.now(tz=UTC).isoformat(),
+            },
+        )
         ctx.audit_service.record(
             operator_id=user["id"],
             action="driver_notified",
@@ -4177,39 +4797,371 @@ def create_app() -> FastAPI:
             return _ok({"trip_id":trip_id,"step":step,"message":f"已触发{slot}调度"})
         if step in ("resources_verified","insurance_verified"):
             tpl_key = "resources_verified_notice" if step == "resources_verified" else "insurance_verified_notice"
-            ok,msg = _send_workflow_template(trip,tpl_key,ctx=ctx,preview=preview)
+            ok,msg,job_id = _send_workflow_template(trip,tpl_key,ctx=ctx,preview=preview,operator=user)
             if preview: return _ok({"trip_id":trip_id,"step":step,"preview":True,"rendered_content":msg})
-            if not ok: raise HTTPException(status_code=502,detail=f"推送失败:{msg}")
+            if not ok: raise HTTPException(status_code=502,detail=_workflow_failure_message(msg, job_id))
             _update_workflow_status(trip,step,ctx=ctx,operator_id=user["id"],detail=body or {})
             ctx.audit_service.record(operator_id=user["id"],action=step,target=trip_id)
             return _ok({"trip_id":trip_id,"step":step,"message":"已完成"})
         # day1_guide_sent 需要发送2条消息
         if step == "day1_guide_sent":
-            u_ok,u_msg = _send_workflow_template(trip,"urumqi_day1_recommendations",ctx=ctx,preview=preview)
-            t_ok,t_msg = _send_workflow_template(trip,"xinjiang_general_tips",ctx=ctx,preview=preview)
+            u_ok,u_msg,u_job = _send_workflow_template(trip,"urumqi_day1_recommendations",ctx=ctx,preview=preview,operator=user)
+            t_ok,t_msg,t_job = _send_workflow_template(trip,"xinjiang_general_tips",ctx=ctx,preview=preview,operator=user)
             if preview: return _ok({"trip_id":trip_id,"step":step,"preview":True,"rendered_content":f"{u_msg}\n\n---\n\n{t_msg}"})
-            if not (u_ok and t_ok): raise HTTPException(status_code=502,detail="推送失败")
+            if not (u_ok and t_ok):
+                reason = u_msg if not u_ok else t_msg
+                job_id = u_job or t_job
+                raise HTTPException(status_code=502,detail=_workflow_failure_message(reason, job_id))
             _update_workflow_status(trip,step,ctx=ctx,operator_id=user["id"])
             ctx.audit_service.record(operator_id=user["id"],action=step,target=trip_id)
             return _ok({"trip_id":trip_id,"step":step,"message":"落地首日指引已发送"})
 
         tpls = {"pre_flight_notice":"pre_flight_notice","farewell_sent":"farewell_message","survey_sent":"post_trip_survey_notice","group_dismissed":"group_close_message","group_built":"group_welcome","resources_verified":"resources_verified_notice","insurance_verified":"insurance_verified_notice","daily_reminder":"daily_reminder_generic","scene_alert":"scene_alert_generic","issue_coordination":"issue_coordination_notice","follow_up":"follow_up_notice"}
         tpl_key = tpls.get(step,step)
-        ok,msg = _send_workflow_template(trip,tpl_key,ctx=ctx,preview=preview)
+        ok,msg,job_id = _send_workflow_template(trip,tpl_key,ctx=ctx,preview=preview,operator=user)
         if preview: return _ok({"trip_id":trip_id,"step":step,"preview":True,"rendered_content":msg})
-        if not ok: raise HTTPException(status_code=502,detail=f"推送失败:{msg}")
+        if not ok: raise HTTPException(status_code=502,detail=_workflow_failure_message(msg, job_id))
         _update_workflow_status(trip,step,ctx=ctx,operator_id=user["id"])
         ctx.audit_service.record(operator_id=user["id"],action=step,target=trip_id)
         return _ok({"trip_id":trip_id,"step":step,"message":"已发送"})
 
+    # ── 行程发送计划（早上/中午/晚上/次日/行后） ──
+    @fastapi_app.get("/api/trips/{trip_id}/message-plan")
+    def trip_message_plan(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        tenant_id = _current_tenant_id(user)
+        destination = str(trip.get("destination") or "")
+        weather_text = ""
+        try:
+            weather_payload = ctx.weather_query_service.list_region("xinjiang")
+            city = next(
+                (
+                    item
+                    for item in weather_payload.get("cities") or []
+                    if str(item.get("city") or "")
+                    and (
+                        str(item.get("city")) in destination
+                        or destination in str(item.get("city"))
+                    )
+                ),
+                None,
+            )
+            if city:
+                weather_text = f"{city.get('weather') or ''}，{city.get('temp')}℃"
+        except Exception as exc:  # noqa: BLE001 - plan must survive weather outage
+            logger.warning("message plan weather unavailable: %s", exc)
+        attempts = [
+            item
+            for item in ctx.notification_attempt_repository.list_history(limit=None)
+            if str(item.get("tenant_id") or "") == tenant_id
+            and str(item.get("trip_id") or "") in {trip_id, str(trip.get("id") or "")}
+        ]
+        items = build_trip_message_plan(
+            trip=trip,
+            rules=ctx.notification_rule_repository.list_rules(
+                tenant_id=tenant_id, enabled=True
+            ),
+            template_service=ctx.template_service,
+            attempts=attempts,
+            weather_text=weather_text,
+        )
+        return _ok(
+            {
+                "trip_id": str(trip.get("id") or ""),
+                "group_configured": bool(str(trip.get("webhook_url") or "").strip()),
+                "items": items,
+            }
+        )
+
+    # ── AI 情况识别与提醒建议 ──
+    @fastapi_app.get("/api/trips/{trip_id}/reminder-suggestion")
+    async def get_reminder_suggestion(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        weather = None
+        destination = str(trip.get("destination") or "")
+
+        def region_weather_for_trip() -> WeatherInfo | None:
+            try:
+                payload = ctx.weather_query_service.list_region("xinjiang")
+            except Exception:
+                return None
+            cities = payload.get("cities") or []
+            city = next(
+                (
+                    item
+                    for item in cities
+                    if str(item.get("city") or "")
+                    and (
+                        str(item.get("city")) in destination
+                        or destination in str(item.get("city"))
+                    )
+                ),
+                None,
+            )
+            if city is None or not (city.get("warning") or city.get("warning_title")):
+                return None
+            return WeatherInfo(
+                destination=str(city.get("city") or destination),
+                condition=str(city.get("weather") or ""),
+                temperature=float(city.get("temp") or 0),
+                alert_title=str(city.get("warning_title") or city.get("warning") or ""),
+                source=str(city.get("source") or "qweather"),
+            )
+
+        if destination:
+            try:
+                weather = await asyncio.to_thread(
+                    lambda: ctx.weather_provider.get_weather(
+                        destination,
+                        location_context=dict(trip),
+                        include_forecast=False,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - suggestion must survive weather outages
+                logger.warning("reminder suggestion weather unavailable: %s", exc)
+            if weather is None or not (weather.alert_title or weather.warning_level):
+                fallback_weather = await asyncio.to_thread(region_weather_for_trip)
+                if fallback_weather is not None:
+                    weather = fallback_weather
+        suggestion = await generate_reminder_suggestion(trip, weather)
+        return _ok(
+            {
+                "trip_id": str(trip.get("id") or ""),
+                "suggestion": suggestion,
+            }
+        )
+
+    # ── 参团成功短信（非服务通知，仅报名成功场景使用） ──
+    @fastapi_app.post("/api/trips/{trip_id}/booking-confirmation")
+    def send_booking_confirmation(
+        trip_id: str,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        guests = [
+            guest
+            for guest in (trip.get("guests") or [])
+            if str(guest.get("phone") or "").strip()
+        ]
+        if not guests:
+            raise HTTPException(status_code=400, detail="该团还没有填写手机号的游客")
+        destination = str(trip.get("destination") or "本次行程")
+        team_id = str(trip.get("team_id") or trip.get("team") or "")
+        start_date = str(trip.get("start_date") or "")
+        contact_phone = str(trip.get("contact_phone") or "")
+        sent = 0
+        failed = 0
+        skipped = 0
+        for guest in guests:
+            phone = str(guest.get("phone") or "").strip()
+            name = str(guest.get("name") or "游客")
+            content = (
+                f"【参团成功】{name}您好，您已成功报名{destination}行程"
+                f"（团号 {team_id}），出发日期 {start_date}。"
+                "行前提醒将通过企业微信群发送，请留意群消息。"
+            )
+            if contact_phone:
+                content += f"客服电话：{contact_phone}。"
+            idempotency_key = (
+                f"booking:{trip.get('tenant_id', '')}:{trip.get('id', '')}:{phone}"
+            )
+            if ctx.notification_service.idempotency_store.terminal(idempotency_key):
+                skipped += 1
+                continue
+            task = NotificationTask(
+                tenant_id=str(trip.get("tenant_id") or ""),
+                project_id=str(trip.get("project_id") or ""),
+                team_id=team_id,
+                trip_id=str(trip.get("id") or ""),
+                customer_id=phone,
+                rendered_content=content,
+                idempotency_key=idempotency_key,
+                notification_type=NotificationType.BOOKING_SUCCESS,
+                primary_channel=Channel.SMS,
+                fallback_channel=None,
+                provider_context={
+                    "customer_name": name,
+                    "trip_label": destination,
+                    "operator_id": user["id"],
+                    "operator_name": user.get("display_name") or user.get("username", user["id"]),
+                },
+            )
+            ctx.notification_tasks[task.id] = task
+            result = ctx.notification_service.dispatch(task)
+            if result.get("ok"):
+                sent += 1
+            else:
+                failed += 1
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="booking_confirmation_sent",
+            target=str(trip.get("id") or ""),
+            detail={"sent": sent, "failed": failed, "skipped": skipped},
+        )
+        return _ok(
+            {
+                "trip_id": str(trip.get("id") or ""),
+                "sent": sent,
+                "failed": failed,
+                "skipped": skipped,
+                "message": f"参团成功短信：成功 {sent}，失败 {failed}，已发送过 {skipped}",
+            }
+        )
+
+    # ── 手动/AI 群提醒 ──
+    @fastapi_app.post("/api/trips/{trip_id}/group-reminder")
+    async def send_trip_group_reminder(
+        trip_id: str,
+        payload: GroupReminderRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        tenant_id = _current_tenant_id(user)
+        tenant_config = ctx.tenant_notification_config_repository.get(tenant_id) or {}
+        webhook = str(trip.get("webhook_url") or "").strip() or str(
+            tenant_config.get("wechat_webhook_url") or ""
+        ).strip()
+
+        base = str(payload.message or "").strip() or _build_group_reminder_base(trip)
+        provider = "manual"
+        content = base
+        if payload.use_ai:
+            content, provider = await polish_travel_message(
+                base,
+                destination=str(trip.get("destination") or ""),
+                scene=payload.scene,
+            )
+        if not content.strip():
+            raise HTTPException(status_code=400, detail="提醒内容不能为空")
+        if payload.dry_run:
+            return _ok(
+                {
+                    "trip_id": str(trip.get("id") or ""),
+                    "message": content,
+                    "provider": provider,
+                    "sent_at": None,
+                    "dry_run": True,
+                }
+            )
+        if not webhook:
+            raise HTTPException(
+                status_code=400,
+                detail="该团还没有企业微信群 Webhook。请管理员先在「群配置」中完成配置。",
+            )
+
+        task = NotificationTask(
+            tenant_id=tenant_id,
+            project_id=str(trip.get("project_id") or trip.get("team_id") or ""),
+            team_id=str(trip.get("team_id") or trip.get("team") or ""),
+            trip_id=str(trip.get("id") or ""),
+            customer_id=f"group:{trip.get('id', '')}",
+            rendered_content=content,
+            idempotency_key=f"manual-group:{trip.get('id', '')}:{uuid4().hex}",
+            notification_type=NotificationType.DAILY_REMINDER,
+            primary_channel=Channel.WECHAT_WORK_GROUP,
+            fallback_channel=None,
+            provider_context={
+                "customer_name": "各位团友",
+                "group_name": str(trip.get("team") or trip.get("team_id") or ""),
+                "trip_label": str(trip.get("destination") or ""),
+                "webhook_url": str(trip.get("webhook_url") or "").strip(),
+                "operator_id": user["id"],
+                "operator_name": user.get("display_name") or user.get("username", user["id"]),
+                "schedule_key": payload.schedule_key,
+            },
+        )
+        ctx.notification_tasks[task.id] = task
+        result = ctx.notification_service.dispatch(task)
+        if not result.get("ok"):
+            reason = str(result.get("reason") or "send_failed")
+            permanent = _workflow_error_is_permanent(reason)
+            job = ctx.async_dispatch_service.enqueue(
+                task,
+                channel=Channel.WECHAT_WORK_GROUP.value,
+                status="manual_intervention" if permanent else "pending",
+                last_error=reason if permanent else "",
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_workflow_failure_message(reason, job.job_id),
+            )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="group_reminder_sent",
+            target=str(trip.get("id") or ""),
+            detail={"provider": provider, "length": len(content)},
+        )
+        return _ok(
+            {
+                "trip_id": str(trip.get("id") or ""),
+                "message": content,
+                "provider": provider,
+                "sent_at": datetime.now(tz=UTC).isoformat(),
+            }
+        )
+
     # ── 辅助：按 id 或 team_id 查找行程 ──
+    def _assignee_profiles(ctx, tenant_id: str, user_ids: list[str]) -> list[dict[str, str]]:
+        if not user_ids:
+            return []
+        users = {
+            str(item.get("id") or ""): item
+            for item in ctx.auth_service.list_users(tenant_id)
+        }
+        return [
+            {
+                "id": user_id,
+                "username": str(users[user_id].get("username") or ""),
+                "display_name": str(users[user_id].get("display_name") or ""),
+                "role": str(users[user_id].get("role") or "user"),
+            }
+            for user_id in user_ids
+            if user_id in users
+        ]
+
     def _find_trip(trip_id: str, ctx) -> dict | None:
         trip = ctx.trip_repository.get(trip_id)
         if trip is None:
             for t in ctx.trip_repository.list():
                 if str(t.get("team_id") or t.get("team") or "") == trip_id:
-                    return t
-        return trip
+                    trip = t
+                    break
+        if trip is None:
+            return None
+        tenant_id = str(trip.get("tenant_id") or "")
+        assigned_ids = ctx.trip_assignment_repository.list_user_ids(
+            str(trip.get("id") or ""), tenant_id
+        )
+        return {
+            **trip,
+            "assigned_user_ids": assigned_ids,
+            "assigned_users": _assignee_profiles(ctx, tenant_id, assigned_ids),
+        }
 
     # ═══ 工作流状态总览 ═══
     @fastapi_app.get("/api/trips/{trip_id}/workflow-status")
@@ -4288,18 +5240,297 @@ def create_app() -> FastAPI:
         ctx.trip_repository.update(str(trip.get("id","")), {"guests": guests})
         return _ok({"trip_id": trip_id, "removed": removed, "message": "游客已移除"})
 
+    @fastapi_app.get("/api/trips/{trip_id}/assignments")
+    def get_trip_assignments(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        tenant_id = _current_tenant_id(user)
+        assigned_ids = ctx.trip_assignment_repository.list_user_ids(
+            str(trip.get("id") or ""), tenant_id
+        )
+        users = [
+            {
+                "id": str(profile.get("id") or ""),
+                "username": str(profile.get("username") or ""),
+                "role": str(profile.get("role") or "user"),
+            }
+            for profile in ctx.auth_service.list_users(tenant_id)
+            if str(profile.get("id") or "") in assigned_ids
+        ]
+        return _ok(
+            {
+                "trip_id": str(trip.get("id") or ""),
+                "assigned_user_ids": assigned_ids,
+                "users": users,
+            }
+        )
+
+    @fastapi_app.put("/api/trips/{trip_id}/assignments")
+    def update_trip_assignments(
+        trip_id: str,
+        payload: TripAssignmentRequest,
+        user: dict[str, str] = Depends(require_admin),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        tenant_id = _current_tenant_id(user)
+        tenant_users = {
+            str(profile.get("id") or ""): profile
+            for profile in ctx.auth_service.list_users(tenant_id)
+        }
+        requested = [str(user_id).strip() for user_id in payload.user_ids if str(user_id).strip()]
+        invalid = [user_id for user_id in requested if user_id not in tenant_users]
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid_assigned_user_ids:{','.join(invalid)}",
+            )
+        assigned = ctx.trip_assignment_repository.set_assignments(
+            str(trip.get("id") or ""), tenant_id, requested
+        )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="trip_assignments_updated",
+            target=str(trip.get("id") or ""),
+            detail={"assigned_user_ids": assigned},
+        )
+        return _ok(
+            {
+                "trip_id": str(trip.get("id") or ""),
+                "assigned_user_ids": assigned,
+                "users": [
+                    {
+                        "id": user_id,
+                        "username": str(tenant_users[user_id].get("username") or ""),
+                        "display_name": str(tenant_users[user_id].get("display_name") or ""),
+                        "role": str(tenant_users[user_id].get("role") or "user"),
+                    }
+                    for user_id in assigned
+                ],
+            }
+        )
+
+    @fastapi_app.put("/api/trips/{trip_id}/send-mode")
+    def update_trip_send_mode(
+        trip_id: str,
+        payload: TripSendModeRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        if payload.mode not in {"auto", "approval"}:
+            raise HTTPException(status_code=400, detail="发送模式只能是 auto 或 approval")
+        actual_trip_id = str(trip.get("id") or trip_id)
+        ctx.trip_repository.update(actual_trip_id, {"send_mode": payload.mode})
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="trip_send_mode_updated",
+            target=actual_trip_id,
+            detail={"mode": payload.mode},
+        )
+        return _ok(
+            {
+                "trip_id": actual_trip_id,
+                "send_mode": payload.mode,
+                "message": "已切换为自动发送" if payload.mode == "auto" else "已切换为需导游确认",
+            }
+        )
+
     @fastapi_app.get("/api/trips/{trip_id}/staff")
     def get_trip_staff(trip_id: str, user=Depends(get_current_user), ctx=Depends(get_ctx)):
         _require_permission_or_403(user, "trip:read")
         trip = _find_trip(trip_id, ctx)
         if trip is None: raise HTTPException(404, "Trip not found")
         assert_trip_access(user, trip)
+        role_recipients = trip.get("role_recipients")
+        if not isinstance(role_recipients, dict):
+            role_recipients = {}
+
+        def recipient_fields(role: str) -> dict[str, str]:
+            raw = role_recipients.get(role)
+            if isinstance(raw, str):
+                value = raw.strip()
+                if value.startswith(("http://", "https://")):
+                    return {"recipient_channel": "wechat_work_group", "recipient_address": value}
+                return {"recipient_channel": "sms", "recipient_address": value}
+            if isinstance(raw, dict):
+                address = str(raw.get("address") or raw.get("phone") or "").strip()
+                channel = str(raw.get("channel") or "").strip().lower()
+                if channel not in {"sms", "wechat_work_group"}:
+                    channel = "sms" if address and not address.startswith("http") else "wechat_work_group"
+                return {"recipient_channel": channel, "recipient_address": address}
+            return {"recipient_channel": "", "recipient_address": ""}
+
         staff = [
-            {"role": "manager", "name": trip.get("trip_manager_name", ""), "phone": trip.get("trip_manager_phone", "")},
-            {"role": "concierge", "name": trip.get("concierge_name", ""), "phone": trip.get("concierge_phone", "")},
-            {"role": "driver", "name": trip.get("driver_name", ""), "phone": trip.get("driver_phone", "")},
+            {
+                "role": "manager",
+                "name": trip.get("trip_manager_name", ""),
+                "phone": trip.get("trip_manager_phone", ""),
+                **recipient_fields("manager"),
+            },
+            {
+                "role": "concierge",
+                "name": trip.get("concierge_name", ""),
+                "phone": trip.get("concierge_phone", ""),
+                **recipient_fields("concierge"),
+            },
+            {
+                "role": "driver",
+                "name": trip.get("driver_name", ""),
+                "phone": trip.get("driver_phone", ""),
+                **recipient_fields("driver"),
+            },
         ]
-        return _ok({"trip_id": trip_id, "staff": staff})
+        return _ok({"trip_id": trip_id, "staff": staff, "group_configured": bool(str(trip.get("webhook_url") or "").strip())})
+
+    @fastapi_app.get("/api/trips/{trip_id}/staff-messages")
+    def get_staff_messages(
+        trip_id: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "trip:read")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        from zoneinfo import ZoneInfo
+
+        today = datetime.now(tz=ZoneInfo("Asia/Shanghai")).date()
+        tenant_id = _current_tenant_id(user)
+        attempts = [
+            item
+            for item in ctx.notification_attempt_repository.list_history(limit=None)
+            if str(item.get("tenant_id") or "") == tenant_id
+            and str(item.get("trip_id") or "") == str(trip.get("id") or "")
+        ]
+        items = build_staff_messages(trip, attempts, today=today)
+        return _ok(
+            {
+                "trip_id": str(trip.get("id") or ""),
+                "today": today.isoformat(),
+                "group_configured": bool(str(trip.get("webhook_url") or "").strip()),
+                "items": items,
+            }
+        )
+
+    @fastapi_app.post("/api/trips/{trip_id}/staff-messages/{role}/send")
+    def send_staff_message(
+        trip_id: str,
+        role: str,
+        payload: StaffMessageSendRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        trip = _find_trip(trip_id, ctx)
+        if trip is None:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        assert_trip_access(user, trip)
+        if role not in STAFF_ROLE_LABELS:
+            raise HTTPException(status_code=400, detail="无效的分岗位角色")
+        if payload.slot not in {"morning", "afternoon"}:
+            raise HTTPException(status_code=400, detail="分岗位消息只支持早间和午间")
+        from zoneinfo import ZoneInfo
+
+        today = datetime.now(tz=ZoneInfo("Asia/Shanghai")).date()
+        tenant_id = _current_tenant_id(user)
+        content = str(payload.content or "").strip() or render_role_content(
+            trip, role, payload.slot, today.month
+        )
+        if not content:
+            raise HTTPException(status_code=400, detail="分岗位消息内容为空")
+        recipient = resolve_recipient(trip, role)
+        channel = (
+            Channel.SMS
+            if recipient.get("channel") == "sms"
+            else Channel.WECHAT_WORK_GROUP
+        )
+        address = str(recipient.get("address") or "").strip()
+        tenant_config = ctx.tenant_notification_config_repository.get(tenant_id) or {}
+        if channel is Channel.SMS and not address:
+            raise HTTPException(status_code=400, detail="该岗位还没有配置接收手机号")
+        if (
+            channel is Channel.WECHAT_WORK_GROUP
+            and not address
+            and not str(tenant_config.get("wechat_webhook_url") or "").strip()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="本团还没有配置企业微信群，请先在「群配置」中填写 Webhook",
+            )
+        schedule_key = f"{trip.get('id', '')}:{today.isoformat()}:staff:{role}:{payload.slot}"
+        task = NotificationTask(
+            tenant_id=tenant_id,
+            project_id=str(trip.get("project_id") or trip.get("team_id") or ""),
+            team_id=str(trip.get("team_id") or trip.get("team") or ""),
+            trip_id=str(trip.get("id") or ""),
+            customer_id=(
+                address if channel is Channel.SMS else f"staff:{role}:{trip.get('id', '')}"
+            ),
+            rendered_content=content,
+            idempotency_key=(
+                f"staff-manual:{trip.get('id', '')}:{role}:{payload.slot}:{uuid4().hex}"
+            ),
+            notification_type=NotificationType.DAILY_REMINDER,
+            primary_channel=channel,
+            fallback_channel=None,
+            provider_context={
+                "customer_name": STAFF_ROLE_LABELS[role],
+                "role": role,
+                "trip_label": str(trip.get("destination") or ""),
+                "webhook_url": address if channel is Channel.WECHAT_WORK_GROUP else "",
+                "operator_id": user["id"],
+                "operator_name": user.get("display_name") or user.get("username", user["id"]),
+                "schedule_key": schedule_key,
+            },
+        )
+        ctx.notification_tasks[task.id] = task
+        result = ctx.notification_service.dispatch(task)
+        if not result.get("ok"):
+            reason = str(result.get("reason") or "send_failed")
+            permanent = _workflow_error_is_permanent(reason)
+            job = ctx.async_dispatch_service.enqueue(
+                task,
+                channel=channel.value,
+                status="manual_intervention" if permanent else "pending",
+                last_error=reason if permanent else "",
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_workflow_failure_message(reason, job.job_id),
+            )
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="staff_message_sent",
+            target=str(trip.get("id") or ""),
+            detail={"role": role, "slot": payload.slot, "channel": channel.value},
+        )
+        return _ok(
+            {
+                "trip_id": str(trip.get("id") or ""),
+                "role": role,
+                "role_label": STAFF_ROLE_LABELS[role],
+                "slot": payload.slot,
+                "content": content,
+                "channel": channel.value,
+                "message": f"{STAFF_ROLE_LABELS[role]}消息已发送",
+            }
+        )
 
     @fastapi_app.put("/api/trips/{trip_id}/staff")
     def update_trip_staff(trip_id: str, body: dict[str, Any], user=Depends(get_current_user), ctx=Depends(get_ctx)):
@@ -4307,13 +5538,15 @@ def create_app() -> FastAPI:
         trip = _find_trip(trip_id, ctx)
         if trip is None: raise HTTPException(404, "Trip not found")
         assert_trip_access(user, trip)
-        staff_list: list[dict[str, str]] = body.get("staff", [])
+        staff_list: list[dict[str, Any]] = body.get("staff", [])
         role_field_map = {
             "manager": ("trip_manager_name", "trip_manager_phone"),
             "concierge": ("concierge_name", "concierge_phone"),
             "driver": ("driver_name", "driver_phone"),
         }
-        updates: dict[str, str] = {}
+        updates: dict[str, Any] = {}
+        existing_recipients = trip.get("role_recipients")
+        role_recipients = dict(existing_recipients) if isinstance(existing_recipients, dict) else {}
         for item in staff_list:
             role = str(item.get("role", "")).strip()
             if role not in role_field_map:
@@ -4321,8 +5554,37 @@ def create_app() -> FastAPI:
             name_field, phone_field = role_field_map[role]
             updates[name_field] = str(item.get("name", "")).strip()
             updates[phone_field] = str(item.get("phone", "")).strip()
+            if "recipient_channel" not in item and "recipient_address" not in item:
+                # Legacy clients only send name/phone; keep existing targets.
+                continue
+            channel = str(item.get("recipient_channel") or "").strip()
+            address = str(item.get("recipient_address") or "").strip()
+            if not channel:
+                if address.startswith(("http://", "https://")):
+                    channel = "wechat_work_group"
+                elif address:
+                    channel = "sms"
+            if channel and channel not in {"sms", "wechat_work_group"}:
+                raise HTTPException(status_code=400, detail="岗位接收方式只能是企业微信群或短信")
+            if address:
+                role_recipients[role] = {"channel": channel, "address": address}
+            else:
+                role_recipients.pop(role, None)
+        updates["role_recipients"] = role_recipients
         ctx.trip_repository.update(str(trip.get("id", "")), updates)
-        ctx.audit_service.record(operator_id=user["id"], action="staff_updated", target=trip_id, detail={"roles": list(updates.keys())})
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="staff_updated",
+            target=trip_id,
+            detail={
+                "roles": [
+                    role
+                    for role in role_field_map
+                    if any(item.get("role") == role for item in staff_list)
+                ],
+                "custom_recipients": sorted(role_recipients),
+            },
+        )
         return _ok({"trip_id": trip_id, "staff": staff_list, "message": "人员配置已保存"})
 
     @fastapi_app.get("/api/trips/{trip_id}/itinerary")
@@ -4344,6 +5606,20 @@ def create_app() -> FastAPI:
         ctx.trip_repository.update(str(trip.get("id","")), {"itinerary": days})
         ctx.audit_service.record(operator_id=user["id"], action="itinerary_updated", target=trip_id, detail={"days": len(days)})
         return _ok({"trip_id": trip_id, "days": days, "message": f"行程表已更新，共 {len(days)} 天"})
+
+    @fastapi_app.post("/api/notifications/ai-polish")
+    async def ai_polish_notification(
+        payload: AIPolishRequest,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        _require_permission_or_403(user, "notification:write")
+        content, provider = await polish_travel_message(
+            payload.content,
+            destination=payload.destination,
+            scene=payload.scene,
+        )
+        return _ok({"content": content, "provider": provider})
 
     @fastapi_app.post("/api/notifications/generate-daily")
     def generate_daily_notifications(
@@ -4413,7 +5689,7 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         _require_permission_or_403(user, "notification:read")
-        trip = ctx.trip_repository.get(payload.trip_id)
+        trip = _find_trip(payload.trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -4453,7 +5729,7 @@ def create_app() -> FastAPI:
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         _require_permission_or_403(user, "notification:write")
-        trip = ctx.trip_repository.get(payload.trip_id)
+        trip = _find_trip(payload.trip_id, ctx)
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found")
         assert_trip_access(user, trip)
@@ -4676,7 +5952,7 @@ def create_app() -> FastAPI:
         team_id = _resolve_team_id(payload.team, payload.team_id)
         trip_label = payload.trip or payload.trip_id or ""
         if payload.trip_id:
-            trip = ctx.trip_repository.get(payload.trip_id)
+            trip = _find_trip(payload.trip_id, ctx)
             if trip is not None:
                 assert_trip_access(user, trip)
                 destination = trip.get("destination", destination)
@@ -4689,7 +5965,7 @@ def create_app() -> FastAPI:
             rendered = ctx.template_service.render_notification(
                 template,
                 {
-                    "customer_name": payload.customer_name or user.get("username", user["id"]),
+                    "customer_name": payload.customer_name or user.get("display_name") or user.get("username", user["id"]),
                     "destination": destination,
                 },
             )
@@ -4703,8 +5979,10 @@ def create_app() -> FastAPI:
             primary_channel=_parse_channel(payload.channel),
             fallback_channel=Channel.WECHAT_WORK_GROUP,
             provider_context={
-                "customer_name": payload.customer_name or user.get("username", user["id"]),
+                "customer_name": payload.customer_name or user.get("display_name") or user.get("username", user["id"]),
                 "trip_label": trip_label,
+                "operator_id": user["id"],
+                "operator_name": user.get("display_name") or user.get("username", user["id"]),
             },
         )
         ctx.notification_tasks[task.id] = task
@@ -5009,7 +6287,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/analytics/metrics")
     def analytics_metrics(
-        user: dict[str, str] = Depends(get_current_user),
+        user: dict[str, str] = Depends(require_admin),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
         snapshot = ctx.analytics_service.build_metrics_snapshot()

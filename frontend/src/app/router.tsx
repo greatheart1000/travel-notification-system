@@ -7,6 +7,7 @@ export type AppPage =
   | 'group_high_risk'
   | 'group_detail'
   | 'trips'
+  | 'team_execution'
   | 'trip_notifications'
   | 'trip_workflow'
   | 'analytics'
@@ -25,15 +26,25 @@ export interface AppRoute {
   taskId?: string
   groupId?: string
   tripId?: string | null
+  tripTab?: string
 }
 
 export function parseAppRoute(pathname: string, search: string): AppRoute {
   const parts = pathname.split('/').filter(Boolean)
 
+  if (parts[0] === 'team') return { page: 'team_execution' }
+
   if (parts.length === 0 || parts[0] === 'trips') {
     if (parts[1] && parts[2] === 'workflow') return { page: 'trip_workflow', tripId: decodeURIComponent(parts[1]) }
     if (parts[1] && parts[2] === 'notifications') return { page: 'trip_notifications', tripId: decodeURIComponent(parts[1]) }
-    if (parts[1]) return { page: 'trips', tripId: decodeURIComponent(parts[1]) }
+    if (parts[1]) {
+      const query = new URLSearchParams(search)
+      return {
+        page: 'trips',
+        tripId: decodeURIComponent(parts[1]),
+        tripTab: query.get('tab') ?? undefined,
+      }
+    }
     return { page: 'trips', tripId: null }
   }
 
@@ -94,6 +105,8 @@ export function pageToPath(page: AppPage, params?: { taskId?: string; groupId?: 
       return `/groups/high-risk/${encodeURIComponent(params?.groupId ?? '')}`
     case 'analytics':
       return '/analytics'
+    case 'team_execution':
+      return '/team'
     case 'trips':
       return params?.tripId ? `/trips/${encodeURIComponent(params.tripId)}` : '/trips'
     case 'trip_notifications':

@@ -16,6 +16,7 @@ def _create_rule(repo: NotificationRuleRepository, **overrides):
         "time_slot": "morning",
         "scene": "normal",
         "channels": ["sms"],
+        "template_id": "tpl-1",
         "conditions": {"destination": "阿勒泰"},
         "enabled": True,
     }
@@ -55,6 +56,7 @@ def test_policy_allows_matching_rule(json_store) -> None:
     assert decision.allowed is True
     assert decision.channels == ["sms"]
     assert decision.rule_ids
+    assert decision.template_id == "tpl-1"
 
 
 def test_policy_blocks_when_conditions_do_not_match(json_store) -> None:

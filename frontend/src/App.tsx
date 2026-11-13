@@ -9,6 +9,8 @@ import { authApi } from './services/api'
 import type { CurrentUser } from './types/api'
 
 const Analytics = lazy(() => import('./pages/Analytics').then((module) => ({ default: module.Analytics })))
+const TeamExecution = lazy(() => import('./pages/TeamExecution').then((module) => ({ default: module.TeamExecution })))
+const GuideWorkspace = lazy(() => import('./pages/GuideWorkspace').then((module) => ({ default: module.GuideWorkspace })))
 const Trips = lazy(() => import('./pages/Trips').then((module) => ({ default: module.Trips })))
 const TripNotifications = lazy(() => import('./pages/TripNotifications').then((module) => ({ default: module.TripNotifications })))
 const TripWorkflowPage = lazy(() => import('./pages/TripWorkflowPage').then((module) => ({ default: module.TripWorkflowPage })))
@@ -44,6 +46,33 @@ function SessionLoading() {
   )
 }
 
+const ADMIN_ONLY_PAGES = new Set([
+  'team_execution',
+  'analytics',
+  'billing',
+  'settings_channels',
+  'settings_users',
+  'settings_jobs',
+])
+
+function AccessDenied({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="mx-auto w-full max-w-page px-4 py-10 sm:px-6 lg:px-8">
+      <div className="rounded-card border border-paper-200 bg-white p-8 text-center shadow-card">
+        <p className="text-base font-medium text-paper-900">仅管理员可访问此页面</p>
+        <p className="mt-2 text-sm text-paper-500">当前账号没有查看企业级数据与账单的权限</p>
+        <button
+          type="button"
+          onClick={onBack}
+          className="mt-5 rounded-control bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700"
+        >
+          返回行程管理
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [route, setRoute] = useState<AppRoute>(() =>
     parseAppRoute(window.location.pathname, window.location.search),
@@ -52,10 +81,12 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [user, setUser] = useState<CurrentUser | null>(null)
   const [tenant, setTenant] = useState<TenantInfo | null>(null)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
   const navigate = useCallback((path: string) => {
+    const url = new URL(path, window.location.origin)
     window.history.pushState({}, '', path)
-    setRoute(parseAppRoute(path, ''))
+    setRoute(parseAppRoute(url.pathname, url.search))
   }, [])
 
   const loadSession = useCallback(async () => {
@@ -131,6 +162,19 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
+  useEffect(() => {
+    setIsSidebarOpen(false)
+  }, [route.page])
+
+  useEffect(() => {
+    if (!isSidebarOpen) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsSidebarOpen(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isSidebarOpen])
+
   const handleAuthenticated = useCallback(async () => {
     const profile = await loadSession()
     navigate(profile.role === 'operator' ? '/operator' : '/trips')
@@ -138,6 +182,8 @@ export default function App() {
 
   const sidebarPage: SidebarPage = useMemo(() => {
     switch (route.page) {
+      case 'team_execution':
+        return 'team'
       case 'analytics':
         return 'analytics'
       case 'preferences':
@@ -160,11 +206,26 @@ export default function App() {
   }, [route.page])
 
   const pageNode = useMemo(() => {
+    if (user && user.role !== 'admin' && ADMIN_ONLY_PAGES.has(route.page)) {
+      return <AccessDenied onBack={() => navigate('/trips')} />
+    }
     switch (route.page) {
       case 'trips':
+        if (user && user.role !== 'admin' && !route.tripId) {
+          return (
+            <GuideWorkspace
+              onOpenTrip={(tripId, tab) =>
+                navigate(
+                  `/trips/${encodeURIComponent(tripId)}${tab ? `?tab=${encodeURIComponent(tab)}` : ''}`,
+                )
+              }
+            />
+          )
+        }
         return (
           <Trips
             tripId={route.tripId ?? null}
+            initialTab={route.tripTab}
             onOpenTrip={(tripId) => navigate(`/trips/${encodeURIComponent(tripId)}`)}
             onBackToList={() => navigate('/trips')}
           />
@@ -181,6 +242,16 @@ export default function App() {
           <TripWorkflowPage
             tripId={route.tripId ?? ''}
             onBack={() => navigate(`/trips/${encodeURIComponent(route.tripId ?? '')}`)}
+          />
+        )
+      case 'team_execution':
+        return (
+          <TeamExecution
+            onOpenTrip={(tripId, tab) =>
+              navigate(
+                `/trips/${encodeURIComponent(tripId)}${tab ? `?tab=${encodeURIComponent(tab)}` : ''}`,
+              )
+            }
           />
         )
       case 'analytics':
@@ -208,7 +279,7 @@ export default function App() {
           />
         )
     }
-  }, [navigate, route.page, route.tripId])
+  }, [navigate, route.page, route.tripId, route.tripTab, user])
 
   if (isCheckingAuth) {
     return <SessionLoading />
@@ -230,19 +301,35 @@ export default function App() {
     <SessionProvider
       value={{ user, tenant, refreshSession: async () => { await loadSession() } }}
     >
-      <div className="flex h-screen bg-paper-100 print:block print:h-auto print:bg-white">
-        <div className="print:hidden">
+      <div className="app-canvas flex h-screen print:block print:h-auto print:bg-white">
+        {isSidebarOpen ? (
+          <button
+            type="button"
+            aria-label="关闭菜单"
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 z-40 bg-paper-950/30 lg:hidden"
+          />
+        ) : null}
+        <div
+          className={`fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 print:hidden lg:static lg:z-auto lg:translate-x-0 lg:transition-none ${
+            isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
           <Sidebar
             currentPage={sidebarPage}
-            onPageChange={(page) => navigate(pageToPath(page))}
+            onPageChange={(page) => {
+              setIsSidebarOpen(false)
+              navigate(pageToPath(page))
+            }}
             userRole={user?.role ?? 'user'}
             tenantName={tenant?.name}
-            username={user?.username}
+            username={user?.display_name || user?.username}
+            onClose={() => setIsSidebarOpen(false)}
           />
         </div>
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <Header />
-          <main className="flex-1 overflow-y-auto">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <Header onOpenMenu={() => setIsSidebarOpen(true)} />
+          <main className="flex-1 overflow-y-auto bg-transparent">
             <Suspense fallback={<PageLoadingFallback />}>{pageNode}</Suspense>
           </main>
         </div>
@@ -253,6 +340,8 @@ export default function App() {
 
 function pageToPath(page: SidebarPage): string {
   switch (page) {
+    case 'team':
+      return '/team'
     case 'analytics':
       return '/analytics'
     case 'preferences':

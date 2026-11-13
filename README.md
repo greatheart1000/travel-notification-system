@@ -40,12 +40,15 @@ curl -fsS http://127.0.0.1:8000/api/health/detail
 | 变量 | 说明 |
 |---|---|
 | `APP_ENV` | `production` / `staging` / `dev` / `test` |
+| `SEED_DEMO_DATA` | 可选。仅 `dev`/`test`/`local` 默认写入演示行程、规则与模板；其他环境需显式设为 `true` |
+| `SEED_DEMO_USERS` | 可选。默认 `true`；设为 `false` 时不创建内置 admin/user/partner 演示账号，只保留引导管理员 |
 | `APP_BASE_URL` | 对外访问地址，用于支付回调与邮件链接 |
 | `TRAVEL_NOTIFICATION_PERSISTENCE_BACKEND` | `mysql`（生产）或 `json`（本地） |
 | `TRAVEL_NOTIFICATION_MYSQL_*` | MySQL 连接信息 |
 | `AUTH_TOKEN_SECRET` / `VERIFICATION_CODE_SECRET` | 会话与验证码签名密钥，务必使用随机长字符串 |
 | `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` | 首个平台管理员 |
 | `SMS_PROVIDER` | `aliyun`（生产）；`mock` 仅限本地 |
+| `GLM_API_KEY` / `GLM_MODEL` | 可选。配置后使用智谱 GLM 润色通知文案（待润色文本会发送到 GLM API）；未配置时使用本地安全润色 |
 | `ALIYUN_SMS_AK` / `ALIYUN_SMS_SK` | 阿里云短信凭证（只放环境变量/密钥管理） |
 | `ALIYUN_SMS_SIGN_NAME` | 短信签名，例如 `江西锌鑫` |
 | `ALIYUN_SMS_LOGIN_TEMPLATE_CODE` | 登录验证码模板 CODE |
@@ -90,11 +93,16 @@ Stripe：https://<域名>/api/payments/stripe/webhook
 ## 商业化能力
 
 - **自助注册与登录**：企业注册、短信验证码登录、密码登录、短信重置密码、登录失败限流。
-- **多租户与团队**：租户级数据隔离，管理员/普通成员角色，团队成员管理。
+- **多租户与团队**：租户级数据隔离，管理员 / 导游 / 普通成员角色；管理员建团并把成员分配到行程，导游只看到并执行被分配的团。
 - **套餐与计费**：免费版/标准版/成长版/企业版，试用期，短信额度按自然月统计与拦截。
 - **在线支付**：易支付、极速付、Stripe、本地模拟支付；订单状态机与幂等回调。
 - **通知渠道**：租户级企业微信 webhook、短信服务商/签名/模板配置，失败关闭（fail-closed）。
-- **通知规则**：阶段/时段/场景/条件组匹配，通道与优先级可配置。
+- **通知规则**：阶段/时段/场景/条件组匹配，通道与优先级可配置；规则内容可直接展开查看。
+- **企业微信群触达**：行前/行中/行后定时发送到对应行程群，群消息按次去重；天气预警可多团群发。
+- **团队执行**：管理员查看每位导游负责的行程、实际发送的通知内容、发送人和失败状态。
+- **每团发送模式**：每个团可独立设置「自动发送」或「需我确认」；确认模式下调度器只生成计划，由导游检查后发送。
+- **分岗位消息**：团期负责人（司导）、旅行管家、司机早间/午间话术独立成稿、独立发送；每个岗位可跟随本团群、使用单独企业微信群或短信手机号。
+- **AI 文案润色**：通知模板、群提醒和分岗位消息支持 GLM 润色；未配置密钥时使用保留事实的本地安全润色。
 - **可靠性**：异步 outbox、跨进程锁、重试与死信、人工重放、超时人工复核。
 - **可观测性**：`X-Trace-Id`、指标端点、健康详情、手机号/webhook 脱敏。
 - **支付回执**：配置 SMTP 后自动发送支付成功邮件。
@@ -188,6 +196,11 @@ POST /api/payments/{provider}/notify 支付回调（公开）
 GET  /api/admin/tenant-notification-config 租户渠道配置
 GET  /api/admin/notification-jobs   死信/队列任务
 POST /api/admin/users               团队成员管理
+GET  /api/trips/{trip_id}/assignments   查看行程导游分配
+PUT  /api/trips/{trip_id}/assignments   管理员分配行程执行人
+POST /api/trips/{trip_id}/group-reminder 手动/AI 群提醒
+POST /api/notifications/ai-polish       AI 润色通知文案
+GET  /api/admin/team-overview           导游负责行程与通知内容总览
 GET  /api/operator/tenants          平台运营：租户列表
 GET  /api/operator/billing/overview 平台运营：收入与订单
 POST /api/operator/tenants/{id}/activate-plan 平台运营：手动开通

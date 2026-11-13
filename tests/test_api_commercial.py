@@ -115,16 +115,17 @@ def test_tenant_profile_and_user_management(monkeypatch, tmp_path) -> None:
         updated = client.put(
             "/api/admin/tenant-profile",
             headers=_auth(token),
-            json={"name": "沙笛旅行·商业化版", "contact_phone": "13900000002"},
+            json={"name": "月亮旅行·商业化版", "contact_phone": "13900000002"},
         )
         assert updated.status_code == 200, updated.text
-        assert updated.json()["data"]["name"] == "沙笛旅行·商业化版"
+        assert updated.json()["data"]["name"] == "月亮旅行·商业化版"
 
         created = client.post(
             "/api/admin/users",
             headers=_auth(token),
             json={
                 "username": "operator1",
+                "display_name": "李媛",
                 "password": "secret123",
                 "role": "user",
                 "phone": "13900000003",
@@ -132,11 +133,20 @@ def test_tenant_profile_and_user_management(monkeypatch, tmp_path) -> None:
         )
         assert created.status_code == 201, created.text
         assert created.json()["data"]["username"] == "operator1"
+        assert created.json()["data"]["display_name"] == "李媛"
+
+        renamed = client.put(
+            "/api/admin/users/operator1",
+            headers=_auth(token),
+            json={"display_name": "李媛（客服）"},
+        )
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["data"]["display_name"] == "李媛（客服）"
 
         listed = client.get("/api/admin/users", headers=_auth(token))
         assert listed.status_code == 200
-        usernames = {item["username"] for item in listed.json()["data"]["items"]}
-        assert "operator1" in usernames
+        users = {item["username"]: item for item in listed.json()["data"]["items"]}
+        assert users["operator1"]["display_name"] == "李媛（客服）"
 
 
 def test_payment_notify_rejects_invalid_signature(monkeypatch, tmp_path) -> None:

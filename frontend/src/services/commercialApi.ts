@@ -148,6 +148,7 @@ export interface NotificationJob {
 export interface TenantUser {
   id: string
   username: string
+  display_name?: string
   email: string
   phone?: string
   role: string
@@ -368,6 +369,7 @@ export const tenantUsersApi = {
   async create(payload: {
     username: string
     password: string
+    display_name?: string
     email?: string
     phone?: string
     role?: string
@@ -376,5 +378,67 @@ export const tenantUsersApi = {
   },
   async update(username: string, payload: Partial<TenantUser>) {
     return api.put<TenantUser>(`/admin/users/${encodeURIComponent(username)}`, payload)
+  },
+}
+
+
+export interface TeamTripSummary {
+  id: string
+  destination: string
+  team_id: string
+  start_date: string
+  end_date: string
+  participants: number
+  status: string
+  assigned_user_ids: string[]
+  send_mode?: 'auto' | 'approval'
+  webhook_configured: boolean
+  wecom_chat_id: string
+}
+
+export interface TeamNotificationSummary {
+  id: string
+  task_id: string
+  trip_id: string
+  trip_label: string
+  channel: string
+  status: string
+  content: string
+  customer_name: string
+  operator_id: string
+  operator_name: string
+  created_at: string
+}
+
+export interface TeamMemberOverview {
+  id: string
+  username: string
+  display_name?: string
+  role: string
+  phone: string
+  status: string
+  assigned_trips: TeamTripSummary[]
+  notification_count: number
+  recent_notifications: TeamNotificationSummary[]
+}
+
+export interface TeamOverview {
+  stats: {
+    members: number
+    assigned_trips: number
+    unassigned_trips: number
+    notifications_7d: number
+    failed_7d: number
+    trips_without_group: number
+  }
+  members: TeamMemberOverview[]
+  unassigned_trips: TeamTripSummary[]
+  trips_without_group: TeamTripSummary[]
+  recent_notifications: TeamNotificationSummary[]
+}
+
+export const teamOverviewApi = {
+  async get() {
+    return api.get<TeamOverview>('/admin/team-overview')
   },
 }

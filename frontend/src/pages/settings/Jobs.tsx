@@ -24,6 +24,29 @@ const STATUS_META: Record<string, { label: string; variant: 'success' | 'warning
   manual_intervention: { label: '待人工处理', variant: 'danger' },
 }
 
+const ERROR_LABELS: Record<string, string> = {
+  wechat_webhook_not_configured: '企业微信未配置，请到行程的「群配置」填写 Webhook',
+  invalid_webhook_url: '企业微信 Webhook 地址无效',
+  empty_content: '消息内容为空，请检查模板',
+  request_failed: '无法连接企业微信，请检查服务器网络',
+  task_not_found: '发送任务已丢失，请重新执行工作流',
+}
+
+const CHANNEL_LABELS: Record<string, string> = {
+  wechat_work_group: '企业微信',
+  sms: '短信',
+}
+
+function channelLabel(raw: string): string {
+  return CHANNEL_LABELS[raw] ?? raw
+}
+
+function errorLabel(raw: string): string {
+  if (!raw) return '-'
+  const key = raw.split(':', 1)[0]
+  return ERROR_LABELS[key] ?? raw
+}
+
 function formatDate(raw: string): string {
   if (!raw) return '-'
   const date = new Date(raw)
@@ -98,17 +121,18 @@ export function Jobs() {
       ) : null}
 
       <div className="overflow-hidden rounded-card border border-paper-200 bg-white shadow-card">
-        <table className="w-full text-left text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[900px] text-left text-sm">
           <thead>
             <tr className="border-b border-paper-200 text-xs font-medium text-paper-500">
-              <th className="px-5 py-3">任务 ID</th>
-              <th className="px-5 py-3">行程 / 团队</th>
-              <th className="px-5 py-3">渠道</th>
-              <th className="px-5 py-3">状态</th>
-              <th className="px-5 py-3">尝试次数</th>
-              <th className="px-5 py-3">下次执行</th>
-              <th className="px-5 py-3">错误摘要</th>
-              <th className="px-5 py-3 text-right">操作</th>
+              <th className="whitespace-nowrap px-5 py-3">任务 ID</th>
+              <th className="whitespace-nowrap px-5 py-3">行程 / 团队</th>
+              <th className="whitespace-nowrap px-5 py-3">渠道</th>
+              <th className="whitespace-nowrap px-5 py-3">状态</th>
+              <th className="hidden whitespace-nowrap px-5 py-3 2xl:table-cell">尝试次数</th>
+              <th className="hidden whitespace-nowrap px-5 py-3 2xl:table-cell">下次执行</th>
+              <th className="whitespace-nowrap px-5 py-3">错误摘要</th>
+              <th className="whitespace-nowrap px-5 py-3 text-right">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-paper-100">
@@ -130,19 +154,19 @@ export function Jobs() {
                 const canRequeue = ['failed', 'manual_intervention', 'retrying'].includes(job.status)
                 return (
                   <tr key={job.job_id} className="transition-colors hover:bg-paper-50">
-                    <td className="px-5 py-3 font-mono text-xs text-paper-600">{job.job_id}</td>
-                    <td className="px-5 py-3 text-paper-700">
+                    <td className="whitespace-nowrap px-5 py-3 font-mono text-xs text-paper-600">{job.job_id}</td>
+                    <td className="whitespace-nowrap px-5 py-3 text-paper-700">
                       {job.trip_id || '-'}
                       <span className="block text-xs text-paper-400">{job.team_id || ''}</span>
                     </td>
-                    <td className="px-5 py-3 text-paper-600">{job.channel}</td>
-                    <td className="px-5 py-3">
+                    <td className="whitespace-nowrap px-5 py-3 text-paper-600">{channelLabel(job.channel)}</td>
+                    <td className="whitespace-nowrap px-5 py-3">
                       <Badge variant={meta.variant}>{meta.label}</Badge>
                     </td>
-                    <td className="px-5 py-3 tabular-nums text-paper-600">{job.attempt}</td>
-                    <td className="px-5 py-3 tabular-nums text-paper-500">{formatDate(job.next_run_at)}</td>
-                    <td className="max-w-[16rem] truncate px-5 py-3 text-xs text-paper-500" title={job.last_error}>
-                      {job.last_error || '-'}
+                    <td className="hidden whitespace-nowrap px-5 py-3 tabular-nums text-paper-600 2xl:table-cell">{job.attempt}</td>
+                    <td className="hidden whitespace-nowrap px-5 py-3 tabular-nums text-paper-500 2xl:table-cell">{formatDate(job.next_run_at)}</td>
+                    <td className="max-w-[10rem] truncate px-5 py-3 text-xs text-paper-500" title={job.last_error}>
+                      {errorLabel(job.last_error)}
                     </td>
                     <td className="px-5 py-3 text-right">
                       {canRequeue ? (
@@ -164,6 +188,7 @@ export function Jobs() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
     </PageShell>
   )

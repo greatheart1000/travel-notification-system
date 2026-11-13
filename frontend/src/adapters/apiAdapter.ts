@@ -323,6 +323,9 @@ export function mapRawTrip(raw: RawTrip): Trip {
     guests,
     webhookUrl: raw.webhook_url || '',
     wecomChatId: raw.wecom_chat_id || '',
+    assignedUserIds: Array.isArray(raw.assigned_user_ids)
+      ? raw.assigned_user_ids.map((id) => String(id))
+      : [],
   }
 }
 
@@ -518,6 +521,7 @@ export function mapRawNotificationRule(raw: RawNotificationRule): NotificationRu
     priority,
     templateId,
     templateLabel,
+    tripId: safeText(raw.trip_id),
   }
 }
 
@@ -647,6 +651,7 @@ export function mapRawAnalytics(raw: RawAnalyticsResponse): AnalyticsData {
       }
     }),
     topTrips: topTrips.map((item, index) => ({
+      tripId: safeText(item.trip_id ?? item.tripId),
       name: safeText(item.name, `行程-${index + 1}`),
       notifications: asNumber(item.notifications, 0),
       satisfaction: asNumber(item.satisfaction, 0),

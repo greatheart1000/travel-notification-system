@@ -64,7 +64,7 @@ export function Notifications() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-semibold text-paper-900 mb-2">紧急天气通知</h1>
-      <p className="text-paper-600 mb-6">天气风险通知、AI风险分析与 AI生成通知文案预览。</p>
+      <p className="text-paper-600 mb-6">天气风险通知、风险判断与通知文案预览。</p>
       <div className="bg-white rounded-control border border-paper-200 shadow-card overflow-hidden">
         <div className="px-6 py-4 bg-danger-50 border-b border-danger-100">
           <h2 className="font-semibold text-danger-900">天气风险通知</h2>
@@ -78,11 +78,11 @@ export function Notifications() {
             <p className="text-sm text-paper-700">{summary.weatherSummary}</p>
           </section>
           <section>
-            <h3 className="text-sm font-semibold text-paper-900 mb-2">AI风险分析</h3>
+            <h3 className="text-sm font-semibold text-paper-900 mb-2">风险分析</h3>
             <p className="text-sm text-paper-700">{summary.aiRiskSummary}</p>
           </section>
           <section>
-            <h3 className="text-sm font-semibold text-paper-900 mb-2">AI生成通知文案</h3>
+            <h3 className="text-sm font-semibold text-paper-900 mb-2">通知文案</h3>
             <textarea
               ref={contentRef}
               value={content}
