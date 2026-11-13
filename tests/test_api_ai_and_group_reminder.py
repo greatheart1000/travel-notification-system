@@ -254,7 +254,6 @@ def test_booking_confirmation_sends_sms_once(monkeypatch, tmp_path) -> None:
 
 def test_reminder_suggestion_is_region_aware(monkeypatch, tmp_path) -> None:
     from datetime import date, timedelta
-    from zoneinfo import ZoneInfo
 
     app = _create_app(monkeypatch, tmp_path)
     start = date.today() + timedelta(days=2)

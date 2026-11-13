@@ -10,10 +10,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.models import Channel, NotificationType
 from app.modules.integration.weather_provider import WeatherInfo, WeatherProvider
-from app.services.staff_message_service import render_role_content, season_for
 from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
 from app.modules.notification.policy import NotificationPolicy, PolicyDecision
+from app.services.staff_message_service import render_role_content, season_for
 
 logger = logging.getLogger(__name__)
 

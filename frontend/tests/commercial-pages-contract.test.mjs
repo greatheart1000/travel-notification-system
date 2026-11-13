@@ -29,7 +29,7 @@ assert.match(rulesSource, /rulesApi\.list/, 'Rules page must load notification r
 assert.match(rulesSource, /rulesApi\.create/, 'Rules page must create notification rules.')
 assert.match(jobsSource, /jobsApi\.requeue/, 'Jobs page must requeue dead-letter jobs.')
 
-for (const page of ['billing', 'login', 'register']) {
+for (const page of ['Billing', 'Login', 'Register']) {
   assert.equal(existsSync(resolve(`frontend/src/pages/${page}.tsx`)), true, `${page} page must exist.`)
 }
 assert.match(sidebarSource, /通知渠道/, 'Sidebar must expose channel configuration.')
