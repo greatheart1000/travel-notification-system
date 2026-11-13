@@ -70,14 +70,13 @@ export function Jobs() {
 
   return (
     <PageShell
-      eyebrow="OPERATIONS"
       title="发送任务"
       description="查看异步发送队列与死信任务。失败任务可重新入队，重放会重置尝试次数并写审计日志。"
       actions={
         <select
           value={status}
           onChange={(event) => setStatus(event.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+          className="rounded-control border border-paper-300 bg-white px-3 py-2 text-sm text-paper-900 focus:border-accent-600 focus:outline-none"
         >
           {STATUS_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
@@ -88,40 +87,40 @@ export function Jobs() {
       }
     >
       {error ? (
-        <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div role="alert" className="mb-4 rounded-control border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
           {error}
         </div>
       ) : null}
       {notice ? (
-        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+        <div className="mb-4 rounded-control border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
           {notice}
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-hidden rounded-card border border-paper-200 bg-white shadow-card">
         <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-            <tr>
-              <th className="px-4 py-3">任务 ID</th>
-              <th className="px-4 py-3">行程 / 团队</th>
-              <th className="px-4 py-3">渠道</th>
-              <th className="px-4 py-3">状态</th>
-              <th className="px-4 py-3">尝试次数</th>
-              <th className="px-4 py-3">下次执行</th>
-              <th className="px-4 py-3">错误摘要</th>
-              <th className="px-4 py-3 text-right">操作</th>
+          <thead>
+            <tr className="border-b border-paper-200 text-xs font-medium text-paper-500">
+              <th className="px-5 py-3">任务 ID</th>
+              <th className="px-5 py-3">行程 / 团队</th>
+              <th className="px-5 py-3">渠道</th>
+              <th className="px-5 py-3">状态</th>
+              <th className="px-5 py-3">尝试次数</th>
+              <th className="px-5 py-3">下次执行</th>
+              <th className="px-5 py-3">错误摘要</th>
+              <th className="px-5 py-3 text-right">操作</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-paper-100">
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                  正在加载发送任务...
+                <td colSpan={8} className="px-5 py-8 text-center text-sm text-paper-500">
+                  正在加载发送任务
                 </td>
               </tr>
             ) : jobs.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={8} className="px-5 py-10 text-center text-sm text-paper-500">
                   当前没有符合条件的发送任务。
                 </td>
               </tr>
@@ -130,22 +129,22 @@ export function Jobs() {
                 const meta = STATUS_META[job.status] ?? { label: job.status, variant: 'default' as const }
                 const canRequeue = ['failed', 'manual_intervention', 'retrying'].includes(job.status)
                 return (
-                  <tr key={job.job_id}>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-600">{job.job_id}</td>
-                    <td className="px-4 py-3 text-slate-700">
+                  <tr key={job.job_id} className="transition-colors hover:bg-paper-50">
+                    <td className="px-5 py-3 font-mono text-xs text-paper-600">{job.job_id}</td>
+                    <td className="px-5 py-3 text-paper-700">
                       {job.trip_id || '-'}
-                      <span className="block text-xs text-slate-400">{job.team_id || ''}</span>
+                      <span className="block text-xs text-paper-400">{job.team_id || ''}</span>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{job.channel}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-5 py-3 text-paper-600">{job.channel}</td>
+                    <td className="px-5 py-3">
                       <Badge variant={meta.variant}>{meta.label}</Badge>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{job.attempt}</td>
-                    <td className="px-4 py-3 text-slate-500">{formatDate(job.next_run_at)}</td>
-                    <td className="max-w-[16rem] truncate px-4 py-3 text-xs text-slate-500" title={job.last_error}>
+                    <td className="px-5 py-3 tabular-nums text-paper-600">{job.attempt}</td>
+                    <td className="px-5 py-3 tabular-nums text-paper-500">{formatDate(job.next_run_at)}</td>
+                    <td className="max-w-[16rem] truncate px-5 py-3 text-xs text-paper-500" title={job.last_error}>
                       {job.last_error || '-'}
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-5 py-3 text-right">
                       {canRequeue ? (
                         <Button
                           size="sm"
@@ -153,12 +152,10 @@ export function Jobs() {
                           loading={requeueing === job.job_id}
                           onClick={() => void requeue(job)}
                         >
-                          <span className="flex items-center gap-1">
-                            <RefreshCw className="h-3.5 w-3.5" /> 重新入队
-                          </span>
+                          <RefreshCw className="h-3.5 w-3.5" /> 重新入队
                         </Button>
                       ) : (
-                        <span className="text-xs text-slate-400">-</span>
+                        <span className="text-xs text-paper-400">-</span>
                       )}
                     </td>
                   </tr>

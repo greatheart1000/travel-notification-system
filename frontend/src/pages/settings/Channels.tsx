@@ -21,6 +21,36 @@ const EMPTY_CONFIG: TenantNotificationConfig = {
   sms_credential_id: '',
 }
 
+const inputClass =
+  'mt-1 w-full rounded-control border border-paper-300 bg-white px-3 py-2 text-sm text-paper-900 transition-colors focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100'
+
+const cardClass = 'rounded-card border border-paper-200 bg-white p-5 shadow-card'
+
+function SectionHeading({
+  icon: Icon,
+  title,
+  hint,
+  status,
+}: {
+  icon: typeof Building2
+  title: string
+  hint: string
+  status?: React.ReactNode
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start gap-2.5">
+        <Icon className="mt-0.5 h-4 w-4 text-paper-500" />
+        <div>
+          <h2 className="text-base font-semibold text-paper-900">{title}</h2>
+          <p className="mt-0.5 text-xs text-paper-500">{hint}</p>
+        </div>
+      </div>
+      {status}
+    </div>
+  )
+}
+
 export function Channels() {
   const [config, setConfig] = useState<TenantNotificationConfig>(EMPTY_CONFIG)
   const [profile, setProfile] = useState<TenantInfo>({
@@ -103,74 +133,67 @@ export function Channels() {
 
   const feedback = (section: string) => {
     const current = state[section]
-    if (current === 'saved') return <p className="mt-3 text-xs text-emerald-600">{message[section]}</p>
-    if (current === 'error') return <p className="mt-3 text-xs text-red-600">{message[section]}</p>
+    if (current === 'saved') return <p className="mt-3 text-xs text-success-700">{message[section]}</p>
+    if (current === 'error') return <p className="mt-3 text-xs text-danger-700">{message[section]}</p>
     return null
   }
 
   return (
     <PageShell
-      eyebrow="SETTINGS"
       title="通知渠道配置"
       description="配置只对当前租户生效，保存后立即用于后续通知。原始 AK/SK 请放在环境变量或密钥管理服务中。"
     >
       {error ? (
-        <div role="alert" className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div role="alert" className="mb-6 rounded-control border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
           {error}
         </div>
       ) : null}
 
       {loading ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-500">
-          正在加载渠道配置...
+        <div className="rounded-card border border-paper-200 bg-white p-8 text-center text-sm text-paper-500">
+          正在加载渠道配置
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                <Building2 className="h-5 w-5" />
-              </span>
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900">企业资料</h2>
-                <p className="text-xs text-slate-500">
-                  用于账单抬头、支付回执与运营联系，邮箱可接收支付成功通知
-                </p>
-              </div>
-            </div>
+        <div className="grid gap-5 lg:grid-cols-2">
+          <section className={`${cardClass} lg:col-span-2`}>
+            <SectionHeading
+              icon={Building2}
+              title="企业资料"
+              hint="用于账单抬头、支付回执与运营联系，邮箱可接收支付成功通知"
+            />
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <label className="block text-sm font-medium text-slate-700">
+              <label className="block text-sm font-medium text-paper-700">
                 企业名称
                 <input
                   value={profile.name}
                   onChange={(event) => setProfile((prev) => ({ ...prev, name: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                  className={inputClass}
                 />
               </label>
-              <label className="block text-sm font-medium text-slate-700">
+              <label className="block text-sm font-medium text-paper-700">
                 联系人
                 <input
                   value={profile.contact_name ?? ''}
                   onChange={(event) =>
                     setProfile((prev) => ({ ...prev, contact_name: event.target.value }))
                   }
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                  className={inputClass}
                   placeholder="可选"
                 />
               </label>
-              <label className="block text-sm font-medium text-slate-700">
+              <label className="block text-sm font-medium text-paper-700">
                 联系电话
                 <input
                   value={profile.contact_phone ?? ''}
                   onChange={(event) =>
                     setProfile((prev) => ({ ...prev, contact_phone: event.target.value }))
                   }
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                  className={inputClass}
                   placeholder="可选"
                 />
               </label>
-              <label className="block text-sm font-medium text-slate-700">
+              <label className="block text-sm font-medium text-paper-700">
                 联系邮箱
                 <input
                   type="email"
@@ -178,7 +201,7 @@ export function Channels() {
                   onChange={(event) =>
                     setProfile((prev) => ({ ...prev, contact_email: event.target.value }))
                   }
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                  className={inputClass}
                   placeholder="用于接收支付回执"
                 />
               </label>
@@ -193,21 +216,16 @@ export function Channels() {
             </Button>
             {feedback('profile')}
           </section>
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
-                  <MessageSquare className="h-5 w-5" />
-                </span>
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">企业微信群通知</h2>
-                  <p className="text-xs text-slate-500">用于群发通知与岗位消息</p>
-                </div>
-              </div>
-              {statusBadge(Boolean(config.wechat_webhook_url))}
-            </div>
 
-            <label className="mt-5 block text-sm font-medium text-slate-700">
+          <section className={cardClass}>
+            <SectionHeading
+              icon={MessageSquare}
+              title="企业微信群通知"
+              hint="用于群发通知与岗位消息"
+              status={statusBadge(Boolean(config.wechat_webhook_url))}
+            />
+
+            <label className="mt-5 block text-sm font-medium text-paper-700">
               群机器人 Webhook
               <div className="mt-1 flex gap-2">
                 <input
@@ -216,20 +234,20 @@ export function Channels() {
                   onChange={(event) =>
                     setConfig((prev) => ({ ...prev, wechat_webhook_url: event.target.value }))
                   }
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                  className={`${inputClass} mt-0`}
                   placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
                 />
                 <button
                   type="button"
                   onClick={() => setShowWebhook((value) => !value)}
-                  className="shrink-0 rounded-lg border border-slate-300 px-3 text-slate-600 hover:bg-slate-50"
+                  className="shrink-0 rounded-control border border-paper-300 px-3 text-paper-500 transition-colors hover:bg-paper-50 hover:text-paper-900"
                   aria-label={showWebhook ? '隐藏 Webhook' : '显示 Webhook'}
                 >
                   {showWebhook ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </label>
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-paper-500">
               未配置时该渠道会失败关闭，不会回退到硬编码地址。仅接受企业微信官方群机器人地址。
             </p>
             <Button
@@ -243,29 +261,23 @@ export function Channels() {
             {feedback('wechat')}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
-                  <Send className="h-5 w-5" />
-                </span>
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">短信服务</h2>
-                  <p className="text-xs text-slate-500">用于游客与员工短信通知</p>
-                </div>
-              </div>
-              {statusBadge(Boolean(config.sms_provider || config.sms_template_code))}
-            </div>
+          <section className={cardClass}>
+            <SectionHeading
+              icon={Send}
+              title="短信服务"
+              hint="用于游客与员工短信通知"
+              status={statusBadge(Boolean(config.sms_provider || config.sms_template_code))}
+            />
 
             <div className="mt-5 space-y-4">
-              <label className="block text-sm font-medium text-slate-700">
+              <label className="block text-sm font-medium text-paper-700">
                 短信服务商
                 <select
                   value={config.sms_provider}
                   onChange={(event) =>
                     setConfig((prev) => ({ ...prev, sms_provider: event.target.value }))
                   }
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                  className={inputClass}
                 >
                   <option value="">未配置（沿用系统设置）</option>
                   <option value="aliyun">阿里云短信</option>
@@ -273,31 +285,31 @@ export function Channels() {
                 </select>
               </label>
               <div className="grid gap-4 sm:grid-cols-2">
-                <label className="block text-sm font-medium text-slate-700">
+                <label className="block text-sm font-medium text-paper-700">
                   短信签名
                   <input
                     value={config.sms_sign_name}
                     onChange={(event) =>
                       setConfig((prev) => ({ ...prev, sms_sign_name: event.target.value }))
                     }
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                    className={inputClass}
                     placeholder="例如：江西锌鑫"
                   />
                 </label>
-                <label className="block text-sm font-medium text-slate-700">
+                <label className="block text-sm font-medium text-paper-700">
                   通知模板 CODE
                   <input
                     value={config.sms_template_code}
                     onChange={(event) =>
                       setConfig((prev) => ({ ...prev, sms_template_code: event.target.value }))
                     }
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                    className={inputClass}
                     placeholder="例如：SMS_512540357"
                   />
                 </label>
               </div>
             </div>
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-paper-500">
               签名与模板需先在短信服务商控制台完成审核；未配置时发送链路将沿用系统级设置。
             </p>
             <Button
@@ -317,35 +329,31 @@ export function Channels() {
             {feedback('sms')}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                <ShieldCheck className="h-5 w-5" />
-              </span>
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900">凭证与安全</h2>
-                <p className="text-xs text-slate-500">系统只保存凭证引用 ID，原始密钥不会落库</p>
-              </div>
-            </div>
+          <section className={`${cardClass} lg:col-span-2`}>
+            <SectionHeading
+              icon={ShieldCheck}
+              title="凭证与安全"
+              hint="系统只保存凭证引用 ID，原始密钥不会落库"
+            />
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <label className="block text-sm font-medium text-slate-700">
+              <label className="block text-sm font-medium text-paper-700">
                 短信凭证引用 ID
                 <input
                   value={config.sms_credential_id}
                   onChange={(event) =>
                     setConfig((prev) => ({ ...prev, sms_credential_id: event.target.value }))
                   }
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                  className={inputClass}
                   placeholder="例如：qiankun-aliyun-sms-prod"
                 />
               </label>
-              <div className="text-sm text-slate-600">
-                <span className="block font-medium text-slate-700">最后更新时间</span>
-                <span className="mt-1 block">{config.updated_at || '尚未保存'}</span>
+              <div className="text-sm text-paper-600">
+                <span className="block font-medium text-paper-700">最后更新时间</span>
+                <span className="mt-1 block tabular-nums">{config.updated_at || '尚未保存'}</span>
               </div>
             </div>
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-paper-500">
               原始 AK/SK 请放在环境变量或密钥管理服务中，不要写入本页面。
             </p>
             <Button

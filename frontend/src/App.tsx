@@ -26,19 +26,19 @@ const Operator = lazy(() => import('./pages/Operator').then((module) => ({ defau
 
 function PageLoadingFallback() {
   return (
-    <div className="min-h-[240px] rounded-lg border border-gray-200 bg-white p-6 text-center">
-      <p className="text-base font-semibold text-gray-900">页面加载中...</p>
-      <p className="mt-2 text-sm text-gray-500">正在按需加载当前模块</p>
+    <div className="min-h-60 rounded-card border border-paper-200 bg-white p-6 text-center">
+      <p className="text-base font-medium text-paper-900">加载中</p>
+      <p className="mt-2 text-sm text-paper-500">正在加载当前模块</p>
     </div>
   )
 }
 
 function SessionLoading() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-        <p className="text-lg font-semibold text-slate-900">正在校验登录态...</p>
-        <p className="mt-2 text-sm text-slate-500">请稍候，正在加载企业工作台</p>
+    <div className="flex min-h-screen items-center justify-center bg-paper-100 p-6">
+      <div className="w-full max-w-md rounded-panel border border-paper-200 bg-white p-8 text-center shadow-card">
+        <p className="text-base font-medium text-paper-900">正在校验登录态</p>
+        <p className="mt-2 text-sm text-paper-500">请稍候，正在加载企业工作台</p>
       </div>
     </div>
   )
@@ -230,7 +230,7 @@ export default function App() {
     <SessionProvider
       value={{ user, tenant, refreshSession: async () => { await loadSession() } }}
     >
-      <div className="flex h-screen bg-slate-50 print:block print:h-auto print:bg-white">
+      <div className="flex h-screen bg-paper-100 print:block print:h-auto print:bg-white">
         <div className="print:hidden">
           <Sidebar
             currentPage={sidebarPage}

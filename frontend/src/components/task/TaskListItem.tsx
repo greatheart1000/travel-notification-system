@@ -45,18 +45,18 @@ function queueReasons(task: Task): string {
 
 export function TaskListItem({ task, onOpen, onComplete, onDefer, onTakeover, onMarkRisk }: TaskListItemProps) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-card border border-paper-200 bg-white p-4 shadow-card">
       <div className="flex items-start justify-between gap-3">
         <button className="text-left" onClick={() => onOpen(task.id)}>
-          <p className="text-base font-semibold text-slate-900">{task.title}</p>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="text-base font-semibold text-paper-900">{task.title}</p>
+          <p className="mt-1 text-sm text-paper-500">
             {task.teamName}（{task.teamCode}）· {task.destination}
           </p>
         </button>
         <StatusPill tone={statusTone(task.status)} label={statusTextMap[task.status]} />
       </div>
 
-      <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-slate-600 md:grid-cols-2">
+      <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-paper-600 md:grid-cols-2">
         <p>出发日期：{new Date(task.departureDate).toLocaleString()}</p>
         <p>截止时间：{new Date(task.dueAt).toLocaleString()}</p>
         <p>{formatRelativeDue(task)}</p>
@@ -64,8 +64,8 @@ export function TaskListItem({ task, onOpen, onComplete, onDefer, onTakeover, on
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">推荐动作：{task.recommendedAction}</span>
-        <span className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700">进入原因：{queueReasons(task)}</span>
+        <span className="rounded-md bg-paper-100 px-2 py-1 text-xs text-paper-600">推荐动作：{task.recommendedAction}</span>
+        <span className="rounded-md bg-warning-50 px-2 py-1 text-xs text-warning-700">进入原因：{queueReasons(task)}</span>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">

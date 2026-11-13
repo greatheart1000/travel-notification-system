@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { Plane, ShieldCheck, SlidersHorizontal, ScrollText } from 'lucide-react'
+import { ScrollText, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import { RouteMark } from '../RouteMark'
 
 interface AuthShellProps {
   title: string
@@ -14,59 +15,80 @@ const TRUST_POINTS = [
   { icon: ScrollText, text: '发送过程可追溯，失败可重放' },
 ]
 
+const PREVIEW_STEPS = [
+  { time: '行前 3 天', label: '行程单与出行提醒' },
+  { time: '行中每日', label: '集合与安全提示' },
+  { time: '行后 1 天', label: '满意度回访' },
+]
+
 export function AuthShell({ title, subtitle, children, footer }: AuthShellProps) {
   return (
-    <div className="min-h-screen bg-slate-50 lg:flex">
-      <aside className="relative hidden overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-sky-900 px-12 py-14 text-white lg:flex lg:w-[45%] lg:flex-col lg:justify-between">
+    <div className="min-h-screen bg-paper-100 lg:flex">
+      <aside className="hidden overflow-hidden bg-paper-950 px-10 py-12 text-paper-50 lg:flex lg:w-5/12 lg:flex-col lg:justify-between">
         <div>
-          <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-sky-500/20 ring-1 ring-sky-400/40">
-              <Plane className="h-5 w-5 text-sky-300" />
-            </span>
+          <div className="flex items-center gap-2.5">
+            <RouteMark className="h-6 w-6 text-accent-300" />
             <div>
-              <div className="text-xl font-semibold tracking-wide">行程管家</div>
-              <div className="text-xs uppercase tracking-[0.25em] text-sky-200/70">Travel Hub</div>
+              <div className="text-base font-semibold">行程管家</div>
+              <div className="text-xs text-paper-500">行程通知台</div>
             </div>
           </div>
 
-          <h1 className="mt-16 max-w-md text-3xl font-semibold leading-snug">
-            为旅行社提供行前、行中、行后一体化通知与管家协作
+          <h1 className="mt-14 max-w-md text-2xl font-semibold leading-snug">
+            行前、行中、行后的通知，按规则发到
+            <span className="whitespace-nowrap">短信和企业微信</span>
           </h1>
-          <p className="mt-4 max-w-md text-sm leading-relaxed text-slate-300">
-            把重复的提醒交给系统，把时间留给游客。多租户、可配置、可追溯，开箱即用的商业化行程通知平台。
+          <p className="mt-4 max-w-md text-sm leading-relaxed text-paper-400">
+            管理旅行团、排期和通知规则；发送结果可追踪，失败任务可重新入队。
           </p>
 
-          <ul className="mt-12 space-y-4">
+          <div className="mt-10 max-w-md rounded-card border border-paper-800 bg-paper-900 p-5">
+            <p className="text-xs font-medium text-paper-400">一次行程的通知节奏</p>
+            <ol className="mt-4 space-y-4">
+              {PREVIEW_STEPS.map((step, index) => (
+                <li key={step.time} className="flex gap-3">
+                  <span className="flex flex-col items-center">
+                    <span className="mt-1 h-2 w-2 rounded-full bg-accent-300" />
+                    {index < PREVIEW_STEPS.length - 1 ? (
+                      <span className="mt-1 w-px flex-1 bg-paper-700" />
+                    ) : null}
+                  </span>
+                  <div>
+                    <p className="text-xs tabular-nums text-paper-400">{step.time}</p>
+                    <p className="mt-0.5 text-sm text-paper-100">{step.label}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          <ul className="mt-10 space-y-3">
             {TRUST_POINTS.map(({ icon: Icon, text }) => (
-              <li key={text} className="flex items-center gap-3 text-sm text-slate-200">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 ring-1 ring-white/10">
-                  <Icon className="h-4 w-4 text-sky-300" />
-                </span>
+              <li key={text} className="flex items-center gap-2.5 text-sm text-paper-300">
+                <Icon className="h-4 w-4 shrink-0 text-paper-500" />
                 {text}
               </li>
             ))}
           </ul>
         </div>
 
-        <div className="text-xs text-slate-400">© 2026 行程管家 · 企业版</div>
+        <div className="text-xs text-paper-500">© 2026 行程管家</div>
       </aside>
 
       <main className="flex min-h-screen flex-1 items-center justify-center px-6 py-12">
         <div className="w-full max-w-md">
           <div className="mb-6 flex items-center gap-2 lg:hidden">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-600 text-white">
-              <Plane className="h-4 w-4" />
-            </span>
-            <span className="text-lg font-semibold text-slate-900">行程管家</span>
+            <RouteMark className="h-6 w-6 text-accent-700" />
+            <span className="text-base font-semibold text-paper-900">行程管家</span>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-            <h2 className="text-2xl font-semibold text-slate-900">{title}</h2>
-            <p className="mt-2 text-sm text-slate-500">{subtitle}</p>
+          <div className="rounded-panel border border-paper-200 bg-white p-8 shadow-card">
+            <h2 className="text-xl font-semibold text-paper-900">{title}</h2>
+            <p className="mt-2 text-sm text-paper-500">{subtitle}</p>
             <div className="mt-6">{children}</div>
           </div>
 
-          {footer ? <div className="mt-6 text-center text-sm text-slate-500">{footer}</div> : null}
+          {footer ? <div className="mt-6 text-center text-sm text-paper-500">{footer}</div> : null}
         </div>
       </main>
     </div>

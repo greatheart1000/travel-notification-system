@@ -126,7 +126,7 @@ export function Login({ onAuthenticated, onNavigate }: LoginPageProps) {
           还没有企业账号？{' '}
           <button
             type="button"
-            className="font-medium text-sky-600 hover:text-sky-700"
+            className="font-medium text-accent-600 hover:text-accent-700"
             onClick={() => onNavigate('/register')}
           >
             注册企业
@@ -135,12 +135,12 @@ export function Login({ onAuthenticated, onNavigate }: LoginPageProps) {
       }
     >
       {mode !== 'reset' ? (
-        <div className="mb-5 grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 text-sm">
+        <div className="mb-5 grid grid-cols-2 gap-1 rounded-control bg-paper-100 p-1 text-sm">
           <button
             type="button"
             onClick={() => switchMode('password')}
-            className={`rounded-md px-3 py-2 font-medium transition ${
-              mode === 'password' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+            className={`rounded-md px-3 py-2 font-medium transition-colors ${
+              mode === 'password' ? 'bg-white text-paper-900 shadow-card' : 'text-paper-500'
             }`}
           >
             账号密码
@@ -148,8 +148,8 @@ export function Login({ onAuthenticated, onNavigate }: LoginPageProps) {
           <button
             type="button"
             onClick={() => switchMode('sms')}
-            className={`rounded-md px-3 py-2 font-medium transition ${
-              mode === 'sms' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+            className={`rounded-md px-3 py-2 font-medium transition-colors ${
+              mode === 'sms' ? 'bg-white text-paper-900 shadow-card' : 'text-paper-500'
             }`}
           >
             手机验证码
@@ -160,17 +160,17 @@ export function Login({ onAuthenticated, onNavigate }: LoginPageProps) {
       <div className="space-y-4">
         {mode === 'password' ? (
           <>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               用户名
               <input
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
                 autoComplete="username"
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100"
                 placeholder="请输入用户名"
               />
             </label>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               密码
               <input
                 type="password"
@@ -180,53 +180,53 @@ export function Login({ onAuthenticated, onNavigate }: LoginPageProps) {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') void submitPassword()
                 }}
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100"
                 placeholder="请输入密码"
               />
             </label>
           </>
         ) : (
           <>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               手机号
               <input
                 value={phone}
                 onChange={(event) => setPhone(event.target.value)}
                 inputMode="tel"
                 autoComplete="tel"
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100"
                 placeholder="请输入注册手机号"
               />
             </label>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               验证码
               <div className="mt-1 flex gap-2">
                 <input
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
                   inputMode="numeric"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                  className="w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100"
                   placeholder="6 位验证码"
                 />
                 <button
                   type="button"
                   onClick={sendCode}
                   disabled={sendingCode || cooldown > 0}
-                  className="shrink-0 rounded-lg border border-slate-300 px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  className="shrink-0 rounded-control border border-paper-300 px-3 text-xs font-medium text-paper-700 hover:bg-paper-50 disabled:opacity-50"
                 >
                   {cooldown > 0 ? `${cooldown}s` : sendingCode ? '发送中' : '获取验证码'}
                 </button>
               </div>
             </label>
             {mode === 'reset' ? (
-              <label className="block text-sm font-medium text-slate-700">
+              <label className="block text-sm font-medium text-paper-700">
                 新密码
                 <input
                   type="password"
                   value={newPassword}
                   onChange={(event) => setNewPassword(event.target.value)}
                   autoComplete="new-password"
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                  className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100"
                   placeholder="至少 8 位，建议包含字母与数字"
                 />
               </label>
@@ -235,11 +235,11 @@ export function Login({ onAuthenticated, onNavigate }: LoginPageProps) {
         )}
 
         {error ? (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-danger-600">
             {error}
           </p>
         ) : null}
-        {notice ? <p className="text-sm text-emerald-600">{notice}</p> : null}
+        {notice ? <p className="text-sm text-success-600">{notice}</p> : null}
 
         <Button
           className="w-full"
@@ -253,13 +253,13 @@ export function Login({ onAuthenticated, onNavigate }: LoginPageProps) {
           {mode === 'password' ? '登录' : mode === 'sms' ? '验证码登录' : '重置密码'}
         </Button>
 
-        <div className="flex items-center justify-between text-xs text-slate-500">
+        <div className="flex items-center justify-between text-xs text-paper-500">
           {mode === 'reset' ? (
-            <button type="button" onClick={() => switchMode('password')} className="hover:text-sky-600">
+            <button type="button" onClick={() => switchMode('password')} className="hover:text-accent-600">
               返回登录
             </button>
           ) : (
-            <button type="button" onClick={() => switchMode('reset')} className="hover:text-sky-600">
+            <button type="button" onClick={() => switchMode('reset')} className="hover:text-accent-600">
               忘记密码
             </button>
           )}

@@ -24,7 +24,7 @@ export function HighRiskGroupDetailPage({ groupId, onOpenTask }: HighRiskGroupDe
   if (!group) {
     return (
       <PageShell title="高风险团详情">
-        <p className="text-sm text-slate-500">未找到对应团信息</p>
+        <p className="text-sm text-paper-500">未找到对应团信息</p>
       </PageShell>
     )
   }
@@ -34,7 +34,7 @@ export function HighRiskGroupDetailPage({ groupId, onOpenTask }: HighRiskGroupDe
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card title="团基础信息">
-            <div className="grid grid-cols-2 gap-3 text-sm text-slate-700">
+            <div className="grid grid-cols-2 gap-3 text-sm text-paper-700">
               <p>线路：{group.routeName}</p>
               <p>出发：{new Date(group.departureDate).toLocaleString()}</p>
               <p>风险分：{group.riskScore}</p>
@@ -45,10 +45,10 @@ export function HighRiskGroupDetailPage({ groupId, onOpenTask }: HighRiskGroupDe
           </Card>
 
           <Card title="风险摘要">
-            <p className="text-sm text-slate-700">{group.summary}</p>
+            <p className="text-sm text-paper-700">{group.summary}</p>
             <div className="mt-3 flex flex-wrap gap-2">
               {group.riskTags.map((tag) => (
-                <span key={tag} className="rounded-md bg-rose-50 px-2 py-1 text-xs text-rose-700">
+                <span key={tag} className="rounded-md bg-danger-50 px-2 py-1 text-xs text-danger-700">
                   {tag}
                 </span>
               ))}
@@ -58,9 +58,9 @@ export function HighRiskGroupDetailPage({ groupId, onOpenTask }: HighRiskGroupDe
           <Card title="风险事件时间线">
             <div className="space-y-2">
               {group.timeline.map((event) => (
-                <div key={event.id} className="rounded-lg border border-slate-100 p-3 text-sm">
-                  <p className="font-semibold text-slate-900">{event.title}</p>
-                  <p className="text-slate-600">
+                <div key={event.id} className="rounded-control border border-paper-100 p-3 text-sm">
+                  <p className="font-semibold text-paper-900">{event.title}</p>
+                  <p className="text-paper-600">
                     {event.level.toUpperCase()} · {new Date(event.at).toLocaleString()}
                   </p>
                 </div>
@@ -73,11 +73,11 @@ export function HighRiskGroupDetailPage({ groupId, onOpenTask }: HighRiskGroupDe
               {group.taskItems.map((task) => (
                 <button
                   key={task.id}
-                  className="w-full rounded-lg border border-slate-100 p-3 text-left"
+                  className="w-full rounded-control border border-paper-100 p-3 text-left"
                   onClick={() => onOpenTask(task.id)}
                 >
-                  <p className="font-semibold text-slate-900">{task.title}</p>
-                  <p className="text-sm text-slate-500">{task.status} · 截止 {new Date(task.dueAt).toLocaleString()}</p>
+                  <p className="font-semibold text-paper-900">{task.title}</p>
+                  <p className="text-sm text-paper-500">{task.status} · 截止 {new Date(task.dueAt).toLocaleString()}</p>
                 </button>
               ))}
             </div>

@@ -9,17 +9,15 @@ interface CardProps {
 
 export function Card({ title, children, className = '', footer }: CardProps) {
   return (
-    <div className={`bg-white rounded-lg shadow-sm border border-gray-200 ${className}`}>
+    <div className={`rounded-card border border-paper-200 bg-white shadow-card ${className}`}>
       {title && (
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+        <div className="border-b border-paper-200 px-5 py-4">
+          <h3 className="text-base font-semibold text-paper-900">{title}</h3>
         </div>
       )}
-      <div className="p-6">
-        {children}
-      </div>
+      <div className="p-5">{children}</div>
       {footer && (
-        <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
+        <div className="rounded-b-card border-t border-paper-200 bg-paper-50 px-5 py-4">
           {footer}
         </div>
       )}

@@ -75,7 +75,7 @@ export function TaskDetailPage({ taskId, onOpenGroup, onNavigate }: TaskDetailPa
   if (!task) {
     return (
       <PageShell title="任务详情">
-        <p className="text-sm text-slate-500">任务不存在或已删除</p>
+        <p className="text-sm text-paper-500">任务不存在或已删除</p>
       </PageShell>
     )
   }
@@ -85,7 +85,7 @@ export function TaskDetailPage({ taskId, onOpenGroup, onNavigate }: TaskDetailPa
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card title="任务与团队上下文">
-            <div className="grid grid-cols-2 gap-3 text-sm text-slate-700">
+            <div className="grid grid-cols-2 gap-3 text-sm text-paper-700">
               <p>团名：{task.teamName}</p>
               <p>团号：{task.teamCode}</p>
               <p>目的地：{task.destination}</p>
@@ -106,30 +106,30 @@ export function TaskDetailPage({ taskId, onOpenGroup, onNavigate }: TaskDetailPa
 
           {task.status === 'overdue' ? (
             <Card title="逾期原因与补救建议">
-              <p className="text-sm text-slate-700">逾期原因：{task.overdueReason || '待补充逾期说明'}</p>
-              <p className="mt-2 text-sm text-slate-700">补救建议：{task.remedySuggestion || '建议立即补触达并同步负责人。'}</p>
+              <p className="text-sm text-paper-700">逾期原因：{task.overdueReason || '待补充逾期说明'}</p>
+              <p className="mt-2 text-sm text-paper-700">补救建议：{task.remedySuggestion || '建议立即补触达并同步负责人。'}</p>
             </Card>
           ) : null}
 
           <Card title="处理记录">
             <div className="space-y-2">
               {task.history.map((item) => (
-                <div key={item.id} className="rounded-lg border border-slate-100 p-3 text-sm">
-                  <p className="font-semibold text-slate-900">{item.action}</p>
-                  <p className="text-slate-600">
+                <div key={item.id} className="rounded-control border border-paper-100 p-3 text-sm">
+                  <p className="font-semibold text-paper-900">{item.action}</p>
+                  <p className="text-paper-600">
                     {item.operator} · {new Date(item.at).toLocaleString()}
                   </p>
-                  <p className="text-slate-500">{item.note}</p>
+                  <p className="text-paper-500">{item.note}</p>
                 </div>
               ))}
-              {task.history.length === 0 ? <p className="text-sm text-slate-500">暂无处理记录</p> : null}
+              {task.history.length === 0 ? <p className="text-sm text-paper-500">暂无处理记录</p> : null}
             </div>
           </Card>
         </div>
 
         <div className="space-y-6">
-          <Card title="AI 建议">
-            <p className="text-sm text-slate-700">{task.aiSuggestion}</p>
+          <Card title="处理建议">
+            <p className="text-sm text-paper-700">{task.aiSuggestion}</p>
           </Card>
           <Card title="操作区">
             <div className="space-y-2">

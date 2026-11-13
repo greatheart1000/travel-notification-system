@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Header } from '../components/Header'
+import { Bell, Clock, Mail, MessageSquare, Shield, Users, Zap } from 'lucide-react'
+import { PageShell } from '../components/PageShell'
 import { Card } from '../components/Card'
 import { Button } from '../components/Button'
 import { PageState } from '../components/PageState'
-import { Bell, Clock, Shield, Zap } from 'lucide-react'
 import { type PreferencesViewModel } from '../types/api'
 import { preferencesApi, getErrorMessage } from '../services/api'
 
@@ -16,6 +16,12 @@ function toInt(value: string, fallback: number): number {
   }
   return parsed
 }
+
+const inputClass =
+  'mt-1 w-full rounded-control border border-paper-300 bg-white px-3 py-2 text-sm text-paper-900 transition-colors focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100'
+
+const channelRowClass = 'flex items-center justify-between rounded-control border border-paper-200 p-4'
+const toggleClass = 'h-4 w-4 rounded accent-accent-600'
 
 export function Preferences() {
   const [loadState, setLoadState] = useState<LoadState>('loading')
@@ -85,7 +91,7 @@ export function Preferences() {
       setLoadState(hasAnyChannel ? 'ready' : 'empty')
       setSaveMessage('设置已保存')
     } catch (error) {
-      setSaveMessage(`保存失败: ${getErrorMessage(error)}`)
+      setSaveMessage(`保存失败：${getErrorMessage(error)}`)
     } finally {
       setIsSaving(false)
     }
@@ -93,244 +99,232 @@ export function Preferences() {
 
   if (loadState === 'loading') {
     return (
-      <>
-        <Header />
-        <div className="p-8 max-w-4xl">
-          <PageState kind="loading" title="正在加载偏好设置" />
-        </div>
-      </>
+      <PageShell title="偏好设置" description="配置通知渠道、静默时段与频率限制">
+        <PageState kind="loading" title="正在加载偏好设置" />
+      </PageShell>
     )
   }
 
   if (loadState === 'error') {
     return (
-      <>
-        <Header />
-        <div className="p-8 max-w-4xl">
-          <PageState
-            kind="error"
-            title="偏好设置加载失败"
-            description={errorMessage}
-            onRetry={() => {
-              void loadPreferences()
-            }}
-          />
-        </div>
-      </>
+      <PageShell title="偏好设置" description="配置通知渠道、静默时段与频率限制">
+        <PageState
+          kind="error"
+          title="偏好设置加载失败"
+          description={errorMessage}
+          onRetry={() => {
+            void loadPreferences()
+          }}
+        />
+      </PageShell>
     )
   }
 
   if (!preferences) {
     return (
-      <>
-        <Header />
-        <div className="p-8 max-w-4xl">
-          <PageState
-            kind="empty"
-            title="未获取到偏好设置"
-            description="后端未返回可用数据"
-            onRetry={() => {
-              void loadPreferences()
-            }}
-          />
-        </div>
-      </>
+      <PageShell title="偏好设置" description="配置通知渠道、静默时段与频率限制">
+        <PageState
+          kind="empty"
+          title="未获取到偏好设置"
+          description="后端未返回可用数据"
+          onRetry={() => {
+            void loadPreferences()
+          }}
+        />
+      </PageShell>
     )
   }
 
   const showEmptyHint = loadState === 'empty'
 
   return (
-    <>
-      <Header />
-      <div className="p-8 max-w-4xl">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">偏好设置</h1>
+    <PageShell title="偏好设置" description="配置通知渠道、静默时段与频率限制">
+      {showEmptyHint ? (
+        <div className="mb-6">
+          <PageState
+            kind="empty"
+            title="当前未启用任何通知渠道"
+            description="至少开启一个渠道后保存，配置才会生效"
+          />
+        </div>
+      ) : null}
 
-        {showEmptyHint ? (
-          <div className="mb-6">
-            <PageState
-              kind="empty"
-              title="当前未启用任何通知渠道"
-              description="至少开启一个渠道后保存，配置才会生效"
-              onRetry={() => {
-                void loadPreferences()
-              }}
+      <Card title="通知渠道" className="mb-6">
+        <div className="space-y-3">
+          <div className={channelRowClass}>
+            <div className="flex items-center gap-3">
+              <MessageSquare className="h-4 w-4 text-paper-500" />
+              <div>
+                <p className="text-sm font-medium text-paper-900">短信通知</p>
+                <p className="text-sm text-paper-500">通过短信发送重要通知</p>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={preferences.smsEnabled}
+              onChange={() => handleToggle('smsEnabled')}
+              className={toggleClass}
+              aria-label="启用短信通知"
             />
           </div>
-        ) : null}
 
-        <Card title="通知渠道" className="mb-6">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
-              <div className="flex items-center gap-3">
-                <Bell className="w-5 h-5 text-blue-600" />
-                <div>
-                  <p className="font-medium text-gray-900">短信通知</p>
-                  <p className="text-sm text-gray-500">通过短信发送重要通知</p>
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={preferences.smsEnabled}
-                onChange={() => handleToggle('smsEnabled')}
-                className="w-5 h-5 rounded"
-              />
-            </div>
-
-            <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
-              <div className="flex items-center gap-3">
-                <Bell className="w-5 h-5 text-green-600" />
-                <div>
-                  <p className="font-medium text-gray-900">企业微信</p>
-                  <p className="text-sm text-gray-500">通过企业微信群发送通知</p>
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={preferences.wechatEnabled}
-                onChange={() => handleToggle('wechatEnabled')}
-                className="w-5 h-5 rounded"
-              />
-            </div>
-
-            <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
-              <div className="flex items-center gap-3">
-                <Bell className="w-5 h-5 text-purple-600" />
-                <div>
-                  <p className="font-medium text-gray-900">邮件通知</p>
-                  <p className="text-sm text-gray-500">通过邮件发送详细信息</p>
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={preferences.emailEnabled}
-                onChange={() => handleToggle('emailEnabled')}
-                className="w-5 h-5 rounded"
-              />
-            </div>
-          </div>
-        </Card>
-
-        <Card title="静默时段" className="mb-6">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 mb-4">
-              <Clock className="w-5 h-5 text-orange-600" />
-              <p className="text-gray-600">在此时段内不会发送通知</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+          <div className={channelRowClass}>
+            <div className="flex items-center gap-3">
+              <Users className="h-4 w-4 text-paper-500" />
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">开始时间</label>
-                <select
-                  value={preferences.quietHourStart}
-                  onChange={(event) => handleChange('quietHourStart', event.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <option key={i} value={String(i).padStart(2, '0')}>
-                      {String(i).padStart(2, '0')}:00
-                    </option>
-                  ))}
-                </select>
+                <p className="text-sm font-medium text-paper-900">企业微信</p>
+                <p className="text-sm text-paper-500">通过企业微信群发送通知</p>
               </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={preferences.wechatEnabled}
+              onChange={() => handleToggle('wechatEnabled')}
+              className={toggleClass}
+              aria-label="启用企业微信通知"
+            />
+          </div>
 
+          <div className={channelRowClass}>
+            <div className="flex items-center gap-3">
+              <Mail className="h-4 w-4 text-paper-500" />
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">结束时间</label>
-                <select
-                  value={preferences.quietHourEnd}
-                  onChange={(event) => handleChange('quietHourEnd', event.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <option key={i} value={String(i).padStart(2, '0')}>
-                      {String(i).padStart(2, '0')}:00
-                    </option>
-                  ))}
-                </select>
+                <p className="text-sm font-medium text-paper-900">邮件通知</p>
+                <p className="text-sm text-paper-500">通过邮件发送详细信息</p>
               </div>
             </div>
+            <input
+              type="checkbox"
+              checked={preferences.emailEnabled}
+              onChange={() => handleToggle('emailEnabled')}
+              className={toggleClass}
+              aria-label="启用邮件通知"
+            />
           </div>
-        </Card>
-
-        <Card title="频率限制" className="mb-6">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 mb-4">
-              <Zap className="w-5 h-5 text-yellow-600" />
-              <p className="text-gray-600">控制通知的发送频率</p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">每小时最大通知数</label>
-              <input
-                type="number"
-                value={preferences.maxNotificationsPerHour}
-                onChange={(event) => handleChange('maxNotificationsPerHour', toInt(event.target.value, 1))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                min="1"
-                max="20"
-              />
-              <p className="text-xs text-gray-500 mt-1">当每小时通知数超过此值时将进行聚合</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card title="高级设置" className="mb-6">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
-              <div className="flex items-center gap-3">
-                <Shield className="w-5 h-5 text-red-600" />
-                <div>
-                  <p className="font-medium text-gray-900">自动升级</p>
-                  <p className="text-sm text-gray-500">自动升级高风险投诉</p>
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={preferences.autoEscalation}
-                onChange={() => handleToggle('autoEscalation')}
-                className="w-5 h-5 rounded"
-              />
-            </div>
-
-            <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
-              <div className="flex items-center gap-3">
-                <Bell className="w-5 h-5 text-indigo-600" />
-                <div>
-                  <p className="font-medium text-gray-900">通知聚合</p>
-                  <p className="text-sm text-gray-500">聚合相同类型的连续通知</p>
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={preferences.aggregateNotifications}
-                onChange={() => handleToggle('aggregateNotifications')}
-                className="w-5 h-5 rounded"
-              />
-            </div>
-          </div>
-        </Card>
-
-        {saveMessage ? (
-          <p className={`text-sm mb-4 ${saveMessage.startsWith('保存失败') ? 'text-red-600' : 'text-green-600'}`}>
-            {saveMessage}
-          </p>
-        ) : null}
-
-        <div className="flex justify-end gap-2">
-          <Button
-            variant="secondary"
-            onClick={() => {
-              void loadPreferences()
-            }}
-            disabled={isSaving}
-          >
-            重置
-          </Button>
-          <Button onClick={handleSave} loading={isSaving}>
-            保存设置
-          </Button>
         </div>
+      </Card>
+
+      <Card title="静默时段" className="mb-6">
+        <div className="mb-4 flex items-center gap-2.5">
+          <Clock className="h-4 w-4 text-paper-500" />
+          <p className="text-sm text-paper-600">在此时段内不会发送通知</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <label className="block text-sm font-medium text-paper-700">
+            开始时间
+            <select
+              value={preferences.quietHourStart}
+              onChange={(event) => handleChange('quietHourStart', event.target.value)}
+              className={inputClass}
+            >
+              {Array.from({ length: 24 }, (_, index) => (
+                <option key={index} value={String(index).padStart(2, '0')}>
+                  {String(index).padStart(2, '0')}:00
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-sm font-medium text-paper-700">
+            结束时间
+            <select
+              value={preferences.quietHourEnd}
+              onChange={(event) => handleChange('quietHourEnd', event.target.value)}
+              className={inputClass}
+            >
+              {Array.from({ length: 24 }, (_, index) => (
+                <option key={index} value={String(index).padStart(2, '0')}>
+                  {String(index).padStart(2, '0')}:00
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </Card>
+
+      <Card title="频率限制" className="mb-6">
+        <div className="mb-4 flex items-center gap-2.5">
+          <Zap className="h-4 w-4 text-paper-500" />
+          <p className="text-sm text-paper-600">控制通知的发送频率</p>
+        </div>
+
+        <label className="block text-sm font-medium text-paper-700">
+          每小时最大通知数
+          <input
+            type="number"
+            value={preferences.maxNotificationsPerHour}
+            onChange={(event) => handleChange('maxNotificationsPerHour', toInt(event.target.value, 1))}
+            className={inputClass}
+            min="1"
+            max="20"
+          />
+        </label>
+        <p className="mt-1 text-xs text-paper-500">当每小时通知数超过此值时将进行聚合</p>
+      </Card>
+
+      <Card title="高级设置" className="mb-6">
+        <div className="space-y-3">
+          <div className={channelRowClass}>
+            <div className="flex items-center gap-3">
+              <Shield className="h-4 w-4 text-paper-500" />
+              <div>
+                <p className="text-sm font-medium text-paper-900">自动升级</p>
+                <p className="text-sm text-paper-500">自动升级高风险投诉</p>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={preferences.autoEscalation}
+              onChange={() => handleToggle('autoEscalation')}
+              className={toggleClass}
+              aria-label="启用自动升级"
+            />
+          </div>
+
+          <div className={channelRowClass}>
+            <div className="flex items-center gap-3">
+              <Bell className="h-4 w-4 text-paper-500" />
+              <div>
+                <p className="text-sm font-medium text-paper-900">通知聚合</p>
+                <p className="text-sm text-paper-500">聚合相同类型的连续通知</p>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={preferences.aggregateNotifications}
+              onChange={() => handleToggle('aggregateNotifications')}
+              className={toggleClass}
+              aria-label="启用通知聚合"
+            />
+          </div>
+        </div>
+      </Card>
+
+      {saveMessage ? (
+        <p
+          className={`mb-4 text-sm ${
+            saveMessage.startsWith('保存失败') ? 'text-danger-700' : 'text-success-700'
+          }`}
+        >
+          {saveMessage}
+        </p>
+      ) : null}
+
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => {
+            void loadPreferences()
+          }}
+          disabled={isSaving}
+        >
+          重置
+        </Button>
+        <Button onClick={handleSave} loading={isSaving}>
+          保存设置
+        </Button>
       </div>
-    </>
+    </PageShell>
   )
 }

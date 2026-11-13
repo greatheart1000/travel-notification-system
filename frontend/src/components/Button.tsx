@@ -1,6 +1,6 @@
 import { ReactNode } from 'react'
 
-type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'success'
+type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'danger-outline' | 'success' | 'ghost'
 type ButtonSize = 'sm' | 'md' | 'lg'
 
 interface ButtonProps {
@@ -15,16 +15,18 @@ interface ButtonProps {
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: 'bg-sky-500 text-white hover:bg-sky-600',
-  secondary: 'bg-gray-200 text-gray-900 hover:bg-gray-300',
-  danger: 'bg-red-600 text-white hover:bg-red-700',
-  success: 'bg-green-600 text-white hover:bg-green-700',
+  primary: 'bg-accent-600 text-white hover:bg-accent-700',
+  secondary: 'border border-paper-300 bg-white text-paper-800 hover:bg-paper-50',
+  danger: 'bg-danger-600 text-white hover:bg-danger-700',
+  'danger-outline': 'border border-danger-200 bg-white text-danger-700 hover:bg-danger-50',
+  success: 'bg-success-600 text-white hover:bg-success-700',
+  ghost: 'text-paper-600 hover:bg-paper-100 hover:text-paper-900',
 }
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: 'px-3 py-1.5 text-sm',
-  md: 'px-4 py-2 text-base',
-  lg: 'px-6 py-3 text-lg',
+  sm: 'h-8 px-3 text-sm',
+  md: 'h-9 px-4 text-sm',
+  lg: 'h-10 px-5 text-base',
 }
 
 export function Button({
@@ -43,14 +45,14 @@ export function Button({
       title={title}
       disabled={disabled || loading}
       className={`
-        font-semibold rounded-lg transition-all duration-200
-        disabled:opacity-50 disabled:cursor-not-allowed
+        inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-control font-medium
+        transition-colors disabled:cursor-not-allowed disabled:opacity-50
         ${variantClasses[variant]}
         ${sizeClasses[size]}
         ${className}
       `}
     >
-      {loading ? '加载中...' : children}
+      {loading ? '加载中…' : children}
     </button>
   )
 }

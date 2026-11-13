@@ -25,8 +25,8 @@ export function ItineraryTable({ items, onChange }: ItineraryTableProps) {
   return (
     <div className="space-y-6 print:space-y-2">
       <div className="flex justify-between items-center print:hidden">
-        <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-          <CalendarDays className="text-blue-600" size={24} />
+        <h3 className="text-xl font-semibold text-paper-900 flex items-center gap-2">
+          <CalendarDays className="text-accent-600" size={24} />
           每日日程安排
         </h3>
         <Button size="sm" variant="secondary" onClick={handleAdd}>
@@ -35,49 +35,49 @@ export function ItineraryTable({ items, onChange }: ItineraryTableProps) {
         </Button>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-gray-100 shadow-sm bg-white print:border-2 print:border-gray-900 print:rounded-none print:shadow-none">
+      <div className="overflow-hidden rounded-panel border border-paper-100 shadow-card bg-white print:border-2 print:border-paper-900 print:rounded-none print:shadow-none">
         <table className="w-full text-sm text-left border-collapse print:text-xs">
-          <thead className="bg-gray-50 border-b border-gray-100 print:bg-gray-100 print:border-b-2 print:border-gray-900">
+          <thead className="bg-paper-50 border-b border-paper-100 print:bg-paper-100 print:border-b-2 print:border-paper-900">
             <tr>
-              <th className="px-4 py-4 font-bold text-gray-500 uppercase tracking-wider w-24 print:border-r print:border-gray-900 print:text-gray-900 print:py-2">日期</th>
-              <th className="px-4 py-4 font-bold text-gray-500 uppercase tracking-wider w-32 print:border-r print:border-gray-900 print:text-gray-900 print:py-2">交通方式</th>
-              <th className="px-4 py-4 font-bold text-gray-500 uppercase tracking-wider print:border-r print:border-gray-900 print:text-gray-900 print:py-2">路线详情</th>
-              <th className="px-4 py-4 font-bold text-gray-500 uppercase tracking-wider w-56 print:border-r print:border-gray-900 print:text-gray-900 print:py-2">入住酒店</th>
-              <th className="px-4 py-4 font-bold text-gray-500 uppercase tracking-wider w-16 text-center print:hidden">操作</th>
+              <th className="px-4 py-4 font-semibold text-paper-500 w-24 print:border-r print:border-paper-900 print:text-paper-900 print:py-2">日期</th>
+              <th className="px-4 py-4 font-semibold text-paper-500 w-32 print:border-r print:border-paper-900 print:text-paper-900 print:py-2">交通方式</th>
+              <th className="px-4 py-4 font-semibold text-paper-500 print:border-r print:border-paper-900 print:text-paper-900 print:py-2">路线详情</th>
+              <th className="px-4 py-4 font-semibold text-paper-500 w-56 print:border-r print:border-paper-900 print:text-paper-900 print:py-2">入住酒店</th>
+              <th className="px-4 py-4 font-semibold text-paper-500 w-16 text-center print:hidden">操作</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-50 print:divide-y print:divide-gray-900">
+          <tbody className="divide-y divide-paper-50 print:divide-y print:divide-paper-900">
             {items.map((item, idx) => (
-              <tr key={idx} className="group hover:bg-blue-50/30 transition-colors align-top print:break-inside-avoid">
-                <td className="px-3 py-3 print:px-2 print:py-1 print:border-r print:border-gray-900">
+              <tr key={idx} className="group hover:bg-accent-50/30 transition-colors align-top print:break-inside-avoid">
+                <td className="px-3 py-3 print:px-2 print:py-1 print:border-r print:border-paper-900">
                   <input
-                    className="w-full px-2 py-2 bg-transparent border border-transparent hover:border-gray-200 focus:border-blue-300 focus:bg-white rounded-lg outline-none transition text-gray-900 font-medium print:p-0 print:border-none print:bg-transparent"
+                    className="w-full px-2 py-2 bg-transparent border border-transparent hover:border-paper-200 focus:border-accent-600 focus:bg-white rounded-control outline-none transition-colors text-paper-900 font-medium print:p-0 print:border-none print:bg-transparent"
                     placeholder="MM-DD"
                     value={item.date}
                     onChange={(e) => handleUpdate(idx, 'date', e.target.value)}
                   />
                 </td>
-                <td className="px-3 py-3 print:px-2 print:py-1 print:border-r print:border-gray-900">
+                <td className="px-3 py-3 print:px-2 print:py-1 print:border-r print:border-paper-900">
                   <div className="relative">
-                    <Car className="absolute left-2.5 top-3 text-gray-400 w-3.5 h-3.5 print:hidden" />
+                    <Car className="absolute left-2.5 top-3 text-paper-400 w-3.5 h-3.5 print:hidden" />
                     <select
-                      className="w-full pl-8 pr-2 py-2 bg-transparent border border-transparent hover:border-gray-200 focus:border-blue-300 focus:bg-white rounded-lg outline-none appearance-none transition text-gray-700 print:p-0 print:border-none print:bg-transparent print:appearance-none print:text-gray-900"
+                      className="w-full pl-8 pr-2 py-2 bg-transparent border border-transparent hover:border-paper-200 focus:border-accent-600 focus:bg-white rounded-control outline-none appearance-none transition-colors text-paper-700 print:p-0 print:border-none print:bg-transparent print:appearance-none print:text-paper-900"
                       value={item.transport}
                       onChange={(e) => handleUpdate(idx, 'transport', e.target.value)}
                     >
-                      <option value="越野车">🚙 越野车</option>
-                      <option value="接机">🛬 接机</option>
-                      <option value="送机">🛫 送机</option>
-                      <option value="商务车">🚐 商务车</option>
-                      <option value="自由活动">🚶 自由活动</option>
+                      <option value="越野车">越野车</option>
+                      <option value="接机">接机</option>
+                      <option value="送机">送机</option>
+                      <option value="商务车">商务车</option>
+                      <option value="自由活动">自由活动</option>
                     </select>
                   </div>
                 </td>
-                <td className="px-3 py-3 print:px-2 print:py-1 print:border-r print:border-gray-900">
+                <td className="px-3 py-3 print:px-2 print:py-1 print:border-r print:border-paper-900">
                   <div className="relative">
-                    <Map className="absolute left-2.5 top-3 text-gray-400 w-3.5 h-3.5 print:hidden" />
+                    <Map className="absolute left-2.5 top-3 text-paper-400 w-3.5 h-3.5 print:hidden" />
                     <textarea
-                      className="w-full pl-8 pr-2 py-2 bg-transparent border border-transparent hover:border-gray-200 focus:border-blue-300 focus:bg-white rounded-lg outline-none transition text-gray-800 resize-y min-h-[42px] leading-snug print:p-0 print:border-none print:bg-transparent print:text-gray-900 print:resize-none print:min-h-0 print:overflow-hidden"
+                      className="w-full pl-8 pr-2 py-2 bg-transparent border border-transparent hover:border-paper-200 focus:border-accent-600 focus:bg-white rounded-control outline-none transition-colors text-paper-800 resize-y min-h-11 leading-snug print:p-0 print:border-none print:bg-transparent print:text-paper-900 print:resize-none print:min-h-0 print:overflow-hidden"
                       placeholder="例如：喀什古城 - 白沙湖"
                       rows={2}
                       value={item.route}
@@ -85,11 +85,11 @@ export function ItineraryTable({ items, onChange }: ItineraryTableProps) {
                     />
                   </div>
                 </td>
-                <td className="px-3 py-3 print:px-2 print:py-1 print:border-r print:border-gray-900">
+                <td className="px-3 py-3 print:px-2 print:py-1 print:border-r print:border-paper-900">
                   <div className="relative">
-                    <Building2 className="absolute left-2.5 top-3 text-gray-400 w-3.5 h-3.5 print:hidden" />
+                    <Building2 className="absolute left-2.5 top-3 text-paper-400 w-3.5 h-3.5 print:hidden" />
                     <textarea
-                      className="w-full pl-8 pr-2 py-2 bg-transparent border border-transparent hover:border-gray-200 focus:border-blue-300 focus:bg-white rounded-lg outline-none transition text-gray-800 resize-y min-h-[60px] leading-snug print:p-0 print:border-none print:bg-transparent print:text-gray-900 print:resize-none print:min-h-0 print:overflow-hidden"
+                      className="w-full pl-8 pr-2 py-2 bg-transparent border border-transparent hover:border-paper-200 focus:border-accent-600 focus:bg-white rounded-control outline-none transition-colors text-paper-800 resize-y min-h-16 leading-snug print:p-0 print:border-none print:bg-transparent print:text-paper-900 print:resize-none print:min-h-0 print:overflow-hidden"
                       placeholder="入住酒店名称"
                       rows={2}
                       value={item.hotel}
@@ -107,7 +107,7 @@ export function ItineraryTable({ items, onChange }: ItineraryTableProps) {
                 </td>
                 <td className="px-3 py-3 text-center print:hidden">
                   <button
-                    className="text-gray-300 hover:text-red-500 p-2 mt-1 rounded-lg hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
+                    className="text-paper-300 hover:text-danger-500 p-2 mt-1 rounded-control hover:bg-danger-50 transition-colors opacity-0 group-hover:opacity-100"
                     onClick={() => handleRemove(idx)}
                   >
                     <Trash2 size={16} />
@@ -118,7 +118,7 @@ export function ItineraryTable({ items, onChange }: ItineraryTableProps) {
             {items.length === 0 && (
               <tr>
                 <td colSpan={5} className="py-20 text-center">
-                  <div className="flex flex-col items-center gap-2 text-gray-400">
+                  <div className="flex flex-col items-center gap-2 text-paper-400">
                     <CalendarDays size={48} className="opacity-20" />
                     <p>暂无日程计划，点击右上角开始添加</p>
                   </div>

@@ -54,50 +54,50 @@ export function Notifications() {
   }
 
   if (loadError) {
-    return <div className="p-6"><div className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">{loadError}</div></div>
+    return <div className="p-6"><div className="rounded-control border border-danger-200 bg-danger-50 p-6 text-danger-700">{loadError}</div></div>
   }
 
   if (!summary) {
-    return <div className="p-6"><div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-gray-600">正在通过 API 加载紧急天气通知...</div></div>
+    return <div className="p-6"><div className="rounded-control border border-paper-200 bg-white p-6 text-center text-paper-600">正在通过 API 加载紧急天气通知...</div></div>
   }
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">紧急天气通知</h1>
-      <p className="text-gray-600 mb-6">天气风险通知、AI风险分析与 AI生成通知文案预览。</p>
-      <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 bg-red-50 border-b border-red-100">
-          <h2 className="font-semibold text-red-900">天气风险通知</h2>
-          <p className="text-sm text-red-700 mt-1">
+      <h1 className="text-2xl font-semibold text-paper-900 mb-2">紧急天气通知</h1>
+      <p className="text-paper-600 mb-6">天气风险通知、AI风险分析与 AI生成通知文案预览。</p>
+      <div className="bg-white rounded-control border border-paper-200 shadow-card overflow-hidden">
+        <div className="px-6 py-4 bg-danger-50 border-b border-danger-100">
+          <h2 className="font-semibold text-danger-900">天气风险通知</h2>
+          <p className="text-sm text-danger-700 mt-1">
             {summary.title} · {summary.riskLevelLabel} · 影响 {summary.affectedTripCount} 个旅行团
           </p>
         </div>
         <div className="p-6 space-y-4">
           <section>
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">天气摘要</h3>
-            <p className="text-sm text-gray-700">{summary.weatherSummary}</p>
+            <h3 className="text-sm font-semibold text-paper-900 mb-2">天气摘要</h3>
+            <p className="text-sm text-paper-700">{summary.weatherSummary}</p>
           </section>
           <section>
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">AI风险分析</h3>
-            <p className="text-sm text-gray-700">{summary.aiRiskSummary}</p>
+            <h3 className="text-sm font-semibold text-paper-900 mb-2">AI风险分析</h3>
+            <p className="text-sm text-paper-700">{summary.aiRiskSummary}</p>
           </section>
           <section>
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">AI生成通知文案</h3>
+            <h3 className="text-sm font-semibold text-paper-900 mb-2">AI生成通知文案</h3>
             <textarea
               ref={contentRef}
               value={content}
               onChange={(event) => setContent(event.target.value)}
-              className="min-h-[160px] w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              className="min-h-40 w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:border-accent-600 focus:ring-2 focus:ring-accent-100"
             />
           </section>
           {sendMessage && (
-            <p className="text-sm text-gray-700" role="status">{sendMessage}</p>
+            <p className="text-sm text-paper-700" role="status">{sendMessage}</p>
           )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
               onClick={() => contentRef.current?.focus()}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              className="rounded-control border border-paper-300 px-4 py-2 text-sm text-paper-700 hover:bg-paper-50"
             >
               编辑后发送
             </button>
@@ -105,7 +105,7 @@ export function Notifications() {
               type="button"
               onClick={() => void handleConfirmSend()}
               disabled={sending}
-              className="rounded-lg bg-cyan-500 px-4 py-2 text-sm text-white hover:bg-cyan-600 disabled:opacity-60"
+              className="rounded-control bg-accent-600 px-4 py-2 text-sm text-white hover:bg-accent-700 disabled:opacity-60"
             >
               {sending ? '发送中...' : '确认发送'}
             </button>

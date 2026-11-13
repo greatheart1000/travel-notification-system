@@ -247,7 +247,6 @@ export function Rules() {
 
   return (
     <PageShell
-      eyebrow="SETTINGS"
       title="通知规则"
       description="规则按「阶段 + 时段 + 场景 + 条件」匹配；没有规则时沿用系统默认发送行为。"
       actions={
@@ -258,24 +257,24 @@ export function Rules() {
             </span>
           </Button>
         ) : (
-          <span className="text-sm text-slate-500">只读模式：仅管理员可修改规则</span>
+          <span className="text-sm text-paper-500">只读模式：仅管理员可修改规则</span>
         )
       }
     >
       {error ? (
-        <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div role="alert" className="mb-4 rounded-control border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
           {error}
         </div>
       ) : null}
       {notice ? (
-        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+        <div className="mb-4 rounded-control border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
           {notice}
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-hidden rounded-card border border-paper-200 bg-white shadow-card">
         <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+          <thead className="border-b border-paper-200 text-xs font-medium text-paper-500">
             <tr>
               <th className="px-4 py-3">规则名称</th>
               <th className="px-4 py-3">状态</th>
@@ -286,36 +285,36 @@ export function Rules() {
               <th className="px-4 py-3 text-right">操作</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-paper-100">
             {loading ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={7} className="px-4 py-8 text-center text-paper-500">
                   正在加载规则...
                 </td>
               </tr>
             ) : rules.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
-                  <BellRing className="mx-auto mb-3 h-6 w-6 text-slate-400" />
+                <td colSpan={7} className="px-4 py-10 text-center text-paper-500">
+                  <BellRing className="mx-auto mb-3 h-6 w-6 text-paper-400" />
                   尚未配置通知规则，系统将沿用默认发送行为。
                 </td>
               </tr>
             ) : (
               rules.map((rule) => (
                 <tr key={rule.id}>
-                  <td className="px-4 py-3 font-medium text-slate-900">{rule.name}</td>
+                  <td className="px-4 py-3 font-medium text-paper-900">{rule.name}</td>
                   <td className="px-4 py-3">
                     {canWrite ? (
                       <button
                         type="button"
                         onClick={() => void toggle(rule)}
-                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${
-                          rule.enabled ? 'bg-sky-500' : 'bg-slate-300'
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          rule.enabled ? 'bg-accent-600' : 'bg-paper-300'
                         }`}
                         aria-label={rule.enabled ? '停用规则' : '启用规则'}
                       >
                         <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                             rule.enabled ? 'translate-x-4' : 'translate-x-0.5'
                           }`}
                         />
@@ -326,27 +325,27 @@ export function Rules() {
                       </Badge>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-slate-600">
+                  <td className="px-4 py-3 text-paper-600">
                     {labelOf(STAGE_OPTIONS, rule.stage)} / {labelOf(TIME_SLOT_OPTIONS, rule.time_slot)}
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{labelOf(SCENE_OPTIONS, rule.scene)}</td>
+                  <td className="px-4 py-3 text-paper-600">{labelOf(SCENE_OPTIONS, rule.scene)}</td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
                       {(rule.channels ?? []).map((channel) => (
-                        <Badge key={channel} variant="info">
+                        <Badge key={channel} variant="default">
                           {labelOf(CHANNEL_OPTIONS, channel)}
                         </Badge>
                       ))}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{rule.priority ?? 100}</td>
+                  <td className="px-4 py-3 text-paper-600">{rule.priority ?? 100}</td>
                   <td className="px-4 py-3">
                     {canWrite ? (
                       <div className="flex justify-end gap-2">
                         <button
                           type="button"
                           onClick={() => openEdit(rule)}
-                          className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                          className="rounded-control p-1.5 text-paper-500 hover:bg-paper-100 hover:text-paper-900"
                           aria-label="编辑规则"
                         >
                           <Pencil className="h-4 w-4" />
@@ -354,14 +353,14 @@ export function Rules() {
                         <button
                           type="button"
                           onClick={() => void remove(rule)}
-                          className="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                          className="rounded-control p-1.5 text-paper-500 hover:bg-danger-50 hover:text-danger-600"
                           aria-label="删除规则"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     ) : (
-                      <span className="text-xs text-slate-400">-</span>
+                      <span className="text-xs text-paper-400">-</span>
                     )}
                   </td>
                 </tr>
@@ -389,16 +388,16 @@ export function Rules() {
       >
         <div className="space-y-5">
           <div className="grid gap-4 sm:grid-cols-2">
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               规则名称
               <input
                 value={form.name}
                 onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:border-accent-600 focus:outline-none"
                 placeholder="例如：行前早间常规提醒"
               />
             </label>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               优先级（数值越小越优先）
               <input
                 type="number"
@@ -406,18 +405,18 @@ export function Rules() {
                 onChange={(event) =>
                   setForm((prev) => ({ ...prev, priority: Number(event.target.value) }))
                 }
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm focus:border-accent-600 focus:outline-none"
               />
             </label>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-3">
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               阶段
               <select
                 value={form.stage}
                 onChange={(event) => setForm((prev) => ({ ...prev, stage: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm"
               >
                 {STAGE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -426,12 +425,12 @@ export function Rules() {
                 ))}
               </select>
             </label>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               时段
               <select
                 value={form.time_slot}
                 onChange={(event) => setForm((prev) => ({ ...prev, time_slot: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm"
               >
                 {TIME_SLOT_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -440,12 +439,12 @@ export function Rules() {
                 ))}
               </select>
             </label>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               场景
               <select
                 value={form.scene}
                 onChange={(event) => setForm((prev) => ({ ...prev, scene: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm"
               >
                 {SCENE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -458,10 +457,10 @@ export function Rules() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <span className="block text-sm font-medium text-slate-700">发送渠道</span>
+              <span className="block text-sm font-medium text-paper-700">发送渠道</span>
               <div className="mt-2 space-y-2">
                 {CHANNEL_OPTIONS.map((option) => (
-                  <label key={option.value} className="flex items-center gap-2 text-sm text-slate-700">
+                  <label key={option.value} className="flex items-center gap-2 text-sm text-paper-700">
                     <input
                       type="checkbox"
                       checked={form.channels.includes(option.value)}
@@ -480,14 +479,14 @@ export function Rules() {
                 ))}
               </div>
             </div>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium text-paper-700">
               绑定模板
               <select
                 value={form.template_id}
                 onChange={(event) =>
                   setForm((prev) => ({ ...prev, template_id: event.target.value }))
                 }
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm"
               >
                 <option value="">不绑定模板</option>
                 {templates.map((template) => (
@@ -501,13 +500,13 @@ export function Rules() {
 
           <div>
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-700">条件组（全部满足才命中）</span>
+              <span className="text-sm font-medium text-paper-700">条件组（全部满足才命中）</span>
               <Button variant="secondary" size="sm" onClick={addCondition}>
                 添加条件
               </Button>
             </div>
             {form.conditions.length === 0 ? (
-              <p className="mt-2 text-xs text-slate-500">不配置条件时，匹配任意上下文。</p>
+              <p className="mt-2 text-xs text-paper-500">不配置条件时，匹配任意上下文。</p>
             ) : (
               <div className="mt-3 space-y-2">
                 {form.conditions.map((row, index) => (
@@ -515,14 +514,14 @@ export function Rules() {
                     <input
                       value={row.field}
                       onChange={(event) => updateCondition(index, { field: event.target.value })}
-                      className="w-36 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                      className="w-36 rounded-control border border-paper-300 px-2 py-1.5 text-sm"
                       placeholder="字段名"
                       list="condition-fields"
                     />
                     <select
                       value={row.op}
                       onChange={(event) => updateCondition(index, { op: event.target.value })}
-                      className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                      className="rounded-control border border-paper-300 px-2 py-1.5 text-sm"
                     >
                       {['==', '!=', '>', '>=', '<', '<=', 'in', 'contains'].map((op) => (
                         <option key={op} value={op}>
@@ -533,13 +532,13 @@ export function Rules() {
                     <input
                       value={row.value}
                       onChange={(event) => updateCondition(index, { value: event.target.value })}
-                      className="min-w-[8rem] flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                      className="min-w-[8rem] flex-1 rounded-control border border-paper-300 px-2 py-1.5 text-sm"
                       placeholder={row.op === 'in' ? '多个值用逗号分隔' : '值'}
                     />
                     <button
                       type="button"
                       onClick={() => removeCondition(index)}
-                      className="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                      className="rounded-control p-1.5 text-paper-500 hover:bg-danger-50 hover:text-danger-600"
                       aria-label="删除条件"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -555,7 +554,7 @@ export function Rules() {
             </datalist>
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-slate-700">
+          <label className="flex items-center gap-2 text-sm text-paper-700">
             <input
               type="checkbox"
               checked={form.enabled}

@@ -4,12 +4,12 @@ import {
   CreditCard,
   LayoutDashboard,
   ListChecks,
-  MapPin,
   MessageSquare,
   Plane,
   Settings,
   Users,
 } from 'lucide-react'
+import { RouteMark } from './RouteMark'
 
 export type SidebarPage =
   | 'trips'
@@ -82,25 +82,21 @@ export function Sidebar({
   ]
 
   return (
-    <aside className="flex h-screen w-56 flex-col border-r border-slate-200 bg-white">
-      <div className="px-5 py-6">
+    <aside className="flex h-screen w-60 flex-col border-r border-paper-200 bg-white">
+      <div className="px-4 py-5">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-600 text-white">
-            <MapPin className="h-4 w-4" />
-          </span>
+          <RouteMark className="h-6 w-6 text-accent-700" />
           <div>
-            <div className="text-sm font-semibold leading-tight text-slate-900">行程管家</div>
-            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Travel Hub</div>
+            <div className="text-sm font-semibold leading-tight text-paper-900">行程管家</div>
+            <div className="text-xs text-paper-500">行程通知台</div>
           </div>
         </div>
       </div>
 
-      <nav className="flex-1 space-y-6 overflow-y-auto px-3 pb-4">
+      <nav className="flex-1 space-y-5 overflow-y-auto px-2 pb-4">
         {groups.map((group) => (
           <div key={group.title}>
-            <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-              {group.title}
-            </p>
+            <p className="px-3 pb-2 text-xs font-medium text-paper-500">{group.title}</p>
             <div className="space-y-1">
               {group.items.map(({ id, label, icon: Icon }) => {
                 const active = currentPage === id
@@ -110,13 +106,13 @@ export function Sidebar({
                     type="button"
                     aria-current={active ? 'page' : undefined}
                     onClick={() => onPageChange(id)}
-                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition ${
+                    className={`flex w-full items-center gap-2.5 rounded-control px-3 py-2 text-left text-sm transition-colors ${
                       active
-                        ? 'bg-sky-50 font-medium text-sky-700'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                        ? 'bg-paper-200 font-medium text-paper-900'
+                        : 'text-paper-600 hover:bg-paper-100 hover:text-paper-900'
                     }`}
                   >
-                    <Icon className={`h-4 w-4 ${active ? 'text-sky-600' : 'text-slate-400'}`} />
+                    <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-accent-700' : 'text-paper-500'}`} />
                     {label}
                   </button>
                 )
@@ -126,13 +122,13 @@ export function Sidebar({
         ))}
       </nav>
 
-      <div className="border-t border-slate-200 p-4">
-        <div className="rounded-lg bg-slate-50 px-3 py-2.5">
-          <div className="truncate text-sm font-medium text-slate-900">{tenantName || '当前企业'}</div>
-          <div className="mt-0.5 truncate text-xs text-slate-500">
+      <div className="border-t border-paper-200 p-3">
+        <div className="px-2 py-1.5">
+          <div className="truncate text-sm font-medium text-paper-900">{tenantName || '当前企业'}</div>
+          <div className="mt-0.5 truncate text-xs text-paper-500">
             {username || '未登录'} · {ROLE_LABELS[userRole] ?? userRole}
           </div>
-          <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-400">v0.3.0</div>
+          <div className="mt-1 text-xs text-paper-400">v0.3.0</div>
         </div>
       </div>
     </aside>
