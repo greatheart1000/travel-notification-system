@@ -109,6 +109,15 @@ Stripe：https://<域名>/api/payments/stripe/webhook
 - **平台运营后台**：`/operator` 查看全平台租户、收入、套餐与订单，支持手动开通套餐与退款标记。
 - **生产安全开关**：生产环境关闭 OpenAPI 文档，可用 `METRICS_TOKEN` 保护运维指标。
 
+## 宣传视频
+
+面向抖音、小红书、视频号等渠道的竖屏宣传片：
+
+- `promo/xingcheng-guanjia-promo-vertical.mp4`：1080 × 1920，41 秒，中文旁白
+- `promo/xingcheng-guanjia-cover.jpg`：封面
+- `promo/xingcheng-guanjia-promo.srt`：字幕
+- `promo/README.md`：分镜、发布文案和重新生成说明
+
 ## 本地开发
 
 ```bash

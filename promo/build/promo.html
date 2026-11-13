@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --ink: #142f4c;
+    --muted: #5b7695;
+    --sky: #0284c7;
+    --sky-soft: #e0f2fe;
+    --pink: #f472b6;
+    --paper: #f3f8fd;
+    --navy: #0b1b33;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    font-family: "WenQuanYi Zen Hei", "Noto Sans CJK SC", system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+  }
+  .scene {
+    position: absolute; inset: 0;
+    opacity: 0; visibility: hidden;
+    transition: opacity .45s ease;
+  }
+  .scene.active { opacity: 1; visibility: visible; }
+  .topbar {
+    position: absolute; z-index: 30; top: 0; left: 0; right: 0; height: 6px;
+    background: rgba(2,132,199,.12);
+  }
+  .topbar .fill {
+    height: 100%; width: 0;
+    background: var(--sky);
+  }
+  .topbar .dot {
+    position: absolute; top: 0; width: 7px; height: 6px; background: var(--pink);
+    transform: translateX(-3px);
+  }
+  .brand {
+    position: absolute; z-index: 20; top: 54px; left: 64px;
+    display: flex; align-items: center; gap: 14px;
+    font-size: 27px; font-weight: 600; letter-spacing: .02em;
+  }
+  .brand svg { width: 34px; height: 34px; color: var(--sky); }
+  .scene-no {
+    position: absolute; z-index: 20; top: 58px; right: 64px;
+    font-size: 23px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .stage {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 150px 70px 60px;
+  }
+  .label {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 10px 20px; border: 1px solid #cfe4f6; border-radius: 999px;
+    color: #075985; background: rgba(255,255,255,.7);
+    font-size: 23px; font-weight: 500; letter-spacing: .02em;
+  }
+  .label .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pink); }
+  .phone-wrap {
+    position: relative; margin-top: 30px;
+    width: 660px; height: 1428px;
+    border-radius: 58px; padding: 10px;
+    background: #0f233d;
+    box-shadow: 0 35px 70px -34px rgba(11,27,51,.55);
+    transform: scale(.965);
+    animation: phone-in .8s cubic-bezier(.2,.8,.2,1) .25s forwards;
+  }
+  @keyframes phone-in { to { transform: scale(1); } }
+  .phone-wrap img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    border-radius: 49px;
+  }
+  .caption {
+    width: 100%; margin-top: 34px; text-align: left;
+  }
+  .caption h2 {
+    margin: 0; font-size: 56px; line-height: 1.22; font-weight: 600; letter-spacing: -.02em;
+  }
+  .caption p {
+    margin: 14px 0 0; font-size: 30px; line-height: 1.5; color: var(--muted);
+  }
+  .rise { display: block; opacity: 0; transform: translateY(18px); }
+  .scene.active .rise { animation: rise .7s cubic-bezier(.2,.8,.2,1) forwards; }
+  .delay-1 { animation-delay: .35s !important; }
+  .delay-2 { animation-delay: .6s !important; }
+  .delay-3 { animation-delay: .9s !important; }
+  @keyframes rise { to { opacity: 1; transform: translateY(0); } }
+  .callout {
+    position: absolute; z-index: 10; display: inline-flex; align-items: center; gap: 10px;
+    background: #fff; border: 1px solid #bae6fd; color: #075985;
+    padding: 12px 18px; border-radius: 16px; font-size: 22px; font-weight: 500;
+    box-shadow: 0 12px 30px -18px rgba(11,27,51,.35);
+    opacity: 0; transform: translateY(12px);
+  }
+  .scene.active .callout { animation: rise .55s cubic-bezier(.2,.8,.2,1) 1.25s forwards; }
+  .callout::before {
+    content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--pink);
+  }
+  .callout.workspace { left: 42px; top: 520px; }
+  .callout.plan { left: 42px; top: 820px; }
+  .callout.staff { left: 42px; top: 130px; }
+  .callout.team { left: 42px; top: 930px; }
+
+  /* Hook */
+  .hook { background: var(--navy); color: #fff; }
+  .hook .stage { align-items: stretch; padding: 190px 78px 80px; }
+  .hook .eyebrow {
+    display: flex; align-items: center; gap: 12px; color: #7dd3fc;
+    font-size: 25px; font-weight: 500;
+  }
+  .hook .eyebrow .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--pink); }
+  .hook h1 {
+    margin: 32px 0 0; font-size: 92px; line-height: 1.16; font-weight: 600; letter-spacing: -.035em;
+    max-width: 900px;
+  }
+  .hook .sub {
+    margin-top: 28px; font-size: 31px; line-height: 1.6; color: rgba(255,255,255,.62);
+    max-width: 800px;
+  }
+  .chat {
+    position: relative; margin-top: 92px; width: 100%; height: 660px;
+  }
+  .bubble {
+    position: absolute; max-width: 690px; padding: 22px 28px;
+    border-radius: 26px; font-size: 28px; line-height: 1.45;
+    opacity: 0; transform: translateY(20px);
+  }
+  .scene.active .bubble { animation: rise .6s cubic-bezier(.2,.8,.2,1) forwards; }
+  .bubble.left { left: 0; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.12); }
+  .bubble.right {
+    right: 0; background: #fff; color: var(--ink);
+    box-shadow: 0 20px 45px -25px rgba(0,0,0,.5);
+  }
+  .bubble.b1 { top: 0; animation-delay: .55s !important; }
+  .bubble.b2 { top: 190px; animation-delay: 1.15s !important; }
+  .bubble.b3 { top: 385px; animation-delay: 1.75s !important; }
+  .bubble.b4 { top: 540px; animation-delay: 2.3s !important; }
+  .bubble .meta { display:block; margin-bottom: 5px; font-size: 20px; color: #7dd3fc; }
+  .bubble.right .meta { color: #0284c7; }
+  .side-note {
+    position: absolute; right: 78px; bottom: 70px;
+    color: rgba(255,255,255,.38); font-size: 23px;
+  }
+
+  /* End */
+  .end { background: var(--navy); color: #fff; }
+  .end .stage { justify-content: center; align-items: flex-start; padding: 0 86px; }
+  .end .mark { display:flex; align-items:center; gap:16px; color:#7dd3fc; font-size:29px; }
+  .end .mark svg { width: 44px; height: 44px; }
+  .end h1 {
+    margin: 58px 0 0; font-size: 100px; line-height: 1.14; font-weight: 600; letter-spacing: -.04em;
+  }
+  .end .sub { margin-top: 26px; font-size: 33px; line-height: 1.6; color: rgba(255,255,255,.65); }
+  .end .cta {
+    margin-top: 64px; display: inline-flex; align-items: center; gap: 16px;
+    padding: 22px 36px; border-radius: 14px; background: #0284c7; color: #fff;
+    font-size: 30px; font-weight: 600;
+  }
+  .end .cta .arrow { font-size: 34px; line-height: 1; }
+  .end .meta {
+    position: absolute; left: 86px; right: 86px; bottom: 76px;
+    display:flex; justify-content:space-between; color: rgba(255,255,255,.38);
+    font-size: 22px; border-top: 1px solid rgba(255,255,255,.12); padding-top: 24px;
+  }
+</style>
+</head>
+<body>
+  <div class="topbar"><div class="fill" id="progress"></div><div class="dot" id="progressDot"></div></div>
+
+  <section class="scene hook" id="scene-0">
+    <div class="stage">
+      <div class="eyebrow"><span class="dot"></span> 导游的真实早晨</div>
+      <h1 class="rise delay-1">每天几十条群消息，<br/>一条都不能漏</h1>
+      <p class="sub rise delay-2">集合、天气、行程、回访，导游的早晨从回复群消息开始。</p>
+      <div class="chat">
+        <div class="bubble left b1"><span class="meta">游客群 · 07:12</span>明早几点大堂集合？</div>
+        <div class="bubble right b2"><span class="meta">导游 · 07:18</span>7:30 大堂集合，记得带身份证和保暖外套。</div>
+        <div class="bubble left b3"><span class="meta">游客群 · 07:24</span>喀纳斯今天降温吗？孩子要不要多穿一件？</div>
+        <div class="bubble right b4"><span class="meta">导游 · 07:31</span>今天 -6℃，路面有结冰，防滑鞋和羽绒服都穿上。</div>
+      </div>
+      <div class="side-note">行程提醒 · 天气提醒 · 集合提醒 · 回访提醒</div>
+    </div>
+  </section>
+
+  <section class="scene" id="scene-1">
+    <div class="brand">__ROUTE__ 行程管家</div><div class="scene-no">01 / 06</div>
+    <div class="stage">
+      <div class="label"><span class="dot"></span>导游工作台</div>
+      <div class="phone-wrap">
+        <img src="../assets/guide-mobile.png" alt="导游工作台" />
+        <div class="callout workspace" style="display:none">2 个行程待出发</div>
+      </div>
+      <div class="caption">
+        <h2 class="rise delay-1">今天要跟进的团，<br/>一屏看完</h2>
+        <p class="rise delay-2">行前、行中、回访阶段自动排好，打开就知道先做什么。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" id="scene-2">
+    <div class="brand">__ROUTE__ 行程管家</div><div class="scene-no">02 / 06</div>
+    <div class="stage">
+      <div class="label"><span class="dot"></span>行程发送计划</div>
+      <div class="phone-wrap">
+        <img src="../assets/plan-mobile.png" alt="行程发送计划" />
+        <div class="callout plan" style="display:none">自动发送 / 需我确认</div>
+      </div>
+      <div class="caption">
+        <h2 class="rise delay-1">行前到行后，<br/>提醒按时间排好</h2>
+        <p class="rise delay-2">早间、午间、晚间、回访；自动发送，或等你确认。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" id="scene-3">
+    <div class="brand">__ROUTE__ 行程管家</div><div class="scene-no">03 / 06</div>
+    <div class="stage">
+      <div class="label"><span class="dot"></span>分岗位消息</div>
+      <div class="phone-wrap">
+        <img src="../assets/staff-mobile.png" alt="分岗位消息" />
+        <div class="callout staff" style="display:none">管家 · 司导 · 司机</div>
+      </div>
+      <div class="caption">
+        <h2 class="rise delay-1">管家、司导、司机，<br/>分岗位发送</h2>
+        <p class="rise delay-2">每条消息独立编辑、独立发送，不再共用一段群发话术。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" id="scene-4">
+    <div class="brand">__ROUTE__ 行程管家</div><div class="scene-no">04 / 06</div>
+    <div class="stage">
+      <div class="label"><span class="dot"></span>团队执行</div>
+      <div class="phone-wrap">
+        <img src="../assets/team-mobile.png" alt="团队执行" />
+        <div class="callout team" style="display:none">发送人：赵玥 · 司机短信</div>
+      </div>
+      <div class="caption">
+        <h2 class="rise delay-1">管理员看得见<br/>每条通知</h2>
+        <p class="rise delay-2">谁负责哪个团、实际发了什么、有没有送达，都有记录。</p>
+      </div>
+    </div>
+  </section>
+
+
+  <section class="scene" id="scene-5">
+    <div class="brand">__ROUTE__ 行程管家</div><div class="scene-no">05 / 06</div>
+    <div class="stage">
+      <div class="label"><span class="dot"></span>天气提醒</div>
+      <div class="phone-wrap">
+        <img src="../assets/weather-mobile.png" alt="天气提醒" />
+      </div>
+      <div class="caption">
+        <h2 class="rise delay-1">天气突变，<br/>提醒也能跟上</h2>
+        <p class="rise delay-2">游客群通知和内部协同提醒，一起准备好。</p>
+      </div>
+    </div>
+  </section>
+  <section class="scene end" id="scene-6">
+    <div class="stage">
+      <div class="mark">__ROUTE__ 月亮旅行 · 行程管家</div>
+      <h1 class="rise delay-1">让每条提醒，<br/>按时到达</h1>
+      <p class="sub rise delay-2">面向旅行社与导游团队的<br/>行程通知工作台</p>
+      <div class="cta rise delay-3">预约演示 <span class="arrow">→</span></div>
+      <div class="meta"><span>行前 · 行中 · 行后</span><span>企业微信群 · 管理员可见</span></div>
+    </div>
+  </section>
+
+<script>
+  const SCENES = [{"name":"hook","duration":7200},{"name":"workspace","duration":6400},{"name":"plan","duration":4800},{"name":"staff","duration":4800},{"name":"team","duration":6400},{"name":"weather","duration":5600},{"name":"end","duration":5800}];
+  const route = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 17c3-.8 4-4 7-5s4 1 7-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="4" cy="17" r="1.9" fill="currentColor"/><circle cx="11" cy="12" r="1.9" fill="currentColor"/><circle cx="18" cy="9" r="1.9" fill="#F472B6"/></svg>`;
+  document.querySelectorAll('.brand').forEach(el => { el.innerHTML = route + el.innerHTML.replace('__ROUTE__ ', ''); });
+  const mark = document.querySelector('.end .mark');
+  mark.innerHTML = route + mark.innerHTML.replace('__ROUTE__ ', '');
+  const progress = document.getElementById('progress');
+  const dot = document.getElementById('progressDot');
+  const total = SCENES.reduce((sum, scene) => sum + scene.duration, 0);
+  let start = performance.now();
+  function tick(now) {
+    const pct = Math.min(1, (now - start) / total);
+    progress.style.width = (pct * 100) + '%';
+    dot.style.left = (pct * 100) + '%';
+    if (pct < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  let elapsed = 0;
+  SCENES.forEach((scene, index) => {
+    setTimeout(() => {
+      document.querySelectorAll('.scene').forEach(el => el.classList.remove('active'));
+      const target = document.getElementById('scene-' + index);
+      if (target) {
+        // restart entrance animations
+        target.querySelectorAll('.rise,.bubble,.callout').forEach(el => {
+          el.style.animation = 'none';
+          void el.offsetHeight;
+          el.style.animation = '';
+        });
+        target.classList.add('active');
+      }
+    }, elapsed);
+    elapsed += scene.duration;
+  });
+</script>
+</body>
+</html>
