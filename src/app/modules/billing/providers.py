@@ -26,6 +26,14 @@ class PaymentCreation:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class RefundResult:
+    ok: bool
+    refund_trade_no: str = ""
+    message: str = ""
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
 class PaymentProvider(Protocol):
     code: str
     display_name: str
@@ -43,6 +51,17 @@ class PaymentProvider(Protocol):
 
     def verify_notify(self, params: dict[str, str]) -> dict[str, Any] | None:
         """Verify a form/query callback. Return normalized payment facts or None."""
+
+    def refund(
+        self,
+        *,
+        order_no: str,
+        provider_trade_no: str,
+        amount_cents: int,
+        reason: str = "",
+    ) -> RefundResult:
+        """Attempt a gateway refund. Providers without a documented API raise
+        ``PaymentError("refund_gateway_not_configured")``."""
 
 
 def epay_sign(params: dict[str, Any], merchant_key: str) -> str:
@@ -151,6 +170,51 @@ class EpayProvider:
             "raw": dict(params),
         }
 
+    def refund(
+        self,
+        *,
+        order_no: str,
+        provider_trade_no: str,
+        amount_cents: int,
+        reason: str = "",
+    ) -> RefundResult:
+        refund_url = _env(f"PAYMENT_{self.code.upper()}_REFUND_URL")
+        if not refund_url:
+            raise PaymentError("refund_gateway_not_configured")
+        params: dict[str, Any] = {
+            "pid": self.pid,
+            "out_trade_no": order_no,
+            "money": f"{amount_cents / 100:.2f}",
+        }
+        if provider_trade_no:
+            params["trade_no"] = provider_trade_no
+        if reason:
+            params["reason"] = reason[:100]
+        params["sign"] = epay_sign(params, self.key)
+        params["sign_type"] = "MD5"
+        client = self._client()
+        try:
+            response = client.post(refund_url, data=params)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:  # noqa: BLE001 - normalized for the caller
+            raise PaymentError(f"refund_gateway_unreachable:{type(exc).__name__}") from exc
+        if str(payload.get("code")) not in {"1", "200"}:
+            raise PaymentError(
+                str(payload.get("msg") or payload.get("message") or "refund_gateway_rejected")
+            )
+        return RefundResult(
+            ok=True,
+            refund_trade_no=str(
+                payload.get("refund_no")
+                or payload.get("refundid")
+                or payload.get("trade_no")
+                or ""
+            ),
+            message=str(payload.get("msg") or "ok"),
+            raw=payload,
+        )
+
 
 @dataclass(slots=True)
 class StripeProvider:
@@ -251,6 +315,61 @@ class StripeProvider:
             "raw": event,
         }
 
+    def refund(
+        self,
+        *,
+        order_no: str,
+        provider_trade_no: str,
+        amount_cents: int,
+        reason: str = "",
+    ) -> RefundResult:
+        if not provider_trade_no:
+            raise PaymentError("refund_missing_provider_trade_no")
+        client = self._client()
+        headers = {"Authorization": f"Bearer {self.secret_key}"}
+        payment_intent = provider_trade_no
+        try:
+            if provider_trade_no.startswith("cs_"):
+                session_response = client.get(
+                    f"https://api.stripe.com/v1/checkout/sessions/{provider_trade_no}",
+                    headers=headers,
+                )
+                session_response.raise_for_status()
+                session = session_response.json()
+                payment_intent = str(
+                    session.get("payment_intent")
+                    if isinstance(session.get("payment_intent"), str)
+                    else (session.get("payment_intent") or {}).get("id", "")
+                )
+            if not payment_intent:
+                raise PaymentError("refund_missing_payment_intent")
+            data: dict[str, str] = {
+                "payment_intent": payment_intent,
+                "amount": str(amount_cents),
+            }
+            if reason:
+                data["reason"] = "requested_by_customer"
+            response = client.post(
+                "https://api.stripe.com/v1/refunds",
+                data=data,
+                headers=headers,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except PaymentError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - normalized for the caller
+            raise PaymentError(f"refund_gateway_unreachable:{type(exc).__name__}") from exc
+        status = str(payload.get("status") or "")
+        if status not in {"succeeded", "pending"}:
+            raise PaymentError(f"refund_gateway_rejected:{status or 'unknown'}")
+        return RefundResult(
+            ok=True,
+            refund_trade_no=str(payload.get("id") or ""),
+            message=status,
+            raw=payload,
+        )
+
 
 @dataclass(slots=True)
 class MockPaymentProvider:
@@ -277,6 +396,21 @@ class MockPaymentProvider:
     def verify_notify(self, params: dict[str, str]) -> dict[str, Any] | None:
         # Mock payments are completed through an authenticated dev endpoint.
         return None
+
+    def refund(
+        self,
+        *,
+        order_no: str,
+        provider_trade_no: str,
+        amount_cents: int,
+        reason: str = "",
+    ) -> RefundResult:
+        return RefundResult(
+            ok=True,
+            refund_trade_no=f"mock-refund-{order_no}",
+            message="mock_refunded",
+            raw={"order_no": order_no, "amount_cents": amount_cents},
+        )
 
 
 def _env(name: str, default: str = "") -> str:

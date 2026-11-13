@@ -397,3 +397,39 @@ def test_pending_orders_are_capped(monkeypatch, tmp_path) -> None:
         orders = client.get("/api/billing/orders", headers=_auth(token)).json()["data"]["items"]
         pending = [order for order in orders if order["status"] == "pending"]
         assert len(pending) <= 4
+
+
+def test_tenant_invoice_profile_roundtrip(monkeypatch, tmp_path) -> None:
+    app = _create_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        token = _login(client)
+        payload = {
+            "invoice_title": "行程管家旅行社有限公司",
+            "tax_id": "91310000MA1FL00000",
+            "invoice_address": "上海市浦东新区测试路 1 号",
+            "invoice_phone": "021-60000000",
+            "invoice_bank_name": "测试银行上海分行",
+            "invoice_bank_account": "6222000000000000",
+            "invoice_email": "invoice@example.com",
+        }
+        response = client.put(
+            "/api/admin/tenant-profile",
+            json=payload,
+            headers=_auth(token),
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        for key, value in payload.items():
+            assert data[key] == value
+
+        fetched = client.get("/api/admin/tenant-profile", headers=_auth(token))
+        assert fetched.status_code == 200
+        for key, value in payload.items():
+            assert fetched.json()["data"][key] == value
+
+        invalid = client.put(
+            "/api/admin/tenant-profile",
+            json={"invoice_email": "not-an-email"},
+            headers=_auth(token),
+        )
+        assert invalid.status_code == 400

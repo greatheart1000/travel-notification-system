@@ -74,6 +74,25 @@ class AutoNotificationScheduler:
             seconds=max(queue_interval, 1),
         )
 
+        minute, hour = _parse_cron(os.getenv("BILLING_DUNNING_CRON", "0 9 * * *"), 9)
+        self.scheduler.add_job(
+            self.run_billing_dunning,
+            "cron",
+            id="billing_dunning",
+            hour=hour,
+            minute=minute,
+        )
+
+    async def run_billing_dunning(self) -> None:
+        service = getattr(self.ctx, "billing_dunning_service", None)
+        if service is None:
+            return
+        try:
+            summary = await asyncio.to_thread(service.run)
+            logger.info("[AutoNotificationScheduler] billing dunning summary: %s", summary)
+        except Exception as exc:  # noqa: BLE001 - dunning must not kill the scheduler
+            logger.error("[AutoNotificationScheduler] billing dunning failed: %s", exc)
+
     async def run_dispatch_queue(self) -> None:
         """Drain the persistent async-dispatch outbox without blocking the event loop."""
         service = getattr(self.ctx, "async_dispatch_service", None)

@@ -132,7 +132,20 @@ class TenantRepository:
         tenant = self.get(tenant_id)
         if tenant is None:
             return None
-        for field_name in ("name", "status", "contact_name", "contact_phone", "contact_email"):
+        for field_name in (
+            "name",
+            "status",
+            "contact_name",
+            "contact_phone",
+            "contact_email",
+            "invoice_title",
+            "tax_id",
+            "invoice_address",
+            "invoice_phone",
+            "invoice_bank_name",
+            "invoice_bank_account",
+            "invoice_email",
+        ):
             if field_name in patch and patch[field_name] is not None:
                 setattr(tenant, field_name, str(patch[field_name]))
         tenant.updated_at = now_iso()

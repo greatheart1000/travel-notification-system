@@ -453,20 +453,91 @@ class BillingService:
         order_no: str,
         *,
         downgrade: bool = False,
+        mode: str = "manual",
+        reason: str = "",
+        operator_id: str = "",
+        amount_cents: int | None = None,
     ) -> PaymentOrder:
-        """Record a refund. Providers are refunded out-of-band by an operator."""
+        """Refund an order.
+
+        ``manual`` records the refund; the operator returns funds in the payment
+        gateway. ``gateway`` attempts the provider refund API first and only
+        marks the order refunded when the gateway accepts it.
+        """
         order = self.orders.get(order_no)
         if order is None:
             raise PaymentError("order_not_found")
         if order.status != "paid":
             raise PaymentError(f"order_not_refundable:{order.status}")
+        if order.refund_status == "refunded":
+            raise PaymentError("order_already_refunded")
+
+        normalized_mode = (mode or "manual").strip().lower()
+        if normalized_mode not in {"manual", "gateway"}:
+            raise PaymentError(f"invalid_refund_mode:{mode}")
+        refund_amount = order.amount_cents if amount_cents is None else int(amount_cents)
+        if refund_amount <= 0 or refund_amount > order.amount_cents:
+            raise PaymentError("invalid_refund_amount")
+        refund_reason = reason.strip()[:200]
+
+        if normalized_mode == "gateway":
+            provider = self.providers.get(order.provider)
+            refund_method = getattr(provider, "refund", None) if provider is not None else None
+            if refund_method is None:
+                self._record_refund_failure(
+                    order,
+                    refund_amount,
+                    refund_reason,
+                    "refund_gateway_not_supported",
+                )
+                raise PaymentError("refund_gateway_not_supported")
+            try:
+                result = refund_method(
+                    order_no=order.order_no,
+                    provider_trade_no=order.provider_trade_no,
+                    amount_cents=refund_amount,
+                    reason=refund_reason,
+                )
+            except PaymentError as exc:
+                self._record_refund_failure(order, refund_amount, refund_reason, str(exc))
+                metrics.inc("billing_refunds_failed_total", provider=order.provider)
+                raise
+            if not result.ok:
+                message = result.message or "refund_gateway_rejected"
+                self._record_refund_failure(order, refund_amount, refund_reason, message)
+                metrics.inc("billing_refunds_failed_total", provider=order.provider)
+                raise PaymentError(message)
+            order.refund_trade_no = result.refund_trade_no
+
         order.status = "refunded"
-        order.updated_at = now_iso()
+        order.refund_status = "refunded"
+        order.refund_mode = normalized_mode
+        order.refund_amount_cents = refund_amount
+        order.refund_reason = refund_reason
+        order.refund_error = ""
+        order.refunded_at = now_iso()
+        order.refunded_by = operator_id
+        order.updated_at = order.refunded_at
         self.orders.upsert(order)
         metrics.inc("billing_orders_refunded_total")
         if downgrade:
             self.activate_plan(order.tenant_id, "free")
         return order
+
+    def _record_refund_failure(
+        self,
+        order: PaymentOrder,
+        amount_cents: int,
+        reason: str,
+        error: str,
+    ) -> None:
+        order.refund_status = "failed"
+        order.refund_mode = "gateway"
+        order.refund_amount_cents = amount_cents
+        order.refund_reason = reason
+        order.refund_error = error
+        order.updated_at = now_iso()
+        self.orders.upsert(order)
 
     def overview(self) -> dict[str, Any]:
         period = self._period()

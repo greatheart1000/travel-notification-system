@@ -128,6 +128,38 @@ server {
 
 `PAYMENT_PROVIDERS=mock` 且 `APP_ENV != production` 时，账单页可调用「模拟支付」完成订单。生产环境该 provider 不会注册，接口会拒绝。
 
+### 退款
+
+退款入口在「平台运营 → 最近订单 → 处理退款」，支持两种模式：
+
+- **仅记账**（默认）：订单标记为已退款，实际资金由运营在支付商户后台退回；适合尚未提供退款 API 的网关。
+- **尝试网关退款**：调用支付网关退款接口；成功才把订单标记为已退款，失败时订单保持已支付并记录失败原因，可切换为仅记账后重试。
+
+易支付/极速付需要在 `.env` 配置商户后台提供的退款地址：
+
+```dotenv
+PAYMENT_EPAY_REFUND_URL=
+PAYMENT_JISUFU_REFUND_URL=
+```
+
+未配置时网关退款会明确返回 `refund_gateway_not_configured`，不会伪造成已退款。Stripe 退款使用 Stripe Refunds API（`STRIPE_SECRET_KEY`），无需额外地址。
+
+### 开票信息
+
+企业管理员在「设置 → 通知渠道 → 开票信息」维护发票抬头、税号、注册地址/电话、开户行/账号和收票邮箱。该信息随租户资料保存，用于后续开票与对账。
+
+### 到期提醒（dunning）
+
+独立 worker 每天按 `BILLING_DUNNING_CRON`（默认 9:00）扫描即将到期的试用/付费订阅，向租户收票邮箱或联系邮箱发送提醒：
+
+```dotenv
+BILLING_DUNNING_ENABLED=true
+BILLING_DUNNING_DAYS=7,3,1
+BILLING_DUNNING_CRON=0 9 * * *
+```
+
+提醒按 `(租户, 到期时间, 提前天数)` 幂等，重复运行不会重复发送。运营后台「平台运营 → 运行到期提醒」可手动触发。未配置 SMTP 时不会发送，只返回 `email_provider_not_configured`。
+
 ## 6. 短信接入
 
 认证验证码走平台级阿里云凭证（环境变量），业务通知走租户级配置：
@@ -159,11 +191,18 @@ docker compose exec mysql mysqldump \
 
 ## 8. 扩容与高可用
 
-当前架构中调度器与异步队列 worker 运行在应用进程内：
+Compose 将运行拆成两个服务：
 
-- 单实例：`WEB_CONCURRENCY=1`（默认，推荐）
-- 多实例：仅主实例 `RUN_SCHEDULER=true`，其余实例 `RUN_SCHEDULER=false`，避免重复调度
-- MySQL 已使用 `GET_LOCK` 保护队列 tick、订单结算与用量计数；高吞吐场景仍建议将队列 worker 拆为独立服务
+- `app`：HTTP API + SPA，`RUN_SCHEDULER=false`；
+- `worker`：`WORKER_MODE=true`，独占 cron 调度与异步发送队列。
+
+本地直接跑 uvicorn 时仍可设置 `RUN_SCHEDULER=true`，在 Web 进程内运行调度器。
+
+生产扩容：
+
+- 单 worker 服务；不要启动多个 worker，除非已实现 MySQL `SELECT ... FOR UPDATE SKIP LOCKED` 领取。
+- Web 可水平扩展，但每个实例都必须能访问同一 MySQL。
+- 高吞吐场景的下一步是把队列领取改为行级 `SKIP LOCKED`，并给 worker 增加独立的健康/积压指标。
 
 ## 9. 监控
 
@@ -172,7 +211,23 @@ docker compose exec mysql mysqldump \
 - 日志：至少收集 `ERROR` 与 `WARNING`；手机号与 webhook 已在日志中脱敏
 - 告警建议：队列积压、死信数量、支付回调失败、短信失败率、5xx 比例
 
-## 10. 安全与凭证轮换
+## 10. 端到端冒烟
+
+启动后端与前端后运行：
+
+```bash
+E2E_PASSWORD=<管理员密码> python3 scripts/e2e_smoke.py \
+  --base-url http://127.0.0.1:5173
+```
+
+脚本只做密码登录和页面巡检，不会发起短信或支付。首次使用需安装 Playwright 与 Chromium：
+
+```bash
+pip install playwright
+playwright install chromium
+```
+
+## 11. 安全与凭证轮换
 
 - 本文档与仓库不包含任何真实密钥；`.env`、`公共资料.txt` 已被忽略
 - 若凭证曾出现在聊天/共享文件/仓库历史中，视为已泄露，上线前轮换：
@@ -184,7 +239,7 @@ docker compose exec mysql mysqldump \
 - 生产必须关闭 `mock` 短信与 `mock` 支付
 - 建议开启数据库网络隔离、定期备份、最小权限账号与操作审计
 
-## 11. 常见问题
+## 12. 常见问题
 
 | 现象 | 排查 |
 |---|---|

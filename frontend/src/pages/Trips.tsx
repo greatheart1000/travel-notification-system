@@ -41,6 +41,7 @@ export function Trips({
   const [editedTrip, setEditedTrip] = useState<MakeTrip | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [weatherData, setWeatherData] = useState<MakeWeatherInfo[]>([])
+  const [weatherUnavailable, setWeatherUnavailable] = useState(false)
   const [showWarningModal, setShowWarningModal] = useState(false)
   const [selectedTripsForWarning, setSelectedTripsForWarning] = useState<string[]>([])
   const [warningMessageContent, setWarningMessageContent] = useState('')
@@ -70,20 +71,27 @@ export function Trips({
       setIsLoading(!cachedTrips)
       setLoadError(null)
       try {
-        const [apiTrips, apiWeather] = await Promise.all([
-          FigmaTripService.getAllTrips(),
-          FigmaWeatherService.getAllWeather(),
-        ])
+        const apiTrips = await FigmaTripService.getAllTrips()
         if (!active) return
         cachedTrips = apiTrips
-        cachedWeather = apiWeather
         setTrips(apiTrips)
-        setWeatherData(apiWeather)
       } catch (error) {
         if (!active) return
         setLoadError(error instanceof Error ? error.message : 'API 数据加载失败')
       } finally {
         if (active) setIsLoading(false)
+      }
+
+      // 天气是增强信息：失败不阻塞行程列表。
+      try {
+        const apiWeather = await FigmaWeatherService.getAllWeather()
+        if (!active) return
+        cachedWeather = apiWeather
+        setWeatherData(apiWeather)
+        setWeatherUnavailable(false)
+      } catch {
+        if (!active) return
+        setWeatherUnavailable(true)
       }
     }
 
@@ -296,6 +304,19 @@ export function Trips({
                   </div>
                 ))}
               </div>
+              {weatherUnavailable ? (
+                <p className="mt-1 flex items-center gap-1 text-xs text-paper-500">
+                  <Info className="h-3.5 w-3.5" />
+                  天气服务暂不可用，行程数据不受影响
+                </p>
+              ) : weatherData.length === 0 ? (
+                <p className="mt-1 text-xs text-paper-500">暂无天气数据</p>
+              ) : weatherData.some((item) => item.source === 'mock') ? (
+                <p className="mt-1 flex items-center gap-1 text-xs text-paper-500">
+                  <Info className="h-3.5 w-3.5" />
+                  天气服务未配置，当前展示模拟数据
+                </p>
+              ) : null}
             </div>
           </div>
           {warningCities.length > 0 ? (

@@ -51,6 +51,11 @@ if [ "${RUN_SCHEDULER:-true}" = "false" ]; then
   echo "[entrypoint] scheduler disabled for this process"
 fi
 
+if [ "${WORKER_MODE:-false}" = "true" ]; then
+  echo "[entrypoint] starting notification worker"
+  exec python -m app.worker
+fi
+
 exec uvicorn app.api.http:app \
   --host 0.0.0.0 \
   --port "${PORT:-8000}" \

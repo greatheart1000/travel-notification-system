@@ -32,11 +32,27 @@ services:
       TRAVEL_NOTIFICATION_MYSQL_HOST: mysql
       TRAVEL_NOTIFICATION_MYSQL_PORT: "3306"
       PORT: "8000"
+      RUN_SCHEDULER: "false"
     depends_on:
       mysql:
         condition: service_healthy
     ports:
       - "${APP_PORT:-8000}:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TRAVEL_NOTIFICATION_MYSQL_HOST: mysql
+      TRAVEL_NOTIFICATION_MYSQL_PORT: "3306"
+      WORKER_MODE: "true"
+    depends_on:
+      mysql:
+        condition: service_healthy
 
 volumes:
   mysql_data:

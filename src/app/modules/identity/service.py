@@ -175,6 +175,11 @@ class AccountService:
             if not EMAIL_PATTERN.fullmatch(email):
                 raise AuthError("invalid_email", "请输入有效的联系邮箱", 400)
             patch["contact_email"] = email
+        if patch.get("invoice_email"):
+            invoice_email = str(patch["invoice_email"]).strip()
+            if not EMAIL_PATTERN.fullmatch(invoice_email):
+                raise AuthError("invalid_invoice_email", "请输入有效的收票邮箱", 400)
+            patch["invoice_email"] = invoice_email
         return self.tenant_repository.update(tenant_id, patch)
 
     def list_tenants(self) -> list[dict[str, Any]]:

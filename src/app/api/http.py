@@ -55,6 +55,7 @@ from app.modules.notification.provider_registry import (
 from app.modules.notification.service import NotificationAttemptRepository, NotificationService
 from app.modules.trigger.risk_alert_service import RiskAlertService
 from app.services.analytics_view_service import AnalyticsViewService
+from app.services.billing_dunning_service import BillingDunningService
 from app.services.async_dispatch import AsyncDispatchService
 from app.services.emergency_weather_service import EmergencyWeatherService
 from app.services.notification_agent_service import NotificationAgentService
@@ -62,6 +63,7 @@ from app.services.preference_service import UserPreferenceService
 from app.services.risk_notification_service import RiskEvidenceRepository, RiskNotificationWorkflow
 from app.services.scheduler_service import init_scheduler
 from app.services.template_service import TemplateService
+from app.services.weather_query_service import UnknownWeatherRegion, WeatherQueryService
 from app.services.workflow_orchestrator import WorkflowOrchestrator
 
 UTC = UTC
@@ -128,6 +130,8 @@ class AppContext:
     audit_service: AuditService
     analytics_service: AnalyticsService
     weather_provider: WeatherProvider
+    weather_query_service: WeatherQueryService
+    billing_dunning_service: BillingDunningService
     risk_evidence_repository: RiskEvidenceRepository
     notification_tasks: dict[str, NotificationTask]
     email_provider: EmailProvider | None = None
@@ -173,6 +177,13 @@ class TenantProfileUpdateRequest(BaseModel):
     contact_name: str | None = Field(default=None, max_length=64)
     contact_phone: str | None = Field(default=None, max_length=32)
     contact_email: str | None = Field(default=None, max_length=128)
+    invoice_title: str | None = Field(default=None, max_length=128)
+    tax_id: str | None = Field(default=None, max_length=64)
+    invoice_address: str | None = Field(default=None, max_length=255)
+    invoice_phone: str | None = Field(default=None, max_length=32)
+    invoice_bank_name: str | None = Field(default=None, max_length=128)
+    invoice_bank_account: str | None = Field(default=None, max_length=64)
+    invoice_email: str | None = Field(default=None, max_length=128)
 
 
 class TenantUserCreateRequest(BaseModel):
@@ -197,6 +208,9 @@ class AdminPlanActivateRequest(BaseModel):
 
 class RefundOrderRequest(BaseModel):
     downgrade: bool = False
+    mode: str = Field(default="manual", pattern="^(manual|gateway)$")
+    reason: str = Field(default="", max_length=200)
+    amount_cents: int | None = Field(default=None, ge=1)
 
 
 class LoginRequest(BaseModel):
@@ -1914,6 +1928,14 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         trip_repository=trip_repository,
     )
     weather_provider = WeatherProvider()
+    weather_query_service = WeatherQueryService(provider=weather_provider)
+    email_provider = get_email_provider()
+    billing_dunning_service = BillingDunningService(
+        billing_service=billing_service,
+        tenant_repository=tenant_repository,
+        store=persistence,
+        email_provider=email_provider,
+    )
     risk_evidence_repository = RiskEvidenceRepository(store=persistence)
     context = AppContext(
         store=persistence,
@@ -1935,9 +1957,11 @@ def _build_context(store: JsonFileStore | None = None) -> AppContext:
         audit_service=audit_service,
         analytics_service=analytics_service,
         weather_provider=weather_provider,
+        weather_query_service=weather_query_service,
+        billing_dunning_service=billing_dunning_service,
         risk_evidence_repository=risk_evidence_repository,
         notification_tasks={},
-        email_provider=get_email_provider(),
+        email_provider=email_provider,
     )
     context.scheduler_service = init_scheduler(context)
     return context
@@ -2778,6 +2802,20 @@ def create_app() -> FastAPI:
         )
         return _ok(subscription.to_dict())
 
+    @fastapi_app.post("/api/operator/billing/dunning/run")
+    def operator_run_billing_dunning(
+        user: dict[str, str] = Depends(require_operator),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        summary = ctx.billing_dunning_service.run()
+        ctx.audit_service.record(
+            operator_id=user["id"],
+            action="billing_dunning_run",
+            target="billing",
+            detail=summary,
+        )
+        return _ok(summary)
+
     @fastapi_app.post("/api/operator/orders/{order_no}/refund")
     def operator_refund_order(
         order_no: str,
@@ -2785,14 +2823,30 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(require_operator),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        order = ctx.billing_service.refund_order(
-            order_no, downgrade=payload.downgrade
-        )
+        try:
+            order = ctx.billing_service.refund_order(
+                order_no,
+                downgrade=payload.downgrade,
+                mode=payload.mode,
+                reason=payload.reason,
+                operator_id=user["id"],
+                amount_cents=payload.amount_cents,
+            )
+        except PaymentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         ctx.audit_service.record(
             operator_id=user["id"],
             action="billing_order_refunded",
             target=order_no,
-            detail={"downgrade": payload.downgrade, "tenant_id": order.tenant_id},
+            detail={
+                "downgrade": payload.downgrade,
+                "tenant_id": order.tenant_id,
+                "mode": payload.mode,
+                "reason": payload.reason,
+                "amount_cents": payload.amount_cents,
+                "refund_status": order.refund_status,
+                "refund_trade_no": order.refund_trade_no,
+            },
         )
         return _ok(order.to_dict())
 
@@ -4677,6 +4731,28 @@ def create_app() -> FastAPI:
         if "job_id" in dispatch_result:
             response["job_id"] = dispatch_result["job_id"]
         return _ok(response)
+
+    @fastapi_app.get("/api/weather/{region}")
+    def get_region_weather(
+        region: str,
+        user: dict[str, str] = Depends(get_current_user),
+        ctx: AppContext = Depends(get_ctx),
+    ) -> dict[str, Any]:
+        tenant_id = _current_tenant_id(user)
+        config = ctx.tenant_notification_config_repository.get(tenant_id) or {}
+        location_context = {
+            "qweather_location_id": config.get("qweather_location_id", ""),
+            "qweather_lat": config.get("qweather_lat", ""),
+            "qweather_lon": config.get("qweather_lon", ""),
+        }
+        try:
+            result = ctx.weather_query_service.list_region(
+                region,
+                location_context=location_context,
+            )
+        except UnknownWeatherRegion:
+            raise HTTPException(status_code=404, detail="region_not_supported")
+        return _ok(result)
 
     @fastapi_app.get("/api/notifications/emergency-weather")
     def get_emergency_weather_summary(

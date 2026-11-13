@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Building2, Eye, EyeOff, MessageSquare, Send, ShieldCheck } from 'lucide-react'
+import { Building2, Eye, EyeOff, FileText, MessageSquare, Send, ShieldCheck } from 'lucide-react'
 import { PageShell } from '../../components/PageShell'
 import { Button } from '../../components/Button'
 import { Badge } from '../../components/Badge'
@@ -128,6 +128,29 @@ export function Channels() {
     }
   }
 
+  const saveInvoice = async () => {
+    setState((prev) => ({ ...prev, invoice: 'saving' }))
+    setMessage((prev) => ({ ...prev, invoice: '' }))
+    setError(null)
+    try {
+      const result = await tenantSettingsApi.updateProfile({
+        invoice_title: profile.invoice_title ?? '',
+        tax_id: profile.tax_id ?? '',
+        invoice_address: profile.invoice_address ?? '',
+        invoice_phone: profile.invoice_phone ?? '',
+        invoice_bank_name: profile.invoice_bank_name ?? '',
+        invoice_bank_account: profile.invoice_bank_account ?? '',
+        invoice_email: profile.invoice_email ?? '',
+      })
+      setProfile(result)
+      setState((prev) => ({ ...prev, invoice: 'saved' }))
+      setMessage((prev) => ({ ...prev, invoice: '开票信息已保存' }))
+    } catch (err) {
+      setState((prev) => ({ ...prev, invoice: 'error' }))
+      setMessage((prev) => ({ ...prev, invoice: getErrorMessage(err) }))
+    }
+  }
+
   const statusBadge = (configured: boolean) =>
     configured ? <Badge variant="success">已配置</Badge> : <Badge variant="default">未配置</Badge>
 
@@ -215,6 +238,104 @@ export function Channels() {
               保存企业资料
             </Button>
             {feedback('profile')}
+          </section>
+
+          <section className={`${cardClass} lg:col-span-2`}>
+            <SectionHeading
+              icon={FileText}
+              title="开票信息"
+              hint="用于支付成功后开具发票；收票邮箱可接收电子发票"
+            />
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="block text-sm font-medium text-paper-700">
+                发票抬头
+                <input
+                  value={profile.invoice_title ?? ''}
+                  onChange={(event) =>
+                    setProfile((prev) => ({ ...prev, invoice_title: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="与企业营业执照一致"
+                />
+              </label>
+              <label className="block text-sm font-medium text-paper-700">
+                税号
+                <input
+                  value={profile.tax_id ?? ''}
+                  onChange={(event) =>
+                    setProfile((prev) => ({ ...prev, tax_id: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="统一社会信用代码"
+                />
+              </label>
+              <label className="block text-sm font-medium text-paper-700">
+                注册地址
+                <input
+                  value={profile.invoice_address ?? ''}
+                  onChange={(event) =>
+                    setProfile((prev) => ({ ...prev, invoice_address: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="可选"
+                />
+              </label>
+              <label className="block text-sm font-medium text-paper-700">
+                注册电话
+                <input
+                  value={profile.invoice_phone ?? ''}
+                  onChange={(event) =>
+                    setProfile((prev) => ({ ...prev, invoice_phone: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="可选"
+                />
+              </label>
+              <label className="block text-sm font-medium text-paper-700">
+                开户银行
+                <input
+                  value={profile.invoice_bank_name ?? ''}
+                  onChange={(event) =>
+                    setProfile((prev) => ({ ...prev, invoice_bank_name: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="可选"
+                />
+              </label>
+              <label className="block text-sm font-medium text-paper-700">
+                银行账号
+                <input
+                  value={profile.invoice_bank_account ?? ''}
+                  onChange={(event) =>
+                    setProfile((prev) => ({ ...prev, invoice_bank_account: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="可选"
+                />
+              </label>
+              <label className="block text-sm font-medium text-paper-700 sm:col-span-2">
+                收票邮箱
+                <input
+                  type="email"
+                  value={profile.invoice_email ?? ''}
+                  onChange={(event) =>
+                    setProfile((prev) => ({ ...prev, invoice_email: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="用于接收电子发票"
+                />
+              </label>
+            </div>
+            <Button
+              className="mt-4"
+              size="sm"
+              loading={state.invoice === 'saving'}
+              onClick={() => void saveInvoice()}
+            >
+              保存开票信息
+            </Button>
+            {feedback('invoice')}
           </section>
 
           <section className={cardClass}>

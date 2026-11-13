@@ -18,6 +18,13 @@ class Tenant:
     contact_name: str = ""
     contact_phone: str = ""
     contact_email: str = ""
+    invoice_title: str = ""
+    tax_id: str = ""
+    invoice_address: str = ""
+    invoice_phone: str = ""
+    invoice_bank_name: str = ""
+    invoice_bank_account: str = ""
+    invoice_email: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -30,6 +37,13 @@ class Tenant:
             "contact_name": self.contact_name,
             "contact_phone": self.contact_phone,
             "contact_email": self.contact_email,
+            "invoice_title": self.invoice_title,
+            "tax_id": self.tax_id,
+            "invoice_address": self.invoice_address,
+            "invoice_phone": self.invoice_phone,
+            "invoice_bank_name": self.invoice_bank_name,
+            "invoice_bank_account": self.invoice_bank_account,
+            "invoice_email": self.invoice_email,
             "created_at": self.created_at or now_iso(),
             "updated_at": self.updated_at or now_iso(),
         }
@@ -43,6 +57,13 @@ class Tenant:
             contact_name=str(raw.get("contact_name") or ""),
             contact_phone=str(raw.get("contact_phone") or ""),
             contact_email=str(raw.get("contact_email") or ""),
+            invoice_title=str(raw.get("invoice_title") or ""),
+            tax_id=str(raw.get("tax_id") or ""),
+            invoice_address=str(raw.get("invoice_address") or ""),
+            invoice_phone=str(raw.get("invoice_phone") or ""),
+            invoice_bank_name=str(raw.get("invoice_bank_name") or ""),
+            invoice_bank_account=str(raw.get("invoice_bank_account") or ""),
+            invoice_email=str(raw.get("invoice_email") or ""),
             created_at=str(raw.get("created_at") or ""),
             updated_at=str(raw.get("updated_at") or ""),
         )

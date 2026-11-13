@@ -155,13 +155,53 @@ core. It is designed so that an operator only needs to fill `.env` and run
 ### Remaining gaps before large-scale SaaS
 1. Overall repository coverage is still below the notification-domain gate;
    billing/identity are covered by unit and API tests, but not every legacy
-   module is.
-2. The scheduler and outbox worker still run inside the web process; split them
-   into a dedicated worker before horizontal scaling beyond `RUN_SCHEDULER`.
-3. Refunds are bookkeeping only; actual gateway refund APIs are not integrated.
-4. Invoice/tax fields, self-service subscription cancellation UI beyond
-   "cancel at period end", and dunning are not implemented.
+   module is. Targeted tests were added for weather, invoice profile, refund
+   workflow and the worker entrypoint.
+2. A dedicated worker entrypoint (`python -m app.worker`) and Compose `worker`
+   service now own the scheduler/outbox; the web process defaults to
+   `RUN_SCHEDULER=false`. Queue claiming still uses the advisory lock; MySQL
+   row-level `SELECT ... FOR UPDATE SKIP LOCKED` remains the next scaling step.
+3. Refunds now support a gateway attempt (Stripe Refunds API; Epay/Jisufu via a
+   merchant-configured refund URL) and a tracked manual bookkeeping mode. The
+   default is still manual bookkeeping; partial-refund UI and automatic
+   reconciliation are not implemented.
+4. Tenant invoice/tax fields are stored on the tenant profile. Subscription and
+   trial expiry reminders (dunning) are implemented by the worker. Invoice PDF
+   generation and self-service subscription cancellation beyond "cancel at
+   period end" are not implemented.
 5. MySQL row-level `SKIP LOCKED` claiming is still the next step for
    high-throughput multi-worker queues.
 6. Stripe CNY availability depends on the merchant account; the adapter is
    implemented but should be validated against the live account.
+7. A Playwright password-login smoke script (`scripts/e2e_smoke.py`) checks the
+   main commercial pages. A full browser suite wired into CI is still pending.
+8. Raw AK/SK and provider secrets still live in environment variables/secret
+   manager; there is no dedicated secret-manager integration.
+9. The region weather list API now exists and degrades to mock data when
+   QWeather is not configured. Live weather still requires `QWEATHER_API_HOST`,
+   `QWEATHER_API_KEY`, and tenant location configuration.
+
+---
+
+## Commercial hardening (2026-11-13)
+
+- **Region weather API**: `GET /api/weather/{region}` uses QWeather when
+  configured and deterministically falls back to mock data otherwise. The Trips
+  page treats weather as non-blocking, so a weather outage no longer hides the
+  trip list.
+- **Tenant billing profile**: invoice title, tax id, registered address/phone,
+  bank name/account and invoice email are stored on the tenant and editable at
+  Settings → Notification Channels → Invoice info.
+- **Refund workflow**: `manual` bookkeeping and `gateway` attempt modes with
+  refund status/amount/reason/operator/error. Stripe uses the Refunds API;
+  Epay/Jisufu use a merchant-configured refund URL. Gateway failures keep the
+  order paid and surface the error in the operator console.
+- **Dedicated worker**: `python -m app.worker` plus a Compose `worker` service
+  own cron jobs and the outbox; the web process runs with `RUN_SCHEDULER=false`.
+- **Dunning**: the worker scans trialing/paid subscriptions and sends
+  idempotent expiry reminders at 7/3/1 days by email; operators can trigger a
+  run manually.
+- **E2E smoke**: `scripts/e2e_smoke.py` performs a password login and checks the
+  main commercial pages with Playwright. It does not send SMS or payments.
+- **Tests**: backend suite is at 194 passing tests (targeted coverage added for
+  weather, invoice profile, refund workflow, dunning and the worker entrypoint).

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { Mail, RefreshCw } from 'lucide-react'
 import { PageShell } from '../components/PageShell'
 import { Button } from '../components/Button'
 import { Badge } from '../components/Badge'
@@ -9,6 +9,7 @@ import { useSession } from '../context/SessionContext'
 import {
   billingApi,
   operatorApi,
+  type BillingOrder,
   type OperatorOverview,
   type OperatorTenant,
   type Plan,
@@ -65,6 +66,9 @@ export function Operator() {
   const [tenants, setTenants] = useState<OperatorTenant[]>([])
   const [plans, setPlans] = useState<Plan[]>([])
   const [editing, setEditing] = useState<{ tenant: OperatorTenant; planCode: string; days: string } | null>(null)
+  const [refundTarget, setRefundTarget] = useState<BillingOrder | null>(null)
+  const [refundMode, setRefundMode] = useState<'manual' | 'gateway'>('manual')
+  const [refundReason, setRefundReason] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -119,15 +123,43 @@ export function Operator() {
     }
   }
 
-  const refund = async (orderNo: string) => {
-    if (!window.confirm(`确认将订单 ${orderNo} 标记为已退款？实际退款需在支付商户后台完成。`)) return
-    setBusy(`refund:${orderNo}`)
+  const runDunning = async () => {
+    setBusy('dunning')
+    setError(null)
     try {
-      await operatorApi.refundOrder(orderNo, false)
-      setNotice(`订单 ${orderNo} 已标记为退款`)
+      const summary = await operatorApi.runDunning()
+      setNotice(
+        `到期提醒已处理：发送 ${summary.sent} 封，跳过 ${summary.skipped} 个，失败 ${summary.failed} 个`,
+      )
       await load()
     } catch (err) {
       setError(getErrorMessage(err))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const refund = async () => {
+    if (!refundTarget) return
+    const orderNo = refundTarget.order_no
+    setBusy(`refund:${orderNo}`)
+    setError(null)
+    try {
+      await operatorApi.refundOrder(orderNo, {
+        mode: refundMode,
+        reason: refundReason.trim(),
+      })
+      setNotice(
+        refundMode === 'gateway'
+          ? `订单 ${orderNo} 网关退款成功`
+          : `订单 ${orderNo} 已记账退款，请在支付商户后台完成资金退回`,
+      )
+      setRefundTarget(null)
+      setRefundReason('')
+      await load()
+    } catch (err) {
+      setError(getErrorMessage(err))
+      await load()
     } finally {
       setBusy('')
     }
@@ -148,9 +180,14 @@ export function Operator() {
       title="平台运营"
       description="查看全平台租户、订阅与收入，处理手动开通与退款。退款标记仅做账务记录，实际资金退还请在支付商户后台操作。"
       actions={
-        <Button size="sm" variant="secondary" onClick={() => void load()}>
-          <RefreshCw className="h-4 w-4" /> 刷新
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={() => void runDunning()} loading={busy === 'dunning'}>
+            <Mail className="h-4 w-4" /> 运行到期提醒
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => void load()}>
+            <RefreshCw className="h-4 w-4" /> 刷新
+          </Button>
+        </div>
       }
     >
       {error ? (
@@ -292,6 +329,16 @@ export function Operator() {
                       <td className="px-5 py-3 tabular-nums text-paper-700">{money(order.amount_cents)}</td>
                       <td className="px-5 py-3">
                         <Badge variant={status.variant}>{status.label}</Badge>
+                        {order.refund_status === 'failed' && order.refund_error ? (
+                          <p className="mt-1 max-w-52 truncate text-xs text-danger-700" title={order.refund_error}>
+                            退款失败：{order.refund_error}
+                          </p>
+                        ) : null}
+                        {order.refund_status === 'refunded' ? (
+                          <p className="mt-1 text-xs text-success-700">
+                            退款：{order.refund_mode === 'gateway' ? '网关' : '人工记账'}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="px-5 py-3 tabular-nums text-paper-500">{formatDate(order.created_at)}</td>
                       <td className="px-5 py-3 text-right">
@@ -300,9 +347,13 @@ export function Operator() {
                             size="sm"
                             variant="secondary"
                             loading={busy === `refund:${order.order_no}`}
-                            onClick={() => void refund(order.order_no)}
+                            onClick={() => {
+                              setRefundTarget(order)
+                              setRefundMode('manual')
+                              setRefundReason('')
+                            }}
                           >
-                            标记退款
+                            处理退款
                           </Button>
                         ) : (
                           <span className="text-xs text-paper-400">-</span>
@@ -369,6 +420,60 @@ export function Operator() {
             </label>
             <p className="text-xs text-paper-500">
               手动开通不会生成支付订单；如需账务记录，请创建并完成支付订单。
+            </p>
+          </div>
+        ) : null}
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(refundTarget)}
+        onClose={() => setRefundTarget(null)}
+        title={refundTarget ? `退款 · ${refundTarget.order_no}` : '退款'}
+        footer={
+          <div className="flex justify-end gap-3">
+            <Button variant="secondary" size="sm" onClick={() => setRefundTarget(null)}>
+              取消
+            </Button>
+            <Button
+              size="sm"
+              loading={busy === `refund:${refundTarget?.order_no ?? ''}`}
+              onClick={() => void refund()}
+            >
+              确认退款
+            </Button>
+          </div>
+        }
+      >
+        {refundTarget ? (
+          <div className="space-y-4">
+            <p className="text-sm text-paper-600">
+              订单金额：<span className="font-medium tabular-nums text-paper-900">{money(refundTarget.amount_cents)}</span>
+            </p>
+            <label className="block text-sm font-medium text-paper-700">
+              退款方式
+              <select
+                value={refundMode}
+                onChange={(event) => setRefundMode(event.target.value as 'manual' | 'gateway')}
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm"
+              >
+                <option value="manual">仅记账（在支付商户后台手动退款）</option>
+                <option value="gateway">尝试网关退款</option>
+              </select>
+            </label>
+            <label className="block text-sm font-medium text-paper-700">
+              退款原因
+              <input
+                value={refundReason}
+                onChange={(event) => setRefundReason(event.target.value)}
+                className="mt-1 w-full rounded-control border border-paper-300 px-3 py-2 text-sm"
+                placeholder="可选，最多 200 字"
+                maxLength={200}
+              />
+            </label>
+            <p className="text-xs text-paper-500">
+              {refundMode === 'gateway'
+                ? '将调用支付网关退款接口；网关不支持或失败时订单保持已支付并记录失败原因。'
+                : '仅记录退款状态，不会自动把资金退回；请在支付商户后台完成退款。'}
             </p>
           </div>
         ) : null}

@@ -140,7 +140,7 @@ npm -C frontend run build
 
 - **数据库迁移**：容器启动时自动执行 `scripts/apply_migrations.py`，已执行文件记录在 `t_schema_migrations`。
 - **备份**：备份 MySQL 数据卷/实例；订单、租户与用户数据都在 MySQL 中。
-- **扩容**：当前调度器与队列 worker 在应用进程内运行。单实例使用 `WEB_CONCURRENCY=1`；多实例时只在主实例设置 `RUN_SCHEDULER=true`，其余实例设为 `false`，且每个实例都必须能访问同一 MySQL。
+- **扩容**：Compose 已拆出独立 `worker` 服务（`WORKER_MODE=true`）负责调度器与异步队列；Web 进程默认 `RUN_SCHEDULER=false`。Web 可多实例，但只保留一个 worker；每个实例都必须能访问同一 MySQL。高吞吐的 `SKIP LOCKED` 队列领取仍待下一阶段。
 - **死信处理**：管理员在「发送任务」按状态筛选并重新入队，操作写审计日志。
 - **额度告警**：账单页展示本月用量；额度耗尽时短信发送失败关闭并回退企业微信（若配置）。
 

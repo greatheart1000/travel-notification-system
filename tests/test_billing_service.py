@@ -265,3 +265,91 @@ def test_epay_create_payment_uses_gateway_response() -> None:
     assert creation.pay_url == "https://pay.example/abc"
     assert http.calls[0][0] == "https://xnoo.cn/mapi.php"
     assert http.calls[0][1]["sign"] == epay_sign(http.calls[0][1], "secret")
+
+
+class RefundProvider(FakeProvider):
+    def __init__(self, *, ok: bool = True) -> None:
+        super().__init__()
+        self.ok = ok
+        self.refund_calls: list[dict] = []
+
+    def refund(self, **kwargs):
+        from app.modules.billing.providers import RefundResult
+
+        self.refund_calls.append(kwargs)
+        if not self.ok:
+            raise PaymentError("gateway_declined")
+        return RefundResult(ok=True, refund_trade_no="refund-1", message="ok")
+
+
+def test_manual_refund_records_operational_metadata(tmp_path) -> None:
+    from app.modules.integration.persistence import JsonFileStore
+
+    provider = RefundProvider()
+    service = BillingService(JsonFileStore(base_dir=tmp_path), providers={provider.code: provider})
+    order = service.create_order("tenant-a", "starter", "mock")
+    service.handle_notify(
+        "mock",
+        {"out_trade_no": order.order_no, "amount_cents": "29900", "sign": "valid"},
+    )
+
+    refunded = service.refund_order(
+        order.order_no,
+        mode="manual",
+        reason="客户申请退款",
+        operator_id="ops-1",
+    )
+
+    assert refunded.status == "refunded"
+    assert refunded.refund_status == "refunded"
+    assert refunded.refund_mode == "manual"
+    assert refunded.refund_amount_cents == 29900
+    assert refunded.refund_reason == "客户申请退款"
+    assert refunded.refunded_by == "ops-1"
+    assert refunded.refunded_at
+
+
+def test_gateway_refund_calls_provider_and_marks_order(tmp_path) -> None:
+    from app.modules.integration.persistence import JsonFileStore
+
+    provider = RefundProvider()
+    service = BillingService(JsonFileStore(base_dir=tmp_path), providers={provider.code: provider})
+    order = service.create_order("tenant-a", "starter", "mock")
+    service.handle_notify(
+        "mock",
+        {"out_trade_no": order.order_no, "amount_cents": "29900", "sign": "valid"},
+    )
+
+    refunded = service.refund_order(
+        order.order_no,
+        mode="gateway",
+        reason="duplicate",
+        operator_id="ops-1",
+    )
+
+    assert refunded.status == "refunded"
+    assert refunded.refund_mode == "gateway"
+    assert refunded.refund_trade_no == "refund-1"
+    assert provider.refund_calls[0]["order_no"] == order.order_no
+    assert provider.refund_calls[0]["amount_cents"] == 29900
+
+
+def test_gateway_refund_failure_keeps_order_paid_and_records_error(tmp_path) -> None:
+    from app.modules.integration.persistence import JsonFileStore
+
+    provider = RefundProvider(ok=False)
+    service = BillingService(JsonFileStore(base_dir=tmp_path), providers={provider.code: provider})
+    order = service.create_order("tenant-a", "starter", "mock")
+    service.handle_notify(
+        "mock",
+        {"out_trade_no": order.order_no, "amount_cents": "29900", "sign": "valid"},
+    )
+
+    with pytest.raises(PaymentError):
+        service.refund_order(order.order_no, mode="gateway", reason="gateway down")
+
+    stored = service.get_order("tenant-a", order.order_no)
+    assert stored is not None
+    assert stored.status == "paid"
+    assert stored.refund_status == "failed"
+    assert stored.refund_error == "gateway_declined"

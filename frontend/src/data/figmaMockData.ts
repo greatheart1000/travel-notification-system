@@ -19,6 +19,7 @@ export interface MakeWeatherInfo {
   weather: string
   wind: string
   warning: string | null
+  source?: string
 }
 
 export interface MakeItineraryDay {

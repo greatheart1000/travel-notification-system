@@ -202,13 +202,19 @@ class MockWeatherProvider:
     ) -> WeatherInfo:
         condition, temp, warning = self._deterministic_profile(destination)
 
+        warning_labels = {
+            "yellow": "黄色预警",
+            "orange": "橙色预警",
+            "red": "红色预警",
+            "blue": "蓝色预警",
+        }
         logger.info("Fetched mock weather for %s: %s, %sC", destination, condition, temp)
         return WeatherInfo(
             destination=destination,
             condition=condition,
             temperature=temp,
             warning_level=warning,
-            alert_title=f"模拟天气{warning}级提醒" if warning else "",
+            alert_title=warning_labels.get(warning or "", "") if warning else "",
             location_id=str((location_context or {}).get("qweather_location_id", "")),
             lat=str((location_context or {}).get("qweather_lat", "")),
             lon=str((location_context or {}).get("qweather_lon", "")),

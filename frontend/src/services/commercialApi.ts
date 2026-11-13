@@ -20,6 +20,13 @@ export interface TenantInfo {
   contact_name?: string
   contact_phone?: string
   contact_email?: string
+  invoice_title?: string
+  tax_id?: string
+  invoice_address?: string
+  invoice_phone?: string
+  invoice_bank_name?: string
+  invoice_bank_account?: string
+  invoice_email?: string
 }
 
 export interface Plan {
@@ -75,6 +82,14 @@ export interface BillingOrder {
   created_at: string
   paid_at: string
   expires_at: string
+  refund_status?: 'none' | 'refunded' | 'failed'
+  refund_mode?: 'manual' | 'gateway' | ''
+  refund_amount_cents?: number
+  refund_reason?: string
+  refund_error?: string
+  refunded_at?: string
+  refunded_by?: string
+  refund_trade_no?: string
 }
 
 export interface PlansResponse {
@@ -177,10 +192,27 @@ export const operatorApi = {
       { plan_code: planCode, days: days ?? null },
     )
   },
-  async refundOrder(orderNo: string, downgrade = false) {
+  async runDunning() {
+    return api.post<{
+      enabled: boolean
+      checked: number
+      sent: number
+      skipped: number
+      failed: number
+      reason?: string
+    }>('/operator/billing/dunning/run')
+  },
+  async refundOrder(
+    orderNo: string,
+    options: { downgrade?: boolean; mode?: 'manual' | 'gateway'; reason?: string } = {},
+  ) {
     return api.post<BillingOrder>(
       `/operator/orders/${encodeURIComponent(orderNo)}/refund`,
-      { downgrade },
+      {
+        downgrade: options.downgrade ?? false,
+        mode: options.mode ?? 'manual',
+        reason: options.reason ?? '',
+      },
     )
   },
 }

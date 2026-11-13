@@ -71,6 +71,14 @@ class PaymentOrder:
     paid_at: str = ""
     expires_at: str = ""
     last_error: str = ""
+    refund_status: str = "none"  # none | refunded | failed
+    refund_mode: str = ""  # manual | gateway
+    refund_amount_cents: int = 0
+    refund_reason: str = ""
+    refund_error: str = ""
+    refunded_at: str = ""
+    refunded_by: str = ""
+    refund_trade_no: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,6 +98,14 @@ class PaymentOrder:
             "paid_at": self.paid_at,
             "expires_at": self.expires_at,
             "last_error": self.last_error,
+            "refund_status": self.refund_status,
+            "refund_mode": self.refund_mode,
+            "refund_amount_cents": self.refund_amount_cents,
+            "refund_reason": self.refund_reason,
+            "refund_error": self.refund_error,
+            "refunded_at": self.refunded_at,
+            "refunded_by": self.refunded_by,
+            "refund_trade_no": self.refund_trade_no,
         }
 
     @classmethod
@@ -110,6 +126,14 @@ class PaymentOrder:
             paid_at=str(raw.get("paid_at") or ""),
             expires_at=str(raw.get("expires_at") or ""),
             last_error=str(raw.get("last_error") or ""),
+            refund_status=str(raw.get("refund_status") or "none"),
+            refund_mode=str(raw.get("refund_mode") or ""),
+            refund_amount_cents=int(raw.get("refund_amount_cents") or 0),
+            refund_reason=str(raw.get("refund_reason") or ""),
+            refund_error=str(raw.get("refund_error") or ""),
+            refunded_at=str(raw.get("refunded_at") or ""),
+            refunded_by=str(raw.get("refunded_by") or ""),
+            refund_trade_no=str(raw.get("refund_trade_no") or ""),
         )
 
 

@@ -289,6 +289,7 @@ export function Billing() {
               <li>升级套餐立即生效，剩余额度不跨套餐保留。</li>
               <li>试用期结束后自动回落到免费版额度，不会中断通知链路。</li>
               <li>企业微信渠道不消耗短信额度。</li>
+              <li>发票信息由企业管理员在「通知渠道 → 开票信息」维护。</li>
             </ul>
             {mockOrder && canPurchase ? (
               <div className="mt-5 rounded-control border border-warning-200 bg-warning-50 p-4 text-sm text-warning-800">
