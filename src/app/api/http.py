@@ -4738,18 +4738,9 @@ def create_app() -> FastAPI:
         user: dict[str, str] = Depends(get_current_user),
         ctx: AppContext = Depends(get_ctx),
     ) -> dict[str, Any]:
-        tenant_id = _current_tenant_id(user)
-        config = ctx.tenant_notification_config_repository.get(tenant_id) or {}
-        location_context = {
-            "qweather_location_id": config.get("qweather_location_id", ""),
-            "qweather_lat": config.get("qweather_lat", ""),
-            "qweather_lon": config.get("qweather_lon", ""),
-        }
+        _current_tenant_id(user)
         try:
-            result = ctx.weather_query_service.list_region(
-                region,
-                location_context=location_context,
-            )
+            result = ctx.weather_query_service.list_region(region)
         except UnknownWeatherRegion:
             raise HTTPException(status_code=404, detail="region_not_supported")
         return _ok(result)

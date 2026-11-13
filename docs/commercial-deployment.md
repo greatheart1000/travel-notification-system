@@ -171,6 +171,21 @@ BILLING_DUNNING_CRON=0 9 * * *
 
 额度：每个租户按自然月统计短信发送量；试用版/套餐额度用尽后短信 provider 返回 `sms_quota_exceeded`，调度器按永久失败处理并尝试回退企业微信。
 
+### 天气（QWeather）
+
+在 `.env` 配置和风天气控制台给出的 API Host 与 Key：
+
+```dotenv
+QWEATHER_API_HOST=api.qweather.com
+QWEATHER_API_KEY=
+QWEATHER_CREDENTIAL_ID=
+WEATHER_CACHE_TTL_SECONDS=1800
+```
+
+- 城市列表 `GET /api/weather/xinjiang` 使用固定的 8 个新疆城市 location id，只取实时天气与预警，不拉 24h/3d 预报，减少配额消耗。
+- 预警接口失败不会影响实时天气；QWeather 未配置或调用失败时，行程页展示模拟数据并明确提示。
+- 不同账号的 API Host 可能不同，以和风控制台显示为准（常见为 `api.qweather.com` 或 `devapi.qweather.com`）。
+
 ## 7. 数据与备份
 
 需要备份的内容：

@@ -11,8 +11,10 @@ class _FakeLiveProvider:
         self.fail = fail
         self.calls = 0
 
-    def get_weather(self, destination: str, location_context=None) -> WeatherInfo:
+    def get_weather(self, destination: str, location_context=None, *, include_forecast: bool = True) -> WeatherInfo:
         self.calls += 1
+        self.last_context = location_context
+        self.last_include_forecast = include_forecast
         if self.fail:
             raise RuntimeError("weather upstream unavailable")
         return WeatherInfo(
@@ -43,6 +45,9 @@ def test_list_region_maps_live_weather_fields() -> None:
     assert first["wind"] == "3级"
     assert first["warning"] == "黄色预警"
     assert first["source"] == "qweather"
+    assert provider.last_include_forecast is False
+    assert provider.last_context["qweather_location_id"] == "101131301"
+    assert provider.last_context["qweather_lat"] == "37.10894"
 
 
 def test_list_region_falls_back_to_mock_when_provider_fails() -> None:
@@ -79,3 +84,27 @@ def test_unknown_region_is_rejected() -> None:
 
     with pytest.raises(UnknownWeatherRegion):
         service.list_region("unknown-region")
+
+
+class _FullAlertProvider(_FakeLiveProvider):
+    def get_weather(self, destination: str, location_context=None, *, include_forecast: bool = True) -> WeatherInfo:
+        self.calls += 1
+        return WeatherInfo(
+            destination=destination,
+            condition="雾",
+            temperature=3.0,
+            warning_level="blue",
+            alert_title="新疆维吾尔自治区气象台发布暴雪蓝色预警",
+            wind_scale="2",
+            source="qweather",
+        )
+
+
+def test_list_region_shortens_full_alert_headline() -> None:
+    service = WeatherQueryService(provider=_FullAlertProvider(), cache_ttl_seconds=0)
+
+    result = service.list_region("xinjiang")
+
+    first = result["cities"][0]
+    assert first["warning"] == "暴雪蓝色预警"
+    assert first["warning_title"] == "新疆维吾尔自治区气象台发布暴雪蓝色预警"

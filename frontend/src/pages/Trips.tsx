@@ -296,7 +296,10 @@ export function Trips({
                     <span className={item.warning ? 'font-medium text-danger-700' : ''}>{item.city}</span>
                     <span className={item.warning ? 'font-semibold tabular-nums text-danger-700' : 'tabular-nums text-paper-900'}>{item.temp}°C</span>
                     {item.warning ? (
-                      <span className="ml-1 inline-flex items-center gap-1 rounded-control bg-danger-50 px-1.5 py-0.5 text-xs text-danger-700">
+                      <span
+                        className="ml-1 inline-flex items-center gap-1 rounded-control bg-danger-50 px-1.5 py-0.5 text-xs text-danger-700"
+                        title={item.warning_title || item.warning}
+                      >
                         <AlertTriangle className="h-3 w-3" />
                         {item.warning}
                       </span>
