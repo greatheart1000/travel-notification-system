@@ -1,15 +1,27 @@
 import { useState } from 'react'
-import { Bell, LogOut, Search, User } from 'lucide-react'
+import { Building2, LogOut, Menu, UserRound } from 'lucide-react'
 import { authApi, getErrorMessage } from '../services/api'
+import { useSession } from '../context/SessionContext'
 
-export function Header() {
+const ROLE_LABELS: Record<string, string> = {
+  admin: '管理员',
+  guide: '导游',
+  user: '成员',
+  operator: '平台运营',
+}
+
+interface HeaderProps {
+  onOpenMenu?: () => void
+}
+
+export function Header({ onOpenMenu }: HeaderProps) {
+  const { user, tenant } = useSession()
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [logoutError, setLogoutError] = useState<string | null>(null)
 
   const handleLogout = async () => {
     setIsLoggingOut(true)
     setLogoutError(null)
-
     try {
       await authApi.logout()
     } catch (error) {
@@ -20,33 +32,45 @@ export function Header() {
   }
 
   return (
-    <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6">
-      <div className="flex-1">
-        <div className="relative max-w-md">
-          <input
-            type="text"
-            placeholder="搜索行程、客人或通知..."
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
-          />
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-        </div>
+    <header className="relative flex h-14 items-center justify-between gap-3 border-b border-paper-200 bg-white/90 px-4 backdrop-blur lg:px-6">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-accent-200" />
+      <div className="flex min-w-0 items-center gap-2 text-sm">
+        <button
+          type="button"
+          onClick={onOpenMenu}
+          className="-ml-1 rounded-control p-2 text-paper-600 transition-colors hover:bg-white/80 hover:text-accent-700 lg:hidden"
+          aria-label="打开菜单"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <span className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-control bg-paper-100 text-paper-600 sm:flex">
+          <Building2 className="h-4 w-4" />
+        </span>
+        <span className="truncate font-medium text-paper-900">{tenant?.name || '当前企业'}</span>
+        {tenant?.tenant_id && tenant.tenant_id !== 'platform' ? (
+          <span className="hidden rounded-full bg-paper-100 px-2 py-0.5 text-xs text-paper-500 md:inline">
+            {tenant.tenant_id}
+          </span>
+        ) : null}
       </div>
 
-      <div className="flex items-center gap-4">
-        <button className="relative p-2 hover:bg-gray-100 rounded-lg" aria-label="通知">
-          <Bell className="h-5 w-5 text-gray-700" />
-          <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
-        </button>
-        <div className="flex items-center gap-2 hover:bg-gray-100 rounded-lg px-3 py-2">
-          <User className="h-5 w-5 text-gray-700" />
-          <div className="leading-tight">
-            <span className="block text-sm text-gray-800">管理员</span>
-            {logoutError ? <span className="block text-xs text-red-600">退出失败</span> : null}
+      <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-50 text-accent-700">
+            <UserRound className="h-4 w-4" />
+          </span>
+          <div className="hidden leading-tight sm:block">
+            <span className="block text-sm font-medium text-paper-900">{user?.display_name || user?.username || '未登录'}</span>
+            <span className="block text-xs text-paper-500">
+              {ROLE_LABELS[user?.role ?? ''] ?? user?.role ?? ''}
+            </span>
           </div>
         </div>
+        {logoutError ? <span className="text-xs text-danger-600">退出失败</span> : null}
         <button
-          className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg disabled:opacity-50"
-          onClick={handleLogout}
+          type="button"
+          className="rounded-control p-2 text-paper-500 transition-colors hover:bg-white/80 hover:text-pink-600 disabled:opacity-50"
+          onClick={() => void handleLogout()}
           disabled={isLoggingOut}
           aria-label="退出登录"
         >

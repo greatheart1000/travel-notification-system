@@ -4,13 +4,17 @@ interface StatusPillProps {
 }
 
 const toneClassMap: Record<StatusPillProps['tone'], string> = {
-  neutral: 'bg-slate-100 text-slate-700',
-  warning: 'bg-amber-100 text-amber-700',
-  danger: 'bg-rose-100 text-rose-700',
-  success: 'bg-emerald-100 text-emerald-700',
-  info: 'bg-sky-100 text-sky-700',
+  neutral: 'bg-paper-100 text-paper-700',
+  warning: 'bg-warning-50 text-warning-700',
+  danger: 'bg-danger-50 text-danger-700',
+  success: 'bg-success-50 text-success-700',
+  info: 'bg-accent-50 text-accent-800',
 }
 
 export function StatusPill({ tone, label }: StatusPillProps) {
-  return <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${toneClassMap[tone]}`}>{label}</span>
+  return (
+    <span className={`inline-flex items-center rounded-control px-2 py-0.5 text-xs font-medium ${toneClassMap[tone]}`}>
+      {label}
+    </span>
+  )
 }

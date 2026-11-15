@@ -55,13 +55,13 @@ export function TaskBucketPage({ bucket, onOpenTask }: TaskBucketPageProps) {
       <Card title="筛选" className="mt-6">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
           <input
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            className="rounded-control border border-paper-300 px-3 py-2 text-sm"
             placeholder="搜索团号/目的地/任务"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
           />
           <select
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            className="rounded-control border border-paper-300 px-3 py-2 text-sm"
             value={riskLevel}
             onChange={(event) => setRiskLevel(event.target.value as TaskListFilters['riskLevel'])}
           >
@@ -72,7 +72,7 @@ export function TaskBucketPage({ bucket, onOpenTask }: TaskBucketPageProps) {
           </select>
           {bucket === 'overdue' ? (
             <select
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              className="rounded-control border border-paper-300 px-3 py-2 text-sm"
               value={overdueWindow}
               onChange={(event) => setOverdueWindow(event.target.value as TaskListFilters['overdueWindow'])}
             >
@@ -114,7 +114,7 @@ export function TaskBucketPage({ bucket, onOpenTask }: TaskBucketPageProps) {
               }}
             />
           ))}
-          {tasks.length === 0 ? <p className="text-sm text-slate-500">当前筛选条件下暂无任务</p> : null}
+          {tasks.length === 0 ? <p className="text-sm text-paper-500">当前筛选条件下暂无任务</p> : null}
         </div>
       </Card>
     </PageShell>

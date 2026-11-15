@@ -21,6 +21,8 @@ class WeatherAlertProvider(Protocol):
         self,
         destination: str,
         location_context: dict[str, Any] | None = None,
+        *,
+        include_forecast: bool = True,
     ) -> WeatherInfo:
         """Fetch weather info for destination."""
 
@@ -131,7 +133,8 @@ def _default_qweather_transport(
     host: str, path: str, params: dict[str, str], headers: dict[str, str]
 ) -> dict[str, Any]:
     import gzip as gzip_module
-    host = os.getenv("QWEATHER_API_HOST", "").strip().rstrip("/")
+    raw_host = host or os.getenv("QWEATHER_API_HOST", "")
+    host = _normalize_qweather_host(raw_host)
     if not host:
         raise RuntimeError("QWEATHER_API_HOST is not configured")
 
@@ -198,16 +201,24 @@ class MockWeatherProvider:
         self,
         destination: str,
         location_context: dict[str, Any] | None = None,
+        *,
+        include_forecast: bool = True,
     ) -> WeatherInfo:
         condition, temp, warning = self._deterministic_profile(destination)
 
+        warning_labels = {
+            "yellow": "黄色预警",
+            "orange": "橙色预警",
+            "red": "红色预警",
+            "blue": "蓝色预警",
+        }
         logger.info("Fetched mock weather for %s: %s, %sC", destination, condition, temp)
         return WeatherInfo(
             destination=destination,
             condition=condition,
             temperature=temp,
             warning_level=warning,
-            alert_title=f"模拟天气{warning}级提醒" if warning else "",
+            alert_title=warning_labels.get(warning or "", "") if warning else "",
             location_id=str((location_context or {}).get("qweather_location_id", "")),
             lat=str((location_context or {}).get("qweather_lat", "")),
             lon=str((location_context or {}).get("qweather_lon", "")),
@@ -252,6 +263,8 @@ class QWeatherProvider:
         self,
         destination: str,
         location_context: dict[str, Any] | None = None,
+        *,
+        include_forecast: bool = True,
     ) -> WeatherInfo:
         context = location_context or {}
         location_id = str(
@@ -269,18 +282,37 @@ class QWeatherProvider:
             resolved_destination = resolved["name"]
 
         now_payload = self._request("/v7/weather/now", {"location": location_id})
-        hourly_payload = self._request("/v7/weather/24h", {"location": location_id})
-        daily_payload = self._request("/v7/weather/3d", {"location": location_id})
+        hourly_payload = (
+            self._request("/v7/weather/24h", {"location": location_id})
+            if include_forecast
+            else {}
+        )
+        daily_payload = (
+            self._request("/v7/weather/3d", {"location": location_id})
+            if include_forecast
+            else {}
+        )
 
         alert_path = f"/weatheralert/v1/current/{lat}/{lon}" if lat and lon else ""
-        alerts = []
+        alerts: list[dict[str, Any]] = []
         if alert_path:
-            alert_payload = self._request(alert_path, {})
-            alerts = list(alert_payload.get("warning") or [])
+            try:
+                alert_payload = self._request(alert_path, {})
+                # QWeather v1 uses "alerts"; older payloads used "warning".
+                alerts = list(alert_payload.get("alerts") or alert_payload.get("warning") or [])
+            except Exception as exc:  # noqa: BLE001 - alerts are optional
+                logger.warning(
+                    "QWeather alert lookup failed for %s: %s", destination, type(exc).__name__
+                )
 
         now = now_payload.get("now") or {}
         refer = now_payload.get("refer") or {}
-        alert_title = str((alerts[0] or {}).get("title", "")) if alerts else ""
+        first_alert = alerts[0] if alerts else {}
+        alert_title = str(first_alert.get("title") or first_alert.get("headline") or "")
+        alert_color = str((first_alert.get("color") or {}).get("code") or "")
+        warning_level = _normalize_warning_level(alert_title)
+        if not warning_level and alert_color in {"blue", "yellow", "orange", "red"}:
+            warning_level = alert_color
         return WeatherInfo(
             destination=resolved_destination,
             condition=str(now.get("text", "")),
@@ -302,7 +334,7 @@ class QWeatherProvider:
             fx_link=str(now_payload.get("fxLink", "")),
             refer_sources=[str(item) for item in list(refer.get("sources") or [])],
             refer_license=[str(item) for item in list(refer.get("license") or [])],
-            warning_level=_normalize_warning_level(alert_title),
+            warning_level=warning_level,
             alert_title=alert_title,
             location_id=location_id,
             lat=lat,
@@ -341,5 +373,11 @@ class WeatherProvider:
         self,
         destination: str,
         location_context: dict[str, Any] | None = None,
+        *,
+        include_forecast: bool = True,
     ) -> WeatherInfo:
-        return self._provider().get_weather(destination, location_context=location_context)
+        return self._provider().get_weather(
+            destination,
+            location_context=location_context,
+            include_forecast=include_forecast,
+        )

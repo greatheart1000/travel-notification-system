@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 from app.modules.integration.persistence import JsonFileStore
 
-UTC = timezone.utc
+UTC = UTC
 
 STAGE_ALIASES: dict[str, str] = {
     "pre_trip": "pre_trip",

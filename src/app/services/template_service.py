@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-
 from app.core.entities import EventName
 from app.core.entities import Template as RuleTemplate
 from app.core.models import Channel, NotificationType
@@ -114,6 +113,15 @@ class TemplateService:
         if isinstance(value, Channel):
             return value
         raw = str(value).strip().lower()
+        aliases = {
+            "短信": "sms",
+            "sms": "sms",
+            "wechat": "wechat_work_group",
+            "wechat_work": "wechat_work_group",
+            "企业微信": "wechat_work_group",
+            "wechat_work_group": "wechat_work_group",
+        }
+        raw = aliases.get(raw, raw)
         matched = next((item for item in Channel if item.value == raw), None)
         return matched or Channel.SMS
 
@@ -293,6 +301,40 @@ class TemplateService:
             item for item in self.notification_templates.values() if item.tenant_id == tenant_id
         ]
 
+    def resolve_seasonal_template(
+        self,
+        template: NotificationTemplate | None,
+        *,
+        tenant_id: str,
+        month: int,
+    ) -> NotificationTemplate | None:
+        """Return the matching seasonal variant when a template name carries a season."""
+        if template is None:
+            return None
+        season = "冬季"
+        if 3 <= month <= 5:
+            season = "春季"
+        elif 6 <= month <= 8:
+            season = "夏季"
+        elif 9 <= month <= 10:
+            season = "秋季"
+        for marker in ("春季", "夏季", "秋季", "冬季"):
+            if marker not in template.name:
+                continue
+            prefix = template.name.split(marker)[0]
+            target_name = f"{prefix}{season}"
+            if target_name == template.name:
+                return template
+            for candidate in self.notification_templates.values():
+                if (
+                    candidate.tenant_id == tenant_id
+                    and candidate.is_active
+                    and candidate.name == target_name
+                ):
+                    return candidate
+            return template
+        return template
+
     def get_notification_template(
         self, template_id: str, tenant_id: str | None = None
     ) -> NotificationTemplate | None:
@@ -304,18 +346,21 @@ class TemplateService:
         return template
 
     def ensure_default_template(self, tenant_id: str = "") -> NotificationTemplate:
-        existing = self.list_notification_templates(tenant_id=tenant_id)
-        if existing:
-            return existing[0]
+        existing_sms = [
+            item
+            for item in self.list_notification_templates(tenant_id=tenant_id)
+            if item.is_active and item.channel == Channel.SMS
+        ]
+        if existing_sms:
+            return sorted(existing_sms, key=lambda item: item.updated_at, reverse=True)[0]
 
         # 预置高质量的默认行程提醒模板
         content = (
-            "【行程提醒】尊敬的{{customer_name}}，您前往{{destination}}的行程即将在{{trip_date}}开始。\n"
-            "🚗 交通提示：{{flight_info}}\n"
-            "🏞️ 沿途亮点：{{highlight}}\n"
-            "⛅ 天气提醒：{{climate}}\n"
-            "👕 穿衣指南：{{dress_code}}\n"
-            "祝您旅途愉快！"
+            "【行程提醒】{{customer_name}}，您前往{{destination}}的行程将于{{trip_date}}开始。\n"
+            "交通：{{flight_info}}\n"
+            "沿途安排：{{highlight}}\n"
+            "天气：{{climate}}\n"
+            "穿衣建议：{{dress_code}}"
         )
         return self.create_notification_template(
             tenant_id=tenant_id,

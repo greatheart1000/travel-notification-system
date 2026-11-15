@@ -1,31 +1,33 @@
 import { useEffect, useState } from 'react'
-import { Save, User, Phone } from 'lucide-react'
+import { MessageSquare, Phone, Save, User } from 'lucide-react'
+import { Button } from '../Button'
 import { staffApi, type StaffMember } from '../../services/api'
 
 interface Props {
   tripId: string
+  readOnly?: boolean
 }
 
 const DEFAULT_STAFF: StaffMember[] = [
-  { role: 'manager', name: '', phone: '' },
-  { role: 'concierge', name: '', phone: '' },
-  { role: 'driver', name: '', phone: '' },
+  { role: 'manager', name: '', phone: '', recipientChannel: '', recipientAddress: '' },
+  { role: 'concierge', name: '', phone: '', recipientChannel: '', recipientAddress: '' },
+  { role: 'driver', name: '', phone: '', recipientChannel: '', recipientAddress: '' },
 ]
 
 const ROLE_OPTIONS = [
-  { value: 'manager', label: '团期负责人', icon: '👔' },
-  { value: 'concierge', label: '旅行管家', icon: '🎒' },
-  { value: 'driver', label: '司机', icon: '🚗' },
+  { value: 'manager', label: '团期负责人' },
+  { value: 'concierge', label: '旅行管家' },
+  { value: 'driver', label: '司机' },
 ]
 
-export function TripStaffForm({ tripId }: Props) {
+export function TripStaffForm({ tripId, readOnly = false }: Props) {
   const [staff, setStaff] = useState<StaffMember[]>(DEFAULT_STAFF)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
   useEffect(() => {
-    (async () => {
+    ;(async () => {
       setLoading(true)
       try {
         const list = await staffApi.getByTrip(tripId)
@@ -37,8 +39,31 @@ export function TripStaffForm({ tripId }: Props) {
     })()
   }, [tripId])
 
-  const updateField = (role: string, field: 'name' | 'phone', value: string) => {
+  const updateField = (
+    role: string,
+    field: 'name' | 'phone' | 'recipientAddress',
+    value: string,
+  ) => {
     setStaff((prev) => prev.map((s) => (s.role === role ? { ...s, [field]: value } : s)))
+  }
+
+  const updateRecipientChannel = (
+    role: string,
+    channel: '' | 'wechat_work_group' | 'sms',
+  ) => {
+    setStaff((prev) =>
+      prev.map((s) =>
+        s.role === role
+          ? {
+              ...s,
+              recipientChannel: channel,
+              recipientAddress: channel
+                ? s.recipientAddress || (channel === 'sms' ? s.phone : '')
+                : '',
+            }
+          : s,
+      ),
+    )
   }
 
   const handleSave = async () => {
@@ -49,32 +74,32 @@ export function TripStaffForm({ tripId }: Props) {
       setMessage('人员配置已保存')
       setTimeout(() => setMessage(null), 3000)
     } catch (e: any) {
-      setMessage(`保存失败: ${e?.message || '未知错误'}`)
+      setMessage(`保存失败：${e?.message || '未知错误'}`)
     } finally {
       setSaving(false)
     }
   }
 
-  if (loading) return <div className="p-4 text-sm text-gray-500">加载人员配置...</div>
+  if (loading) return <div className="p-4 text-sm text-paper-500">加载人员配置</div>
 
   return (
     <div className="space-y-4">
       {message && (
-        <div className={`text-sm p-2 rounded ${message.includes('失败') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+        <div className={`rounded-control border p-3 text-sm ${message.includes('失败') ? 'border-danger-200 bg-danger-50 text-danger-700' : 'border-success-200 bg-success-50 text-success-700'}`}>
           {message}
         </div>
       )}
 
-      {ROLE_OPTIONS.map(({ value, label, icon }) => {
-        const s = staff.find((x) => x.role === value) || { role: value, name: '', phone: '' }
+      {ROLE_OPTIONS.map(({ value, label }) => {
+        const s =
+          staff.find((x) => x.role === value) ||
+          { role: value, name: '', phone: '', recipientChannel: '', recipientAddress: '' }
         return (
-          <div key={value} className="border rounded-lg p-3 space-y-2">
-            <div className="text-sm font-medium text-gray-700">
-              {icon} {label}
-            </div>
-            <div className="grid grid-cols-2 gap-2">
+          <div key={value} className="space-y-2 rounded-control border border-paper-200 p-3">
+            <div className="text-sm font-medium text-paper-700">{label}</div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
-                <label className="text-xs text-gray-400 flex items-center gap-1">
+                <label className="flex items-center gap-1 text-xs text-paper-500">
                   <User className="h-3 w-3" /> 姓名
                 </label>
                 <input
@@ -82,11 +107,12 @@ export function TripStaffForm({ tripId }: Props) {
                   value={s.name}
                   onChange={(e) => updateField(value, 'name', e.target.value)}
                   placeholder="输入姓名"
-                  className="w-full mt-1 px-2 py-1.5 text-sm border rounded focus:outline-none focus:ring-2 focus:ring-cyan-300"
+                  disabled={readOnly}
+                  className="mt-1 w-full rounded-control border border-paper-300 px-2.5 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-paper-50 disabled:text-paper-600"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 flex items-center gap-1">
+                <label className="flex items-center gap-1 text-xs text-paper-500">
                   <Phone className="h-3 w-3" /> 电话
                 </label>
                 <input
@@ -94,22 +120,71 @@ export function TripStaffForm({ tripId }: Props) {
                   value={s.phone}
                   onChange={(e) => updateField(value, 'phone', e.target.value)}
                   placeholder="输入电话"
-                  className="w-full mt-1 px-2 py-1.5 text-sm border rounded focus:outline-none focus:ring-2 focus:ring-cyan-300"
+                  disabled={readOnly}
+                  className="mt-1 w-full rounded-control border border-paper-300 px-2.5 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-paper-50 disabled:text-paper-600"
                 />
               </div>
+            </div>
+
+            <div className="rounded-control bg-paper-50 p-2.5">
+              <label className="flex items-center gap-1 text-xs text-paper-500">
+                <MessageSquare className="h-3 w-3" /> 这个岗位的消息发到哪里
+              </label>
+              <select
+                value={s.recipientChannel ?? ''}
+                onChange={(e) =>
+                  updateRecipientChannel(
+                    value,
+                    e.target.value as '' | 'wechat_work_group' | 'sms',
+                  )
+                }
+                disabled={readOnly}
+                className="mt-1 w-full rounded-control border border-paper-300 bg-white px-2.5 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-paper-50 disabled:text-paper-600"
+              >
+                <option value="">跟随本团企业微信群</option>
+                <option value="wechat_work_group">单独的企业微信群</option>
+                <option value="sms">发短信到手机号</option>
+              </select>
+              {s.recipientChannel === 'wechat_work_group' ? (
+                <input
+                  type="url"
+                  value={s.recipientAddress ?? ''}
+                  onChange={(e) => updateField(value, 'recipientAddress', e.target.value)}
+                  placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+                  disabled={readOnly}
+                  className="mt-2 w-full rounded-control border border-paper-300 bg-white px-2.5 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-paper-50 disabled:text-paper-600"
+                />
+              ) : null}
+              {s.recipientChannel === 'sms' ? (
+                <input
+                  type="tel"
+                  value={s.recipientAddress ?? ''}
+                  onChange={(e) => updateField(value, 'recipientAddress', e.target.value)}
+                  placeholder={s.phone || '接收短信的手机号'}
+                  disabled={readOnly}
+                  className="mt-2 w-full rounded-control border border-paper-300 bg-white px-2.5 py-2 text-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-paper-50 disabled:text-paper-600"
+                />
+              ) : null}
+              <p className="mt-1.5 text-xs leading-5 text-paper-400">
+                {s.recipientChannel === ''
+                  ? '早间/午间岗位话术发到本团企业微信群。'
+                  : s.recipientChannel === 'sms'
+                    ? '只给该岗位发短信，不会发到游客群。'
+                    : '该岗位的话术发到单独的企业微信群。'}
+              </p>
             </div>
           </div>
         )
       })}
 
-      <button
-        onClick={handleSave}
-        disabled={saving}
-        className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-cyan-600 hover:bg-cyan-700 rounded disabled:opacity-50"
-      >
-        <Save className="h-4 w-4" />
-        {saving ? '保存中...' : '保存人员配置'}
-      </button>
+      {readOnly ? (
+        <p className="text-xs text-paper-500">仅管理员可修改人员与岗位接收配置</p>
+      ) : (
+        <Button className="w-full" onClick={() => void handleSave()} loading={saving}>
+          <Save className="h-4 w-4" />
+          保存人员配置
+        </Button>
+      )}
     </div>
   )
 }

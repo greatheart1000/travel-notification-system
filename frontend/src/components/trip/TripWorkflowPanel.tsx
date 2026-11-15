@@ -1,7 +1,18 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { CheckCircle, Clock, Play, RefreshCw, ChevronDown, ChevronRight, MessageSquare } from 'lucide-react'
+import {
+  CheckCircle,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Flag,
+  MapPin,
+  MessageSquare,
+  Play,
+  Plane,
+  RefreshCw,
+} from 'lucide-react'
 
-interface Props { tripId: string }
+interface Props { tripId: string; onOpenGroupConfig?: () => void }
 
 interface PlaybookStep {
   id: string; stage: string; time_node: string; core_work: string
@@ -10,8 +21,11 @@ interface PlaybookStep {
 
 interface WfStep { key: string; label: string; time_node: string; action_detail: string; completed: boolean; completed_at: string | null }
 
-const STAGE_ICONS: Record<string, string> = { pre_trip: '🚀', in_trip: '📍', post_trip: '🏁' }
-const STAGE_LABELS: Record<string, string> = { pre_trip: '行程前', in_trip: '行程中', post_trip: '行程后' }
+const STAGE_META: Record<string, { label: string; icon: typeof Plane }> = {
+  pre_trip: { label: '行程前', icon: Plane },
+  in_trip: { label: '行程中', icon: MapPin },
+  post_trip: { label: '行程后', icon: Flag },
+}
 
 const STEP_KEY_MAP: Record<string, string[]> = {
   '游客沟通+行程单处理': ['pre_flight_notice'],
@@ -30,15 +44,15 @@ const STEP_KEY_MAP: Record<string, string[]> = {
   '售后跟进+客户存档': ['follow_up'],
   '群聊解散': ['group_dismissed'],
 }
-// 所有步骤都有对应的消息模板
+
 const MESSAGE_STEPS = new Set(['pre_flight_notice', 'group_built', 'day1_guide_sent', 'farewell_sent', 'survey_sent', 'group_dismissed', 'resources_verified', 'insurance_verified', 'daily_reminder', 'scene_alert', 'issue_coordination', 'follow_up'])
 
-export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId }: Props) {
+export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId, onOpenGroupConfig }: Props) {
   const [playbook, setPlaybook] = useState<PlaybookStep[]>([])
   const [wfStatus, setWfStatus] = useState<Record<string, any>>({})
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
+  const [message, setMessage] = useState<{ text: string; ok: boolean; showWecomAction?: boolean } | null>(null)
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
 
   const fetchData = useCallback(async () => {
@@ -59,7 +73,12 @@ export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId }: Pro
   useEffect(() => { fetchData() }, [fetchData])
 
   const showMsg = useCallback((text: string, ok = true) => {
-    setMessage({ text, ok }); setTimeout(() => setMessage(null), 4000)
+    setMessage({
+      text,
+      ok,
+      showWecomAction: !ok && /企业微信|Webhook/i.test(text),
+    })
+    setTimeout(() => setMessage(null), 6000)
   }, [])
 
   const toggleExpand = useCallback((key: string) => {
@@ -97,95 +116,159 @@ export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId }: Pro
 
   const allSteps = [...stepsByStage.pre_trip, ...stepsByStage.in_trip, ...stepsByStage.post_trip]
   const done = allSteps.filter(s => s.completed).length
+  const percent = allSteps.length ? Math.round((done / allSteps.length) * 100) : 0
+  const currentStage = String(wfStatus.current_stage || '')
 
-  if (loading) return <div className="p-6 text-center text-sm text-gray-500">加载执行流程...</div>
+  if (loading) {
+    return (
+      <div className="rounded-card border border-paper-200 bg-white p-6 text-center text-sm text-paper-500">
+        加载执行流程
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
-      {/* 进度条 */}
-      <div className="bg-white rounded-xl border p-4">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-semibold text-gray-700">执行进度</span>
-          <button onClick={fetchData} className="p-1 hover:bg-gray-100 rounded"><RefreshCw className="h-4 w-4 text-gray-400" /></button>
+      <div className="rounded-card border border-paper-200 bg-white p-4 shadow-card">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-medium text-paper-700">执行进度</span>
+          <button
+            type="button"
+            onClick={fetchData}
+            className="rounded-control p-1 text-paper-500 transition-colors hover:bg-paper-100 hover:text-paper-900"
+            aria-label="刷新执行进度"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex-1 bg-gray-200 rounded-full h-2.5">
-            <div className="bg-cyan-500 h-2.5 rounded-full transition-all duration-500"
-              style={{ width: `${allSteps.length ? Math.round((done / allSteps.length) * 100) : 0}%` }} />
+          <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-paper-100">
+            <div
+              className="h-full origin-left bg-accent-600 transition-transform duration-300"
+              style={{ transform: `scaleX(${percent / 100})` }}
+            />
           </div>
-          <span className="text-sm font-medium text-gray-600">{done}/{allSteps.length}</span>
+          <span className="text-sm font-medium tabular-nums text-paper-600">
+            {done}/{allSteps.length}
+          </span>
         </div>
-        {wfStatus.current_stage && (
-          <div className="text-xs text-gray-400 mt-1">当前阶段：{STAGE_LABELS[wfStatus.current_stage] || wfStatus.current_stage}</div>
-        )}
+        {currentStage ? (
+          <div className="mt-1 text-xs text-paper-500">
+            当前阶段：{STAGE_META[currentStage]?.label ?? currentStage}
+          </div>
+        ) : null}
       </div>
 
       {message && (
-        <div className={`text-sm p-3 rounded-lg ${message.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-          {message.text}
+        <div
+          className={`rounded-control border px-4 py-3 text-sm ${
+            message.ok
+              ? 'border-success-200 bg-success-50 text-success-700'
+              : 'border-danger-200 bg-danger-50 text-danger-700'
+          }`}
+        >
+          <span>{message.text}</span>
+          {message.showWecomAction && onOpenGroupConfig ? (
+            <button
+              type="button"
+              onClick={onOpenGroupConfig}
+              className="mt-2 block font-medium text-danger-800 underline underline-offset-2 hover:text-danger-900"
+            >
+              去群配置填写企业微信 Webhook
+            </button>
+          ) : null}
         </div>
       )}
 
-      {/* 分阶段 */}
       {(['pre_trip', 'in_trip', 'post_trip'] as const).map(stage => {
         const steps = stepsByStage[stage]
         if (!steps?.length) return null
+        const meta = STAGE_META[stage]
+        const StageIcon = meta.icon
         return (
           <div key={stage}>
-            <h3 className="text-base font-bold text-gray-800 mb-3 flex items-center gap-2">
-              <span>{STAGE_ICONS[stage]}</span> {STAGE_LABELS[stage]}
-              <span className="text-xs font-normal text-gray-400">({steps.length}项)</span>
+            <h3 className="mb-3 flex items-center gap-2 text-base font-semibold text-paper-900">
+              <StageIcon className="h-4 w-4 text-paper-500" />
+              {meta.label}
+              <span className="text-xs font-normal text-paper-400">({steps.length} 项)</span>
             </h3>
             <div className="space-y-3">
               {steps.map(step => {
                 const isExpanded = expandedSteps.has(step.key)
                 const isBusy = actionLoading === step.key
                 return (
-                  <div key={step.key}
-                    className={`border-2 rounded-xl overflow-hidden transition-all ${
-                      step.completed ? 'border-green-300 bg-green-50/40' : 'border-gray-200 bg-white hover:border-cyan-200'
-                    }`}>
-                    {/* 标题行 */}
-                    <div className="flex items-start justify-between px-4 py-3 cursor-pointer" onClick={() => toggleExpand(step.key)}>
-                      <div className="flex items-start gap-3 min-w-0 flex-1">
-                        {step.completed ? <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0 mt-0.5" /> : <Clock className="h-5 w-5 text-gray-300 flex-shrink-0 mt-0.5" />}
+                  <div
+                    key={step.key}
+                    className={`overflow-hidden rounded-card border transition-colors ${
+                      step.completed
+                        ? 'border-success-200 bg-success-50/40'
+                        : 'border-paper-200 bg-white hover:border-paper-300'
+                    }`}
+                  >
+                    <div
+                      className="flex cursor-pointer items-start justify-between px-4 py-3"
+                      onClick={() => toggleExpand(step.key)}
+                    >
+                      <div className="flex min-w-0 flex-1 items-start gap-3">
+                        {step.completed ? (
+                          <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-success-600" />
+                        ) : (
+                          <Clock className="mt-0.5 h-4 w-4 shrink-0 text-paper-400" />
+                        )}
                         <div className="min-w-0">
-                          <div className="text-sm font-semibold flex items-center gap-2">
-                            <span className="text-xs px-1.5 py-0.5 bg-gray-100 rounded text-gray-500 font-normal">{step.time_node}</span>
+                          <div className="flex items-center gap-2 text-sm font-medium text-paper-900">
+                            <span className="rounded-control bg-paper-100 px-1.5 py-0.5 text-xs font-normal tabular-nums text-paper-500">
+                              {step.time_node}
+                            </span>
                             {step.label}
                           </div>
-                          <div className="text-xs text-gray-400 mt-0.5 line-clamp-1">{step.action_detail?.replace(/<br>/g, ' ').slice(0, 80)}</div>
-                          {step.completed && step.completed_at && (
-                            <div className="text-xs text-green-600 mt-0.5">✅ 已完成 {step.completed_at.slice(0, 16).replace('T', ' ')}</div>
-                          )}
+                          <div className="mt-0.5 line-clamp-1 text-xs text-paper-400">
+                            {step.action_detail?.replace(/<br>/g, ' ').slice(0, 80)}
+                          </div>
+                          {step.completed && step.completed_at ? (
+                            <div className="mt-1 text-xs text-success-700">
+                              已完成 {step.completed_at.slice(0, 16).replace('T', ' ')}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                      <div className="ml-2 flex shrink-0 items-center gap-2">
                         {!step.completed && (
-                          <button onClick={(e) => { e.stopPropagation(); handleSend(step.key) }} disabled={isBusy}
-                            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-700 rounded-lg disabled:opacity-50">
-                            {isBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} 执行
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void handleSend(step.key)
+                            }}
+                            disabled={isBusy}
+                            className="flex items-center gap-1 rounded-control bg-accent-600 px-2.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-700 disabled:opacity-50"
+                          >
+                            {isBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                            执行
                           </button>
                         )}
-                        {isExpanded ? <ChevronDown className="h-5 w-5 text-gray-400" /> : <ChevronRight className="h-5 w-5 text-gray-400" />}
+                        {isExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-paper-400" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-paper-400" />
+                        )}
                       </div>
                     </div>
 
-                    {/* 展开显示消息预览 */}
                     {isExpanded && (
-                      <div className="px-4 pb-4 border-t border-gray-100 pt-3">
+                      <div className="border-t border-paper-200 px-4 pb-4 pt-3">
                         {(step as any)._msgKeys?.length > 0 ? (
                           (step as any)._msgKeys.map((msgKey: string) => (
                             <div key={msgKey} className="mb-3">
-                              <div className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
-                                <MessageSquare className="h-3.5 w-3.5" /> 将发送到企业微信群：
+                              <div className="mb-2 flex items-center gap-1 text-xs text-paper-500">
+                                <MessageSquare className="h-3.5 w-3.5" /> 将发送到企业微信群
                               </div>
                               <PreviewInline tripId={tripId} stepKey={msgKey} />
                             </div>
                           ))
                         ) : (
-                          <div className="text-sm text-gray-400 py-4 text-center">
-                            ✅ 此步骤为人工确认项，无需发送消息
+                          <div className="py-4 text-center text-sm text-paper-400">
+                            此步骤为人工确认项，无需发送消息
                           </div>
                         )}
                       </div>
@@ -204,7 +287,7 @@ export const TripWorkflowPanel = memo(function TripWorkflowPanel({ tripId }: Pro
 // ── 消息预览 ─────────────────────────────────────────────────────────────
 
 function PreviewInline({ tripId, stepKey }: { tripId: string; stepKey: string }) {
-  const [content, setContent] = useState('加载中...')
+  const [content, setContent] = useState('加载中…')
   useEffect(() => {
     let active = true
     const token = localStorage.getItem('access_token') || ''
@@ -212,12 +295,13 @@ function PreviewInline({ tripId, stepKey }: { tripId: string; stepKey: string })
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: '{}',
     }).then(r => r.json()).then(d => {
       if (!active) return
-      setContent(d?.data?.rendered_content || d?.data?.results?.map((r: any) => r.detail).join('\n') || '(暂无预览)')
-    }).catch(() => { if (active) setContent('(加载失败)') })
+      setContent(d?.data?.rendered_content || d?.data?.results?.map((r: any) => r.detail).join('\n') || '（暂无预览）')
+    }).catch(() => { if (active) setContent('（加载失败）') })
     return () => { active = false }
   }, [tripId, stepKey])
-  return <div className="bg-white rounded-lg border border-gray-200 p-3 max-h-60 overflow-y-auto">
-    <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">{content}</pre>
-  </div>
+  return (
+    <div className="max-h-60 overflow-y-auto rounded-control border border-paper-200 bg-white p-3">
+      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-paper-700">{content}</pre>
+    </div>
+  )
 }
-

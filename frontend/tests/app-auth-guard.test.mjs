@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import assert from 'node:assert/strict'
 
 const appSource = readFileSync(resolve('frontend/src/App.tsx'), 'utf8')
+const loginSource = readFileSync(resolve('frontend/src/pages/Login.tsx'), 'utf8')
 
 assert.match(
   appSource,
@@ -11,15 +12,21 @@ assert.match(
 )
 
 assert.match(
-  appSource,
+  loginSource,
   /authApi\.login/,
-  'App must provide a login flow that stores backend-issued access tokens.',
+  'Login page must provide a login flow that stores backend-issued access tokens.',
 )
 
 assert.match(
   appSource,
   /!isAuthenticated/,
   'App must render a non-authenticated state instead of protected pages when no token exists.',
+)
+
+assert.doesNotMatch(
+  appSource,
+  /figma-make-mock-access-token|setupMockAuth/,
+  'App must not inject demo/mock access tokens in any environment.',
 )
 
 assert.doesNotMatch(

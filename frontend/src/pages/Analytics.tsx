@@ -1,12 +1,33 @@
 import { useEffect, useState } from 'react'
+import { Star } from 'lucide-react'
+import { PageShell } from '../components/PageShell'
+import { PageState } from '../components/PageState'
 import { analyticsApi } from '../services/api'
 import type { AnalyticsData, AnalyticsChannelPerformance, AnalyticsTopTrip } from '../types/api'
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function MetricCard({
+  label,
+  value,
+  primary = false,
+}: {
+  label: string
+  value: string
+  primary?: boolean
+}) {
   return (
-    <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-      <div className="text-gray-600 text-sm mb-2">{label}</div>
-      <div className="text-3xl font-bold text-gray-900">{value}</div>
+    <div
+      className={`rounded-card border p-5 ${
+        primary ? 'border-accent-200 bg-accent-50/45 md:col-span-12 lg:col-span-6' : 'border-paper-200 bg-white md:col-span-4 lg:col-span-2'
+      }`}
+    >
+      <p className="text-sm font-medium text-paper-600">{label}</p>
+      <p
+        className={`mt-2 font-semibold tabular-nums text-paper-900 ${
+          primary ? 'text-3xl' : 'text-2xl'
+        }`}
+      >
+        {value}
+      </p>
     </div>
   )
 }
@@ -16,14 +37,16 @@ function ChannelBar({ item }: { item: AnalyticsChannelPerformance }) {
   const successPct = (item.successful / total) * 100
   const failPct = (item.failed / total) * 100
   return (
-    <div className="mb-4 last:mb-0">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-sm text-gray-700">{item.channelLabel}</span>
-        <span className="text-sm font-medium text-gray-900">{item.sent} 条 ({item.rate})</span>
+    <div>
+      <div className="mb-2 flex items-center justify-between text-sm">
+        <span className="text-paper-700">{item.channelLabel}</span>
+        <span className="tabular-nums text-paper-900">
+          {item.sent} 条 · {item.rate}
+        </span>
       </div>
-      <div className="w-full bg-gray-200 rounded-full h-2 flex overflow-hidden">
-        <div className="bg-green-500 h-2" style={{ width: `${successPct}%` }} />
-        <div className="bg-red-400 h-2" style={{ width: `${failPct}%` }} />
+      <div className="flex h-1.5 w-full overflow-hidden rounded-sm bg-paper-100">
+        <div className="bg-accent-600" style={{ width: `${successPct}%` }} />
+        <div className="bg-danger-300" style={{ width: `${failPct}%` }} />
       </div>
     </div>
   )
@@ -40,88 +63,106 @@ export function Analytics() {
         const result = await analyticsApi.metrics()
         if (active) setData(result)
       } catch (error) {
-        if (active) setLoadError(error instanceof Error ? error.message : 'API 数据分析加载失败')
+        if (active) setLoadError(error instanceof Error ? error.message : '数据分析加载失败')
       }
     }
     void load()
-    return () => { active = false }
+    return () => {
+      active = false
+    }
   }, [])
 
   if (loadError) {
-    return <div className="p-6"><div className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">{loadError}</div></div>
+    return (
+      <PageShell title="数据分析" description="查看通知发送统计与渠道表现">
+        <PageState kind="error" title="数据分析加载失败" description={loadError} />
+      </PageShell>
+    )
   }
 
   if (!data) {
-    return <div className="p-6"><div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-gray-600">正在通过 API 加载数据分析...</div></div>
+    return (
+      <PageShell title="数据分析" description="查看通知发送统计与渠道表现">
+        <PageState kind="loading" title="正在加载数据分析" />
+      </PageShell>
+    )
   }
 
   const { metrics, channelPerformance, topTrips } = data
 
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">数据分析</h1>
-        <p className="text-gray-600">查看通知发送统计与渠道表现</p>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="通知成功率" value={metrics.notificationSuccessRate} />
+    <PageShell title="数据分析" description="查看通知发送统计与渠道表现">
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-12">
+        <MetricCard label="通知成功率" value={metrics.notificationSuccessRate} primary />
         <MetricCard label="平均响应时间" value={metrics.avgResponseTime} />
         <MetricCard label="环比增长" value={metrics.wowGrowth} />
         <MetricCard label="用户满意度" value={metrics.userSatisfaction} />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 mb-6 xl:grid-cols-2">
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
-            <h2 className="font-semibold text-gray-900">渠道表现</h2>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <section className="rounded-card border border-paper-200 bg-white shadow-card">
+          <div className="border-b border-paper-200 px-5 py-4">
+            <h2 className="text-base font-semibold text-paper-900">渠道表现</h2>
           </div>
-          <div className="p-6">
+          <div className="space-y-5 p-5">
             {channelPerformance.length === 0 ? (
-              <div className="text-center text-gray-400">暂无数据</div>
+              <p className="py-8 text-center text-sm text-paper-500">暂无数据</p>
             ) : (
-              channelPerformance.map((item) => (
-                <ChannelBar key={item.channel} item={item} />
-              ))
+              channelPerformance.map((item) => <ChannelBar key={item.channel} item={item} />)
             )}
           </div>
-        </div>
+        </section>
 
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
-            <h2 className="font-semibold text-gray-900">热门行程通知</h2>
+        <section className="rounded-card border border-paper-200 bg-white shadow-card">
+          <div className="border-b border-paper-200 px-5 py-4">
+            <h2 className="text-base font-semibold text-paper-900">热门行程通知</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="px-4 py-3 text-left font-medium text-gray-700">行程名</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-700">通知数</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-700">满意度</th>
+                <tr className="border-b border-paper-200 text-xs font-medium text-paper-500">
+                  <th className="px-5 py-3 text-left">行程名</th>
+                  <th className="px-5 py-3 text-right">通知数</th>
+                  <th className="px-5 py-3 text-right">满意度</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-200">
+              <tbody className="divide-y divide-paper-100">
                 {topTrips.length === 0 ? (
-                  <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-400">暂无数据</td></tr>
+                  <tr>
+                    <td colSpan={3} className="px-5 py-8 text-center text-sm text-paper-500">
+                      暂无数据
+                    </td>
+                  </tr>
                 ) : (
                   topTrips.map((trip: AnalyticsTopTrip) => (
-                    <tr key={trip.name} className="hover:bg-gray-50">
-                      <td className="px-4 py-4">
+                    <tr key={trip.name} className="transition-colors hover:bg-paper-50">
+                      <td className="px-5 py-3">
                         {trip.tripId ? (
                           <a
                             href={`/trips/${encodeURIComponent(trip.tripId)}`}
-                            onClick={(e) => { e.preventDefault(); window.history.pushState({}, '', `/trips/${encodeURIComponent(trip.tripId)}`); window.dispatchEvent(new PopStateEvent('popstate')) }}
-                            className="text-cyan-600 hover:text-cyan-700 hover:underline"
+                            onClick={(event) => {
+                              event.preventDefault()
+                              window.history.pushState(
+                                {},
+                                '',
+                                `/trips/${encodeURIComponent(trip.tripId)}`,
+                              )
+                              window.dispatchEvent(new PopStateEvent('popstate'))
+                            }}
+                            className="text-accent-700 hover:text-accent-800 hover:underline"
                           >
                             {trip.name}
                           </a>
                         ) : (
-                          <span className="text-gray-900">{trip.name}</span>
+                          <span className="text-paper-900">{trip.name}</span>
                         )}
                       </td>
-                      <td className="px-4 py-4 text-right text-gray-700">{trip.notifications}</td>
-                      <td className="px-4 py-4 text-right">
-                        <span className="text-yellow-600 font-medium">{trip.satisfaction} ⭐</span>
+                      <td className="px-5 py-3 text-right tabular-nums text-paper-700">{trip.notifications}</td>
+                      <td className="px-5 py-3 text-right">
+                        <span className="inline-flex items-center justify-end gap-1 tabular-nums text-paper-700">
+                          {trip.satisfaction}
+                          <Star className="h-3.5 w-3.5 text-paper-400" aria-hidden="true" />
+                        </span>
                       </td>
                     </tr>
                   ))
@@ -129,8 +170,8 @@ export function Analytics() {
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
       </div>
-    </div>
+    </PageShell>
   )
 }

@@ -1,10 +1,20 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.venv/
+.coverage
+htmlcov/
 .codex
 .codex-memory/
-.env.local
+.env
+.env.*
+!.env.example
 *.local
+
+# Local credential handoff files (never commit)
+公共资料.txt
+公共资料*.txt
+secrets.local.*
 
 # local embedded repositories
 /everything-claude-code/
@@ -13,3 +23,10 @@ __pycache__/
 # deploy build artifacts
 deploy/fc/build/
 *.zip
+
+# local QA data
+/var/
+
+# Client materials — never push
+/需求文档/
+/ERP接口.md

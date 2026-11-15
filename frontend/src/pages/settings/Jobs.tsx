@@ -1,0 +1,195 @@
+import { useCallback, useEffect, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
+import { PageShell } from '../../components/PageShell'
+import { Button } from '../../components/Button'
+import { Badge } from '../../components/Badge'
+import { getErrorMessage } from '../../services/api'
+import { jobsApi, type NotificationJob } from '../../services/commercialApi'
+
+const STATUS_OPTIONS = [
+  { value: '', label: '全部状态' },
+  { value: 'pending', label: '待发送' },
+  { value: 'retrying', label: '重试中' },
+  { value: 'sent', label: '已发送' },
+  { value: 'failed', label: '失败' },
+  { value: 'manual_intervention', label: '待人工处理' },
+]
+
+const STATUS_META: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' | 'default' }> = {
+  pending: { label: '待发送', variant: 'info' },
+  processing: { label: '处理中', variant: 'info' },
+  retrying: { label: '重试中', variant: 'warning' },
+  sent: { label: '已发送', variant: 'success' },
+  failed: { label: '失败', variant: 'danger' },
+  manual_intervention: { label: '待人工处理', variant: 'danger' },
+}
+
+const ERROR_LABELS: Record<string, string> = {
+  wechat_webhook_not_configured: '企业微信未配置，请到行程的「群配置」填写 Webhook',
+  invalid_webhook_url: '企业微信 Webhook 地址无效',
+  empty_content: '消息内容为空，请检查模板',
+  request_failed: '无法连接企业微信，请检查服务器网络',
+  task_not_found: '发送任务已丢失，请重新执行工作流',
+}
+
+const CHANNEL_LABELS: Record<string, string> = {
+  wechat_work_group: '企业微信',
+  sms: '短信',
+}
+
+function channelLabel(raw: string): string {
+  return CHANNEL_LABELS[raw] ?? raw
+}
+
+function errorLabel(raw: string): string {
+  if (!raw) return '-'
+  const key = raw.split(':', 1)[0]
+  return ERROR_LABELS[key] ?? raw
+}
+
+function formatDate(raw: string): string {
+  if (!raw) return '-'
+  const date = new Date(raw)
+  return Number.isNaN(date.getTime()) ? raw : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+export function Jobs() {
+  const [status, setStatus] = useState('')
+  const [jobs, setJobs] = useState<NotificationJob[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [requeueing, setRequeueing] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await jobsApi.list(status || undefined)
+      setJobs(result.items)
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [status])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const requeue = async (job: NotificationJob) => {
+    setRequeueing(job.job_id)
+    setError(null)
+    try {
+      await jobsApi.requeue(job.job_id)
+      setNotice(`任务 ${job.job_id} 已重新入队`)
+      await load()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setRequeueing('')
+    }
+  }
+
+  return (
+    <PageShell
+      title="发送任务"
+      description="查看异步发送队列与死信任务。失败任务可重新入队，重放会重置尝试次数并写审计日志。"
+      actions={
+        <select
+          value={status}
+          onChange={(event) => setStatus(event.target.value)}
+          className="rounded-control border border-paper-300 bg-white px-3 py-2 text-sm text-paper-900 focus:border-accent-600 focus:outline-none"
+        >
+          {STATUS_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      }
+    >
+      {error ? (
+        <div role="alert" className="mb-4 rounded-control border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
+          {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="mb-4 rounded-control border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
+          {notice}
+        </div>
+      ) : null}
+
+      <div className="overflow-hidden rounded-card border border-paper-200 bg-white shadow-card">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[900px] text-left text-sm">
+          <thead>
+            <tr className="border-b border-paper-200 text-xs font-medium text-paper-500">
+              <th className="whitespace-nowrap px-5 py-3">任务 ID</th>
+              <th className="whitespace-nowrap px-5 py-3">行程 / 团队</th>
+              <th className="whitespace-nowrap px-5 py-3">渠道</th>
+              <th className="whitespace-nowrap px-5 py-3">状态</th>
+              <th className="hidden whitespace-nowrap px-5 py-3 2xl:table-cell">尝试次数</th>
+              <th className="hidden whitespace-nowrap px-5 py-3 2xl:table-cell">下次执行</th>
+              <th className="whitespace-nowrap px-5 py-3">错误摘要</th>
+              <th className="whitespace-nowrap px-5 py-3 text-right">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-paper-100">
+            {loading ? (
+              <tr>
+                <td colSpan={8} className="px-5 py-8 text-center text-sm text-paper-500">
+                  正在加载发送任务
+                </td>
+              </tr>
+            ) : jobs.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-5 py-10 text-center text-sm text-paper-500">
+                  当前没有符合条件的发送任务。
+                </td>
+              </tr>
+            ) : (
+              jobs.map((job) => {
+                const meta = STATUS_META[job.status] ?? { label: job.status, variant: 'default' as const }
+                const canRequeue = ['failed', 'manual_intervention', 'retrying'].includes(job.status)
+                return (
+                  <tr key={job.job_id} className="transition-colors hover:bg-paper-50">
+                    <td className="whitespace-nowrap px-5 py-3 font-mono text-xs text-paper-600">{job.job_id}</td>
+                    <td className="whitespace-nowrap px-5 py-3 text-paper-700">
+                      {job.trip_id || '-'}
+                      <span className="block text-xs text-paper-400">{job.team_id || ''}</span>
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 text-paper-600">{channelLabel(job.channel)}</td>
+                    <td className="whitespace-nowrap px-5 py-3">
+                      <Badge variant={meta.variant}>{meta.label}</Badge>
+                    </td>
+                    <td className="hidden whitespace-nowrap px-5 py-3 tabular-nums text-paper-600 2xl:table-cell">{job.attempt}</td>
+                    <td className="hidden whitespace-nowrap px-5 py-3 tabular-nums text-paper-500 2xl:table-cell">{formatDate(job.next_run_at)}</td>
+                    <td className="max-w-[10rem] truncate px-5 py-3 text-xs text-paper-500" title={job.last_error}>
+                      {errorLabel(job.last_error)}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {canRequeue ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          loading={requeueing === job.job_id}
+                          onClick={() => void requeue(job)}
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" /> 重新入队
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-paper-400">-</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+        </div>
+      </div>
+    </PageShell>
+  )
+}

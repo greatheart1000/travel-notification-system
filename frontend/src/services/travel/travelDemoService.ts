@@ -25,6 +25,7 @@ export const travelDemoService = {
   async takeoverTask(taskId: string) {
     await notificationsApi.assignTakeover({
       taskId,
+      assigneeUserId: 'frontend-manual',
       assigneeName: '值班管家',
       note: '前端人工接管',
     })

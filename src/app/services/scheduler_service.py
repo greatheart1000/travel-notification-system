@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.models import Channel, NotificationType
 from app.modules.integration.weather_provider import WeatherInfo, WeatherProvider
-from app.modules.integration.wechat_provider import WeChatWorkWebhookProvider
-from app.modules.notification.concierge_playbook import MESSAGE_TEMPLATES
+from app.modules.notification.idempotency import IdempotencyStore
 from app.modules.notification.models import NotificationTask
+from app.modules.notification.policy import NotificationPolicy, PolicyDecision
+from app.services.staff_message_service import render_role_content, season_for
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,7 @@ class AutoNotificationScheduler:
         self._register_cron_jobs()
 
     def _register_cron_jobs(self) -> None:
-        minute, hour = _parse_cron(os.getenv("NOTIFICATION_MORNING_CRON", "30 7 * * *"), 7)
+        minute, hour = _parse_cron(os.getenv("NOTIFICATION_MORNING_CRON", "0 7 * * *"), 7)
         self.scheduler.add_job(
             self.run_morning_slot,
             "cron",
@@ -46,7 +49,7 @@ class AutoNotificationScheduler:
             minute=minute,
         )
 
-        minute, hour = _parse_cron(os.getenv("NOTIFICATION_NOON_CRON", "0 12 * * *"), 12)
+        minute, hour = _parse_cron(os.getenv("NOTIFICATION_NOON_CRON", "30 12 * * *"), 12)
         self.scheduler.add_job(
             self.run_noon_slot,
             "cron",
@@ -55,7 +58,7 @@ class AutoNotificationScheduler:
             minute=minute,
         )
 
-        minute, hour = _parse_cron(os.getenv("NOTIFICATION_EVENING_CRON", "0 19 * * *"), 19)
+        minute, hour = _parse_cron(os.getenv("NOTIFICATION_EVENING_CRON", "0 20 * * *"), 20)
         self.scheduler.add_job(
             self.run_evening_slot,
             "cron",
@@ -63,6 +66,46 @@ class AutoNotificationScheduler:
             hour=hour,
             minute=minute,
         )
+
+        queue_interval = int(os.getenv("NOTIFICATION_QUEUE_INTERVAL_SECONDS", "5"))
+        self.scheduler.add_job(
+            self.run_dispatch_queue,
+            "interval",
+            id="notification_async_dispatch",
+            seconds=max(queue_interval, 1),
+        )
+
+        minute, hour = _parse_cron(os.getenv("BILLING_DUNNING_CRON", "0 9 * * *"), 9)
+        self.scheduler.add_job(
+            self.run_billing_dunning,
+            "cron",
+            id="billing_dunning",
+            hour=hour,
+            minute=minute,
+        )
+
+    async def run_billing_dunning(self) -> None:
+        service = getattr(self.ctx, "billing_dunning_service", None)
+        if service is None:
+            return
+        try:
+            summary = await asyncio.to_thread(service.run)
+            logger.info("[AutoNotificationScheduler] billing dunning summary: %s", summary)
+        except Exception as exc:  # noqa: BLE001 - dunning must not kill the scheduler
+            logger.error("[AutoNotificationScheduler] billing dunning failed: %s", exc)
+
+    async def run_dispatch_queue(self) -> None:
+        """Drain the persistent async-dispatch outbox without blocking the event loop."""
+        service = getattr(self.ctx, "async_dispatch_service", None)
+        if service is None:
+            return
+        try:
+            await asyncio.to_thread(
+                service.run_due_jobs,
+                self.ctx.notification_tasks,
+            )
+        except Exception as exc:  # noqa: BLE001 - queue worker must not die
+            logger.error("[AutoNotificationScheduler] async dispatch queue failed: %s", exc)
 
     def start(self) -> None:
         self.scheduler.start()
@@ -98,24 +141,112 @@ class AutoNotificationScheduler:
             logger.error("[AutoNotificationScheduler] Error fetching trips: %s", exc)
             return
 
-        current_time = now or datetime.now(tz=UTC)
+        timezone = ZoneInfo(os.getenv("NOTIFICATION_TIMEZONE", "Asia/Shanghai"))
+        current_time = (now or datetime.now(tz=timezone)).astimezone(timezone)
         today = current_time.date()
 
         for trip in trips:
-            stage = self._resolve_stage(trip, today)
-            if stage is None:
-                continue
+            try:
+                self._process_trip(
+                    trip,
+                    time_slot=time_slot,
+                    current_time=current_time,
+                    today=today,
+                )
+            except Exception as exc:  # noqa: BLE001 - one trip must not stop the batch
+                logger.exception(
+                    "[AutoNotificationScheduler] trip=%s failed: %s",
+                    trip.get("id"),
+                    exc,
+                )
+                try:
+                    self.ctx.audit_service.record(
+                        operator_id="system_scheduler",
+                        action="auto_notification_failed",
+                        target=str(trip.get("id", "")),
+                        detail={"time_slot": time_slot, "error": str(exc)},
+                    )
+                except Exception:  # noqa: BLE001 - audit failure must not mask original
+                    pass
 
-            guests = trip.get("guests", [])
-            if not guests:
-                continue
+    def _process_trip(
+        self,
+        trip: dict,
+        *,
+        time_slot: str,
+        current_time: datetime,
+        today,
+    ) -> None:  # noqa: ANN001
+        stage = self._resolve_stage(trip, today)
+        if stage is None:
+            return
+        if str(trip.get("send_mode") or "auto") == "approval":
+            logger.info(
+                "[AutoNotificationScheduler] trip=%s is in approval mode; held for guide",
+                trip.get("id"),
+            )
+            self.ctx.audit_service.record(
+                operator_id="system_scheduler",
+                action="auto_notification_held_for_approval",
+                target=str(trip.get("id") or ""),
+                detail={"time_slot": time_slot},
+            )
+            return
 
-            project_config = self._load_project_config(trip)
+        guests = list(trip.get("guests") or [])
+        scene_for_audit = "normal"
+        project_config = self._load_project_config(trip)
+        try:
             weather_info = self.weather_provider.get_weather(
                 str(trip.get("destination", "")),
                 location_context=self._build_weather_context(trip, project_config),
             )
-            scene = self._resolve_scene(weather_info, project_config, trip)
+        except Exception as exc:  # noqa: BLE001 - weather must not stop notifications
+            logger.warning(
+                "[AutoNotificationScheduler] weather unavailable for trip=%s: %s",
+                trip.get("id"),
+                exc,
+            )
+            weather_info = WeatherInfo(
+                destination=str(trip.get("destination", "")),
+                condition="天气数据暂不可用",
+                temperature=0.0,
+                source="fallback",
+            )
+
+        scene = self._resolve_scene(weather_info, project_config, trip)
+        scene_for_audit = scene
+        policy_decision = self._policy_decision(
+            trip, stage, time_slot, scene, today, current_time
+        )
+        if (
+            policy_decision is not None
+            and policy_decision.configured
+            and not policy_decision.allowed
+        ):
+            return
+        primary_channel = self._policy_channel(policy_decision, trip)
+        template = None
+        if policy_decision is not None and policy_decision.template_id:
+            template = self.ctx.template_service.get_notification_template(
+                policy_decision.template_id,
+                tenant_id=str(trip.get("tenant_id", "tenant-a")),
+            )
+            template = self.ctx.template_service.resolve_seasonal_template(
+                template,
+                tenant_id=str(trip.get("tenant_id", "tenant-a")),
+                month=current_time.month,
+            )
+        if template is None:
+            template = self.ctx.template_service.pick_notification_template(
+                tenant_id=str(trip.get("tenant_id", "tenant-a")),
+                project_id=self._resolve_project_id(trip),
+                stage=stage,
+                time_slot=time_slot,
+                scene=scene,
+                channel=primary_channel.value,
+            )
+        if template is None and primary_channel is not Channel.SMS:
             template = self.ctx.template_service.pick_notification_template(
                 tenant_id=str(trip.get("tenant_id", "tenant-a")),
                 project_id=self._resolve_project_id(trip),
@@ -124,23 +255,44 @@ class AutoNotificationScheduler:
                 scene=scene,
                 channel=Channel.SMS.value,
             )
-            if template is None:
-                template = self.ctx.template_service.ensure_default_template(
-                    tenant_id=str(trip.get("tenant_id", "tenant-a"))
-                )
+        if template is None:
+            template = self.ctx.template_service.ensure_default_template(
+                tenant_id=str(trip.get("tenant_id", "tenant-a"))
+            )
 
-            notification_type = self._resolve_notification_type(stage, scene)
-            weather_text = self._build_weather_text(weather_info)
+        notification_type = self._resolve_notification_type(stage, scene)
+        weather_text = self._build_weather_text(weather_info)
+        idempotency_store = self._idempotency_store()
 
+        if primary_channel is Channel.WECHAT_WORK_GROUP:
+            # Requirement: one group message per trip per slot, not one per
+            # guest. The group is the recipient, so guests without a phone
+            # still receive the reminder.
+            self._send_group_notification(
+                trip=trip,
+                template=template,
+                notification_type=notification_type,
+                weather_info=weather_info,
+                weather_text=weather_text,
+                current_time=current_time,
+                today=today,
+                stage=stage,
+                time_slot=time_slot,
+                scene=scene,
+                project_config=project_config,
+                idempotency_store=idempotency_store,
+            )
+        else:
             for guest in guests:
                 phone = str(guest.get("phone", "")).strip()
                 if not phone:
                     continue
 
                 idempotency_key = (
-                    f"auto:{time_slot}:{stage}:{scene}:{trip.get('id')}:{phone}:{today.isoformat()}"
+                    f"auto:{time_slot}:{stage}:{scene}:"
+                    f"{trip.get('tenant_id', '')}:{trip.get('id')}:{phone}:{today.isoformat()}"
                 )
-                if self.ctx.idempotency_store.is_processed(idempotency_key):
+                if idempotency_store.terminal(idempotency_key):
                     continue
 
                 variables = self._build_variables(
@@ -160,9 +312,14 @@ class AutoNotificationScheduler:
                     rendered_content=rendered,
                     idempotency_key=idempotency_key,
                     notification_type=notification_type,
-                    primary_channel=template.channel,
-                    fallback_channel=Channel.WECHAT_WORK_GROUP,
+                    primary_channel=primary_channel,
+                    fallback_channel=(
+                        Channel.SMS
+                        if primary_channel is Channel.WECHAT_WORK_GROUP
+                        else Channel.WECHAT_WORK_GROUP
+                    ),
                     provider_context={
+                        "customer_name": str(guest.get("name") or ""),
                         "sms_sign_name": template.sms_sign_name
                         or str((project_config or {}).get("sms_sign_name") or ""),
                         "provider_template_code": self._resolve_provider_template_code(
@@ -170,23 +327,179 @@ class AutoNotificationScheduler:
                             scene,
                             project_config,
                         ),
+                        "webhook_url": str(trip.get("webhook_url") or ""),
+                        "operator_id": "",
+                        "operator_name": "系统自动",
+                        "schedule_key": (
+                            f"{trip.get('id', '')}:{today.isoformat()}:{stage}:{time_slot}"
+                        ),
                     },
                 )
                 self.ctx.notification_tasks[task.id] = task
+                # Dispatcher owns idempotency marking: success marks the key,
+                # failure leaves it retryable for the next scheduler run.
                 self.ctx.notification_service.dispatch(task)
-                self.ctx.idempotency_store.mark(idempotency_key)
 
-            # 在途行程额外发送分岗位话术到企业微信群
-            if stage == "in_trip" and time_slot in ("morning", "afternoon"):
-                effective_slot = "morning" if time_slot == "morning" else "noon"
-                self._send_staff_role_messages(trip, effective_slot, current_time)
+        # 在途行程额外发送分岗位话术到企业微信群
+        if stage == "in_trip" and time_slot in ("morning", "afternoon"):
+            effective_slot = "morning" if time_slot == "morning" else "noon"
+            self._send_staff_role_messages(trip, effective_slot, current_time)
 
+        self.ctx.audit_service.record(
+            operator_id="system_scheduler",
+            action="auto_notification_dispatched",
+            target=str(trip.get("id", "")),
+            detail={"stage": stage, "time_slot": time_slot, "scene": scene_for_audit},
+        )
+
+
+    def _send_group_notification(
+        self,
+        *,
+        trip: dict,
+        template,
+        notification_type: NotificationType,
+        weather_info: WeatherInfo,
+        weather_text: str,
+        current_time: datetime,
+        today,
+        stage: str,
+        time_slot: str,
+        scene: str,
+        project_config: dict[str, object] | None,
+        idempotency_store: IdempotencyStore,
+    ) -> None:
+        trip_id = str(trip.get("id", ""))
+        tenant_id = str(trip.get("tenant_id", "tenant-a"))
+        idempotency_key = (
+            f"auto:group:{time_slot}:{stage}:{scene}:{tenant_id}:{trip_id}:{today.isoformat()}"
+        )
+        schedule_key = f"{trip_id}:{today.isoformat()}:{stage}:{time_slot}"
+        if idempotency_store.terminal(idempotency_key):
+            return
+        attempt_repository = getattr(self.ctx, "notification_attempt_repository", None)
+        if attempt_repository is not None and attempt_repository.has_sent_schedule(
+            schedule_key, tenant_id=tenant_id
+        ):
+            logger.info(
+                "[AutoNotificationScheduler] schedule already sent manually trip=%s key=%s",
+                trip_id,
+                schedule_key,
+            )
+            return
+
+        variables = self._build_variables(
+            trip=trip,
+            guest={"name": "各位团友"},
+            weather_info=weather_info,
+            weather_text=weather_text,
+            current_time=current_time,
+        )
+        variables["group_name"] = str(
+            trip.get("team")
+            or trip.get("team_id")
+            or trip.get("destination")
+            or "本团"
+        )
+        rendered = self.ctx.template_service.render_notification(template, variables)
+        task = NotificationTask(
+            tenant_id=tenant_id,
+            project_id=self._resolve_project_id(trip),
+            team_id=str(trip.get("team_id") or trip.get("team") or ""),
+            trip_id=trip_id,
+            customer_id=f"group:{trip_id}",
+            rendered_content=rendered,
+            idempotency_key=idempotency_key,
+            notification_type=notification_type,
+            primary_channel=Channel.WECHAT_WORK_GROUP,
+            fallback_channel=None,
+            provider_context={
+                "customer_name": "各位团友",
+                "group_name": variables["group_name"],
+                "sms_sign_name": template.sms_sign_name
+                or str((project_config or {}).get("sms_sign_name") or ""),
+                "provider_template_code": self._resolve_provider_template_code(
+                    template,
+                    scene,
+                    project_config,
+                ),
+                "webhook_url": str(trip.get("webhook_url") or ""),
+                "operator_id": "",
+                "operator_name": "系统自动",
+                "schedule_key": schedule_key,
+            },
+        )
+        self.ctx.notification_tasks[task.id] = task
+        result = self.ctx.notification_service.dispatch(task)
+        if not result.get("ok"):
+            logger.warning(
+                "[AutoNotificationScheduler] group send failed trip=%s slot=%s: %s",
+                trip_id,
+                time_slot,
+                result.get("reason"),
+            )
+
+    def _policy_decision(
+        self,
+        trip: dict,
+        stage: str,
+        time_slot: str,
+        scene: str,
+        today,
+        current_time: datetime,
+    ) -> PolicyDecision | None:  # noqa: ANN001
+        rule_repository = getattr(self.ctx, "notification_rule_repository", None)
+        if rule_repository is None:
+            return None
+        policy = NotificationPolicy(rule_repository)
+        decision = policy.resolve(
+            tenant_id=str(trip.get("tenant_id", "tenant-a")),
+            stage=stage,
+            time_slot=time_slot,
+            scene=scene,
+            context={
+                **trip,
+                "time_node": self._resolve_time_node(trip, stage, today),
+                "scene": scene,
+                "time_slot": time_slot,
+            },
+        )
+        if decision.configured and not decision.allowed:
             self.ctx.audit_service.record(
                 operator_id="system_scheduler",
-                action="auto_notification_dispatched",
+                action="auto_notification_blocked_by_rule",
                 target=str(trip.get("id", "")),
                 detail={"stage": stage, "time_slot": time_slot, "scene": scene},
             )
+        return decision
+
+    @staticmethod
+    def _policy_channel(
+        decision: PolicyDecision | None,
+        trip: dict | None = None,
+    ) -> Channel:
+        if decision is not None and decision.channels:
+            for code in decision.channels:
+                if code == Channel.WECHAT_WORK_GROUP.value:
+                    return Channel.WECHAT_WORK_GROUP
+                if code == Channel.SMS.value:
+                    return Channel.SMS
+        # A trip with a configured group is always served through that group.
+        if trip is not None and str(trip.get("webhook_url") or "").strip():
+            return Channel.WECHAT_WORK_GROUP
+        return Channel.SMS
+
+    def _resolve_time_node(self, trip: dict, stage: str, today) -> str:  # noqa: ANN001
+        if stage == "pre_trip":
+            start_date = self._parse_date(trip.get("start_date"))
+            if start_date is not None:
+                return f"出发前{(start_date - today).days}天"
+            return "行前"
+        if stage == "in_trip":
+            return "每日固定时段"
+        if stage == "post_trip":
+            return "下团即时"
+        return ""
 
     def _resolve_project_id(self, trip: dict[str, object]) -> str:
         return str(trip.get("project_id") or trip.get("team_id") or trip.get("team") or "")
@@ -211,20 +524,49 @@ class AutoNotificationScheduler:
 
     def _resolve_stage(self, trip: dict[str, object], today) -> str | None:  # noqa: ANN001
         status = str(trip.get("status") or "").strip().lower()
-        start_date = str(trip.get("start_date") or "")
-        end_date = str(trip.get("end_date") or "")
+        start_date = self._parse_date(trip.get("start_date"))
+        end_date = self._parse_date(trip.get("end_date"))
 
+        if status == "cancelled":
+            return None
         if status == "in_progress":
             return "in_trip"
-        if start_date:
-            trip_start = datetime.strptime(start_date, "%Y-%m-%d").date()
-            if trip_start >= today:
+
+        if start_date is not None:
+            days_until_start = (start_date - today).days
+            if days_until_start in self.PRE_TRIP_DAYS:
                 return "pre_trip"
-        if end_date:
-            trip_end = datetime.strptime(end_date, "%Y-%m-%d").date()
-            if (today - trip_end).days in {0, 1}:
-                return "post_trip"
+
+        if end_date is not None and (today - end_date).days in self.POST_TRIP_DAYS:
+            return "post_trip"
+
+        if start_date is not None:
+            days_until_start = (start_date - today).days
+            if days_until_start <= 0 and (end_date is None or today <= end_date):
+                return "in_trip"
+
         return None
+
+    PRE_TRIP_DAYS: tuple[int, ...] = (3, 1)
+    POST_TRIP_DAYS: tuple[int, ...] = (0, 1)
+
+    def _parse_date(self, raw: object):  # noqa: ANN201
+        value = str(raw or "").strip()[:10]
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+    def _idempotency_store(self) -> IdempotencyStore:
+        store = getattr(self.ctx, "idempotency_store", None)
+        if store is None:
+            store = getattr(self.ctx.notification_service, "idempotency_store", None)
+        if store is None:
+            store = IdempotencyStore()
+            setattr(self.ctx, "idempotency_store", store)
+        return store
 
     _SCENE_TAG_MAP: dict[str, str] = {
         "骑马": "horse_riding",
@@ -321,28 +663,12 @@ class AutoNotificationScheduler:
 
     # ── 分岗位发送 ────────────────────────────────────────────────────────────
 
-    _SEASON_MAP: dict[int, str] = {
-        1: "winter", 2: "winter", 3: "spring",
-        4: "spring", 5: "spring", 6: "summer",
-        7: "summer", 8: "summer", 9: "autumn",
-        10: "autumn", 11: "autumn", 12: "winter",
-    }
-
-    def _resolve_season(self, dt: datetime) -> str:
-        return self._SEASON_MAP.get(dt.month, "summer")
-
-    def _render_staff_template(self, content: str, variables: dict[str, str]) -> str:
-        for key, value in variables.items():
-            content = content.replace("{{" + key + "}}", value)
-        return content
-
     def _send_staff_role_messages(
         self,
         trip: dict,
         time_slot: str,
         current_time: datetime,
     ) -> None:
-        season = self._resolve_season(current_time)
         slot = "morning" if time_slot == "morning" else "noon"
         if slot not in ("morning", "noon"):
             return
@@ -352,29 +678,149 @@ class AutoNotificationScheduler:
             ("concierge", "concierge_name", "concierge_phone"),
             ("driver", "driver_name", "driver_phone"),
         ]
+        idempotency_store = self._idempotency_store()
+        trip_id = str(trip.get("id", ""))
+        tenant_id = str(trip.get("tenant_id", "tenant-a"))
+        date_key = current_time.date().isoformat()
+        season = season_for(current_time.month)
+        project_config = self._load_project_config(trip) or {}
+        role_recipients = trip.get("role_recipients") or project_config.get("role_recipients") or {}
+        has_explicit_recipients = bool(role_recipients)
 
-        webhook = WeChatWorkWebhookProvider()
+        ui_slot = "afternoon" if slot == "noon" else "morning"
+        schedule_key_prefix = f"{trip_id}:{date_key}:staff"
+        attempt_repository = getattr(self.ctx, "notification_attempt_repository", None)
 
-        for role, name_field, phone_field in roles:
-            key = f"{slot}_{season}_{role}"
-            template_content = MESSAGE_TEMPLATES.get(key)
-            if not template_content:
+        for role, _name_field, _phone_field in roles:
+            rendered = render_role_content(trip, role, ui_slot, current_time.month)
+            if not rendered:
                 continue
 
-            staff_vars = {
-                "manager_name": str(trip.get("trip_manager_name") or trip.get("concierge_name") or "负责人"),
-                "manager_phone": str(trip.get("trip_manager_phone") or trip.get("contact_phone") or ""),
-                "concierge_name": str(trip.get("concierge_name") or "管家"),
-                "concierge_phone": str(trip.get("concierge_phone") or trip.get("contact_phone") or ""),
-                "driver_name": str(trip.get("driver_name") or "司机"),
-                "driver_phone": str(trip.get("driver_phone") or ""),
-            }
-            rendered = self._render_staff_template(template_content, staff_vars)
-            ok, msg = webhook.send(f"staff:{role}:{trip.get('id','')}", rendered)
-            if not ok:
-                logger.warning("[StaffDispatch] role=%s trip=%s failed: %s", role, trip.get("id"), msg)
+            target = self._resolve_role_target(role, role_recipients)
+            if has_explicit_recipients and target is None:
+                # Do not fall back to the shared group: that would deliver a
+                # role-specific message to the wrong audience.
+                logger.warning(
+                    "[StaffDispatch] role=%s trip=%s has no configured recipient; skipped",
+                    role,
+                    trip_id,
+                )
+                continue
+            channel = target["channel"] if target else Channel.WECHAT_WORK_GROUP
+            address = target["address"] if target else str(trip.get("webhook_url") or "")
+
+            idempotency_key = (
+                f"staff:{slot}:{season}:{role}:{tenant_id}:{trip_id}:{date_key}"
+            )
+            if idempotency_store.terminal(idempotency_key):
+                continue
+            schedule_key = f"{schedule_key_prefix}:{role}:{ui_slot}"
+            if attempt_repository is not None and attempt_repository.has_sent_schedule(
+                schedule_key, tenant_id=tenant_id
+            ):
+                logger.info(
+                    "[StaffDispatch] schedule already sent manually trip=%s key=%s",
+                    trip_id,
+                    schedule_key,
+                )
+                continue
+
+            if channel is Channel.SMS:
+                if not address:
+                    logger.warning(
+                        "[StaffDispatch] role=%s trip=%s SMS address missing; skipped",
+                        role,
+                        trip_id,
+                    )
+                    continue
+                customer_id = address
+                fallback_channel: Channel | None = Channel.WECHAT_WORK_GROUP
+            else:
+                customer_id = f"staff:{role}:{trip_id}"
+                address = address or str(trip.get("webhook_url") or "")
+                fallback_channel = None
+
+            task = NotificationTask(
+                tenant_id=tenant_id,
+                project_id=self._resolve_project_id(trip),
+                team_id=str(trip.get("team_id") or trip.get("team") or ""),
+                trip_id=trip_id,
+                customer_id=customer_id,
+                rendered_content=rendered,
+                idempotency_key=idempotency_key,
+                notification_type=NotificationType.DAILY_REMINDER,
+                primary_channel=channel,
+                fallback_channel=fallback_channel,
+                provider_context={
+                    "customer_name": {
+                        "manager": "团期负责人",
+                        "concierge": "旅行管家",
+                        "driver": "司机",
+                    }.get(role, role),
+                    "role": role,
+                    "trip_label": str(trip.get("destination") or ""),
+                    "webhook_url": str(address if channel is Channel.WECHAT_WORK_GROUP else trip.get("webhook_url") or ""),
+                    "sms_sign_name": str(project_config.get("sms_sign_name") or ""),
+                    "operator_id": "",
+                    "operator_name": "系统自动",
+                    "schedule_key": schedule_key,
+                },
+            )
+            self.ctx.notification_tasks[task.id] = task
+            result = self.ctx.notification_service.dispatch(task)
+            if not result.get("ok"):
+                logger.warning(
+                    "[StaffDispatch] role=%s trip=%s failed: %s",
+                    role,
+                    trip.get("id"),
+                    result.get("reason"),
+                )
             else:
                 logger.info("[StaffDispatch] role=%s trip=%s sent ok", role, trip.get("id"))
+
+    _ROLE_ALIASES: dict[str, str] = {
+        "manager": "manager",
+        "计调": "manager",
+        "dispatcher": "manager",
+        "concierge": "concierge",
+        "导游": "concierge",
+        "guide": "concierge",
+        "driver": "driver",
+        "司机": "driver",
+    }
+
+    def _resolve_role_target(
+        self,
+        role: str,
+        role_recipients: dict,
+    ) -> dict[str, object] | None:
+        aliases = [
+            key
+            for key, canonical in self._ROLE_ALIASES.items()
+            if canonical == role
+        ]
+        recipient = None
+        for key in [role, *aliases]:
+            if key in role_recipients:
+                recipient = role_recipients[key]
+                break
+        if recipient is None:
+            return None
+        if isinstance(recipient, str):
+            value = recipient.strip()
+            if not value:
+                return None
+            if value.startswith(("http://", "https://")):
+                return {"channel": Channel.WECHAT_WORK_GROUP, "address": value}
+            return {"channel": Channel.SMS, "address": value}
+        if not isinstance(recipient, dict):
+            return None
+        channel_raw = str(recipient.get("channel") or "wechat_work_group").strip().lower()
+        channel = Channel.SMS if channel_raw in {"sms", "短信"} else Channel.WECHAT_WORK_GROUP
+        address = str(recipient.get("address") or recipient.get("phone") or "").strip()
+        if not address:
+            return None
+        return {"channel": channel, "address": address}
 
 
 def init_scheduler(ctx):

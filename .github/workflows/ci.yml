@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "refactor/**"]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" pytest-cov ruff
+      - name: Lint refactored notification modules
+        run: |
+          ruff check \
+            src/app/core/observability.py \
+            src/app/modules/integration/wechat_provider.py \
+            src/app/modules/integration/sms_provider.py \
+            src/app/modules/notification \
+            src/app/services/async_dispatch.py \
+            src/app/services/emergency_weather_service.py \
+            src/app/services/scheduler_service.py \
+            src/app/services/risk_notification_service.py \
+            src/app/services/template_service.py \
+            tests
+      - name: Backend tests (core notification domain coverage gate)
+        run: |
+          pytest -q \
+            --cov=app.modules.notification \
+            --cov=app.services.scheduler_service \
+            --cov=app.services.async_dispatch \
+            --cov=app.services.risk_notification_service \
+            --cov=app.services.emergency_weather_service \
+            --cov=app.modules.trigger \
+            --cov=app.modules.integration.wechat_provider \
+            --cov=app.modules.integration.sms_provider \
+            --cov-report=term-missing \
+            --cov-fail-under=85
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Contract tests
+        run: npm test
+      - name: Production build
+        run: npm run build

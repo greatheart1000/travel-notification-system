@@ -1,4 +1,4 @@
-import { api } from './api'
+import { api, notificationsApi } from './api'
 import type {
   MakeNotificationRule,
   MakeTourist,
@@ -6,15 +6,15 @@ import type {
   MakeTripDetail,
   MakeTripStatus,
   MakeWeatherInfo,
-  mockAnalyticsData,
 } from '../data/figmaMockData'
 import {
   makeStatusColorMap,
   mockWeather,
 } from '../data/figmaMockData'
 
-export type MakeAnalyticsData = typeof mockAnalyticsData
 export type MakeStatusColorMap = Record<MakeTripStatus, string>
+
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -31,8 +31,8 @@ const TO_BACKEND_STATUS: Record<string, string> = {
 const FROM_BACKEND_STATUS: Record<string, MakeTripStatus> = {
   planned: '招募中',
   in_progress: '进行中',
-  completed: '已满员',
-  cancelled: '已满员',
+  completed: '已结束',
+  cancelled: '已结束',
 }
 
 function mapRawToTrip(raw: any): MakeTrip {
@@ -48,6 +48,18 @@ function mapRawToTrip(raw: any): MakeTrip {
     leader: String(raw.leader_name ?? ''),
     status,
     statusColor: makeStatusColorMap[status],
+    assignedUserIds: Array.isArray(raw.assigned_user_ids)
+      ? raw.assigned_user_ids.map((id: unknown) => String(id))
+      : [],
+    sendMode: raw.send_mode === 'approval' ? 'approval' : 'auto',
+    assignedUsers: Array.isArray(raw.assigned_users)
+      ? raw.assigned_users.map((user: any) => ({
+          id: String(user.id ?? ''),
+          username: String(user.username ?? ''),
+          displayName: String(user.display_name ?? ''),
+          role: String(user.role ?? 'user'),
+        }))
+      : [],
   }
 }
 
@@ -61,12 +73,44 @@ function mapRawToDetail(raw: any): MakeTripDetail {
       age: Number(g.age ?? 0),
       gender: String(g.gender ?? ''),
       phone: String(g.phone ?? ''),
-      idCard: String(g.id_card ?? ''),
+      idCard: String(g.idCard ?? g.id_card ?? ''),
       notes: String(g.notes ?? ''),
       wechat: g.wechat ?? '',
     })),
     notifications: [],
   }
+}
+
+async function loadTripNotifications(touristCount: number, tripId: string): Promise<MakeNotificationRule[]> {
+  const [rules, templates] = await Promise.all([
+    notificationsApi.listRules(),
+    notificationsApi.listTemplates(),
+  ])
+  const templatesById = new Map(templates.map((template) => [template.id, template]))
+  return [...rules]
+    .filter((rule) => !rule.tripId || rule.tripId === tripId)
+    .sort((left, right) => left.priority - right.priority)
+    .map((rule) => {
+      const template = rule.templateId ? templatesById.get(rule.templateId) : undefined
+      const bound = Boolean(template)
+      return {
+        id: rule.id,
+        ruleId: rule.id,
+        templateId: template?.id,
+        phase: rule.stageLabel,
+        icon: 'bell',
+        time: rule.timeSlotLabel,
+        title: rule.name,
+        content: template?.template || '未绑定短信模板，请到通知规则中配置内容',
+        tag: template?.channelLabel ?? '短信',
+        tagColor: 'bg-paper-100 text-paper-600',
+        status: rule.enabled ? '已启用' : '未启用',
+        enabled: rule.enabled,
+        coreWork: template?.name ?? rule.name,
+        recipients: touristCount,
+        lastSent: bound ? undefined : '未绑定模板',
+      } satisfies MakeNotificationRule
+    })
 }
 
 // ================================================================
@@ -98,7 +142,13 @@ export class FigmaTripService {
   static async getTripDetail(tripId: string): Promise<MakeTripDetail | undefined> {
     try {
       const data: any = await api.get(`/trips/${encodeURIComponent(tripId)}`)
-      return mapRawToDetail(data)
+      const detail = mapRawToDetail(data)
+      try {
+        detail.notifications = await loadTripNotifications(detail.tourists.length, detail.id)
+      } catch {
+        detail.notifications = []
+      }
+      return detail
     } catch {
       return undefined
     }
@@ -155,9 +205,29 @@ export class FigmaTripService {
     await api.delete(`/trips/${encodeURIComponent(tripId)}`)
   }
 
-  // ---- notification/tourist (stubs) ----
-  static async updateNotification(_tid: string, _idx: number, _n: MakeNotificationRule) { return undefined }
-  static async deleteNotification(_tid: string, _idx: number) { return undefined }
+  // ---- notification/tourist ----
+  static async updateNotification(tid: string, idx: number, next: MakeNotificationRule) {
+    const detail = await FigmaTripService.getTripDetail(tid)
+    const current = detail?.notifications[idx]
+    if (!current) return detail
+    if (current.ruleId && next.enabled !== current.enabled) {
+      await notificationsApi.toggleRule(current.ruleId, Boolean(next.enabled))
+    }
+    if (current.templateId && next.content !== current.content) {
+      await notificationsApi.updateTemplate(current.templateId, { template: next.content })
+    }
+    return FigmaTripService.getTripDetail(tid)
+  }
+
+  static async deleteNotification(tid: string, idx: number) {
+    const detail = await FigmaTripService.getTripDetail(tid)
+    const current = detail?.notifications[idx]
+    if (current?.ruleId) {
+      await notificationsApi.deleteRule(current.ruleId)
+    }
+    return FigmaTripService.getTripDetail(tid)
+  }
+
   static async updateTourist(_tid: string, _idx: number, _t: MakeTourist) { return undefined }
   static async addTourist(_tid: string, _t: MakeTourist) { return undefined }
   static async deleteTourist(_tid: string, _idx: number) { return undefined }
@@ -179,9 +249,13 @@ export class FigmaWeatherService {
   static async getAllWeather(): Promise<MakeWeatherInfo[]> {
     try {
       const data: any = await api.get('/weather/xinjiang')
-      return data?.cities ?? clone(mockWeather)
-    } catch {
-      return clone(mockWeather)
+      const cities = data?.cities
+      if (Array.isArray(cities)) return cities
+      if (DEMO_MODE) return clone(mockWeather)
+      throw new Error('天气服务返回空数据')
+    } catch (error) {
+      if (DEMO_MODE) return clone(mockWeather)
+      throw error
     }
   }
 
@@ -193,16 +267,5 @@ export class FigmaWeatherService {
   static async getWeatherByCity(city: string): Promise<MakeWeatherInfo | undefined> {
     const all = await FigmaWeatherService.getAllWeather()
     return all.find((w) => w.city === city)
-  }
-}
-
-// ---- analytics (real API) ----
-export class FigmaAnalyticsService {
-  static async getAnalytics(): Promise<MakeAnalyticsData> {
-    try {
-      return (await api.get('/analytics/metrics')) as any
-    } catch {
-      return clone(mockAnalyticsData)
-    }
   }
 }

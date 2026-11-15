@@ -7,7 +7,7 @@ from enum import Enum
 from app.core.models import UTC, BaseRecord, Channel, NotificationType
 
 
-class DispatchStatus(str, Enum):
+class DispatchStatus(str, Enum):  # noqa: UP042 - keep wire-compatible str enum
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
@@ -41,6 +41,7 @@ class NotificationAttempt(BaseRecord):
     reason: str = ""
     provider_message: str = ""
     latency_ms: int = 0
+    trace_id: str = ""
     attempted_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -60,5 +61,6 @@ class NotificationTask(BaseRecord):
     manual_intervention_required: bool = False
     status: DispatchStatus = DispatchStatus.PENDING
     idempotency_key: str = ""
+    trace_id: str = ""
     provider_context: dict[str, str] = field(default_factory=dict)
     attempts: list[NotificationAttempt] = field(default_factory=list)

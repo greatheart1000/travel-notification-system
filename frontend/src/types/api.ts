@@ -21,6 +21,7 @@ export interface ApiErrorBody {
   code?: number
   error?: string
   message?: string
+  detail?: string
 }
 
 export interface ApiErrorDetail {
@@ -40,8 +41,12 @@ export interface AuthLoginResponse {
 export interface CurrentUser {
   id: string
   username: string
+  display_name?: string
   email: string
+  phone?: string
   role: string
+  tenant_id: string
+  status?: string
   created_at: string
 }
 
@@ -60,6 +65,7 @@ export interface RawTrip {
   guests?: RawGuest[]
   webhook_url?: string
   wecom_chat_id?: string
+  assigned_user_ids?: string[]
 }
 
 export interface RawTripSchedule {
@@ -141,6 +147,7 @@ export interface Trip {
   guests: Guest[]
   webhookUrl?: string
   wecomChatId?: string
+  assignedUserIds: string[]
 }
 
 export interface TripSchedule {
@@ -348,6 +355,7 @@ export interface RawNotificationRule {
   templateId?: string
   template?: string
   template_name?: string
+  trip_id?: string
 }
 
 export interface NotificationRule {
@@ -362,6 +370,7 @@ export interface NotificationRule {
   priority: number
   templateId: string
   templateLabel: string
+  tripId: string
 }
 
 export interface NotificationRuleWriteInput {
@@ -740,6 +749,8 @@ export interface RawAnalyticsResponse {
     success_rate?: string | number
   }>
   top_trips?: Array<{
+    trip_id?: string
+    tripId?: string
     name?: string
     notifications?: number
     satisfaction?: number

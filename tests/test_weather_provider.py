@@ -238,3 +238,86 @@ def test_weather_provider_requires_qweather_credentials(monkeypatch) -> None:
         assert str(exc) == "QWEATHER_API_HOST and QWEATHER_API_KEY must be configured"
     else:
         raise AssertionError("Expected WeatherProvider to reject missing QWeather credentials")
+
+
+def test_qweather_provider_reads_v1_alert_and_skips_forecast() -> None:
+    calls: list[str] = []
+
+    def transport(host, path, params, headers):
+        calls.append(path)
+        if path == "/v7/weather/now":
+            return {
+                "updateTime": "2026-11-13T11:31+08:00",
+                "now": {
+                    "obsTime": "2026-11-13T11:15+08:00",
+                    "temp": "3",
+                    "text": "雾",
+                    "windScale": "2",
+                },
+                "refer": {},
+            }
+        if path.startswith("/weatheralert/v1/current/"):
+            return {
+                "alerts": [
+                    {
+                        "headline": "新疆维吾尔自治区气象台发布暴雪蓝色预警",
+                        "color": {"code": "blue"},
+                    }
+                ]
+            }
+        raise AssertionError(f"Unexpected path: {path}")
+
+    provider = QWeatherProvider(
+        api_host="api.qweather.com",
+        api_key="test-api-key",
+        transport=transport,
+    )
+    weather = provider.get_weather(
+        "乌鲁木齐",
+        location_context={
+            "qweather_location_id": "101130101",
+            "qweather_lat": "43.79282",
+            "qweather_lon": "87.61773",
+        },
+        include_forecast=False,
+    )
+
+    assert weather.alert_title == "新疆维吾尔自治区气象台发布暴雪蓝色预警"
+    assert weather.warning_level == "blue"
+    assert weather.daily_forecast == []
+    assert weather.hourly_forecast == []
+    assert "/v7/weather/24h" not in calls
+    assert "/v7/weather/3d" not in calls
+
+
+def test_qweather_alert_failure_does_not_break_current_weather() -> None:
+    def transport(host, path, params, headers):
+        if path == "/v7/weather/now":
+            return {
+                "updateTime": "2026-11-13T11:31+08:00",
+                "now": {"temp": "3", "text": "雾", "windScale": "2"},
+                "refer": {},
+            }
+        if path.startswith("/weatheralert/v1/current/"):
+            raise RuntimeError("alert subscription unavailable")
+        raise AssertionError(f"Unexpected path: {path}")
+
+    provider = QWeatherProvider(
+        api_host="api.qweather.com",
+        api_key="test-api-key",
+        transport=transport,
+    )
+    weather = provider.get_weather(
+        "乌鲁木齐",
+        location_context={
+            "qweather_location_id": "101130101",
+            "qweather_lat": "43.79282",
+            "qweather_lon": "87.61773",
+        },
+        include_forecast=False,
+    )
+
+    assert weather.temperature == 3.0
+    assert weather.condition == "雾"
+    assert weather.alert_title == ""
+    assert weather.warning_level is None
